@@ -52,6 +52,13 @@ ALLOWED_CODEX_REVIEW_TYPES = {
     "HIGH_IMPACT_CORE"
 }
 
+# Codex owns exactly these two artifacts. Rebuttals are a separate file:
+# writing a rebuttal over the submission would destroy the original review.
+ALLOWED_CODEX_ARTIFACTS = {
+    "codex_submission.md",
+    "codex_rebuttal.md",
+}
+
 
 def build_codex_prompt(package: Dict[str, Any]) -> str:
     """Formats a structured engineering and regulatory audit prompt for Codex."""
@@ -117,10 +124,15 @@ class CodexReviewAdapter:
 
         submission_rel = package.get("submission_file", "shared/reviews/codex_submission.md")
 
-        # Enforce Authority Boundary: Codex may only write to files ending in codex_submission.md
+        # Enforce Authority Boundary: Codex may write ONLY to its own two
+        # artifacts. A rebuttal goes to a separate file so that answering a
+        # cross-examination can never destroy the original submission.
         norm_sub = os.path.normpath(submission_rel).replace("\\", "/")
-        if not norm_sub.endswith("codex_submission.md"):
-            return False, {}, f"AUTHORITY_VIOLATION: Codex is strictly restricted to writing to 'codex_submission.md', got '{submission_rel}'"
+        if os.path.basename(norm_sub) not in ALLOWED_CODEX_ARTIFACTS:
+            return False, {}, (
+                f"AUTHORITY_VIOLATION: Codex is restricted to "
+                f"{sorted(ALLOWED_CODEX_ARTIFACTS)}, got '{submission_rel}'"
+            )
 
         # Validate path security and track isolation
         valid_p, abs_sub, err = validate_path_security(submission_rel, track, self.workspace_dir)

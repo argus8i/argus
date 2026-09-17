@@ -52,6 +52,13 @@ ALLOWED_CLAUDE_REVIEW_TYPES = {
     "HIGH_IMPACT_CORE"
 }
 
+# Claude owns exactly these two artifacts. Rebuttals are a separate file:
+# writing a rebuttal over the submission would destroy the original review.
+ALLOWED_CLAUDE_ARTIFACTS = {
+    "claude_submission.md",
+    "claude_rebuttal.md",
+}
+
 
 def build_claude_prompt(package: Dict[str, Any]) -> str:
     """Formats a structured quantitative red-team review prompt for Claude."""
@@ -117,10 +124,15 @@ class ClaudeReviewAdapter:
 
         submission_rel = package.get("submission_file", "shared/reviews/claude_submission.md")
         
-        # Enforce Authority Boundary: Claude may only write to files ending in claude_submission.md
+        # Enforce Authority Boundary: Claude may write ONLY to its own two
+        # artifacts. A rebuttal goes to a separate file so that answering a
+        # cross-examination can never destroy the original submission.
         norm_sub = os.path.normpath(submission_rel).replace("\\", "/")
-        if not norm_sub.endswith("claude_submission.md"):
-            return False, {}, f"AUTHORITY_VIOLATION: Claude is strictly restricted to writing to 'claude_submission.md', got '{submission_rel}'"
+        if os.path.basename(norm_sub) not in ALLOWED_CLAUDE_ARTIFACTS:
+            return False, {}, (
+                f"AUTHORITY_VIOLATION: Claude is restricted to "
+                f"{sorted(ALLOWED_CLAUDE_ARTIFACTS)}, got '{submission_rel}'"
+            )
 
         # Validate path security and track isolation
         valid_p, abs_sub, err = validate_path_security(submission_rel, track, self.workspace_dir)

@@ -225,6 +225,90 @@ def test_cross_reviewer_routing_through_antigravity(hub_test_env):
     assert os.path.exists(os.path.join(hub_test_env["workspace"], rebuttal_env["submission_file"]))
 
 
+def test_rebuttal_does_not_overwrite_original_submission(hub_test_env):
+    """A cross-examination rebuttal must never destroy the original review.
+
+    Regression: route_cross_examination pointed the rebuttal at the reviewer's
+    own submission_file, so answering a challenge overwrote the audit that
+    prompted it. The live shared/reviews/codex_submission.md was reduced to a
+    rebuttal while antigravity_synthesis.md still quoted the vanished audit.
+    """
+    coordinator = AntigravityCoordinator(hub_test_env["workspace"])
+
+    pkg = coordinator.create_review_package(
+        task_id="TASK_REBUTTAL_PRESERVE",
+        track="TRACK_1",
+        exact_question="Primary analysis on delivery margin.",
+        assumptions={},
+        source_files=[],
+        measured_values={},
+        requested_review="HIGH_IMPACT_CORE",
+        submission_dir=os.path.relpath(hub_test_env["reviews_dir"], hub_test_env["workspace"])
+    )
+
+    # Codex files its original audit.
+    dispatch = coordinator.dispatch_review(pkg)
+    assert dispatch["codex"]["status"] == "COMPLETED"
+
+    codex_sub = os.path.join(hub_test_env["reviews_dir"], "codex_submission.md")
+    original_audit = open(codex_sub, encoding="utf-8").read()
+    assert "Codex Audit Findings" in original_audit
+
+    # Claude then challenges it, and Codex answers.
+    def mock_rebuttal(prompt: str, timeout_sec: int) -> Dict[str, Any]:
+        return {
+            "success": True,
+            "output": "## Codex Rebuttal. RMS does not force-liquidate delivery positions.",
+            "returncode": 0,
+            "elapsed": 0.05
+        }
+
+    cxa.CODEX_DISPATCH_HOOK = mock_rebuttal
+    success, rebuttal_env, err = coordinator.route_cross_examination(
+        from_agent="CLAUDE",
+        to_agent="CODEX",
+        challenge_text="Does RMS square off at 15:20 IST?",
+        original_package=pkg
+    )
+    assert success is True, err
+
+    # The rebuttal lands in its own artifact...
+    assert os.path.basename(rebuttal_env["submission_file"]) == "codex_rebuttal.md"
+    rebuttal_text = open(
+        os.path.join(hub_test_env["reviews_dir"], "codex_rebuttal.md"), encoding="utf-8"
+    ).read()
+    assert "Codex Rebuttal" in rebuttal_text
+
+    # ...and the original audit is still intact, byte for byte.
+    assert open(codex_sub, encoding="utf-8").read() == original_audit
+
+
+def test_reviewer_cannot_write_outside_its_own_artifacts(hub_test_env):
+    """The widened whitelist admits the rebuttal file and nothing else."""
+    coordinator = AntigravityCoordinator(hub_test_env["workspace"])
+
+    pkg = coordinator.create_review_package(
+        task_id="TASK_AUTHORITY_REBUTTAL",
+        track="TRACK_1",
+        exact_question="Boundary probe.",
+        assumptions={},
+        source_files=[],
+        measured_values={},
+        requested_review="MATHEMATICS",
+        submission_dir=os.path.relpath(hub_test_env["reviews_dir"], hub_test_env["workspace"])
+    )
+
+    sub_dir = os.path.relpath(hub_test_env["reviews_dir"], hub_test_env["workspace"])
+
+    # Claude must not be able to reach Codex's rebuttal, or the synthesis.
+    for forbidden in ("codex_rebuttal.md", "codex_submission.md", "antigravity_synthesis.md"):
+        bad_pkg = dict(pkg)
+        bad_pkg["submission_file"] = f"{sub_dir}/{forbidden}"
+        ok, _, err = coordinator.claude_adapter.execute_review(bad_pkg, 30)
+        assert ok is False
+        assert "AUTHORITY_VIOLATION" in (err or "")
+
+
 def test_unresolved_p0_blocks_synthesis(hub_test_env):
     """Any P0 / Critical objection blocks synthesis approval immediately."""
     coordinator = AntigravityCoordinator(hub_test_env["workspace"])

@@ -183,11 +183,14 @@ class AntigravityCoordinator:
         log_msg = f"[HUB-AND-SPOKE CROSS-EXAMINATION] Routing challenge from {from_agent} to {to_agent} through Antigravity Hub."
         log_interaction(f"{from_agent} -> ANTIGRAVITY -> {to_agent}", challenge_text, log_msg, 0.0, 0)
 
+        # A rebuttal is written to its own artifact. Routing it at the reviewer's
+        # submission file would overwrite the original review with the answer to a
+        # challenge, silently destroying the objections the hub exists to preserve.
         if to_agent == "CODEX":
-            cross_pkg["submission_file"] = f"{sub_dir}/codex_submission.md"
+            cross_pkg["submission_file"] = f"{sub_dir}/codex_rebuttal.md"
             return self.codex_adapter.execute_review(cross_pkg, timeout_sec)
         else:
-            cross_pkg["submission_file"] = f"{sub_dir}/claude_submission.md"
+            cross_pkg["submission_file"] = f"{sub_dir}/claude_rebuttal.md"
             return self.claude_adapter.execute_review(cross_pkg, timeout_sec)
 
     def synthesize_outcome(
