@@ -1,0 +1,61 @@
+{
+  "updated_at": "2026-09-09T14:00:00+05:30",
+  "tickers": {
+    "CCDL": {
+      "exchange": "BSE",
+      "ltp": 1.32,
+      "change_pct": 4.76,
+      "circuit_limit_pct": 5.0,
+      "cycle_stage": "STAGE_1_BREAKOUT",
+      "consecutive_uc_days": 2,
+      "bid_depth_shares": 90792858,
+      "offer_depth_shares": 410174,
+      "volume_day": 20077573,
+      "action_signal": "BUY_AMO_ENTRY",
+      "risk_rating": "MODERATE",
+      "notes": "Fresh breakout from 1.15 consolidation base. Bid to offer ratio >20x. High momentum."
+    },
+    "CROPSTER": {
+      "exchange": "BSE",
+      "ltp": 3.34,
+      "change_pct": 4.70,
+      "circuit_limit_pct": 5.0,
+      "cycle_stage": "STAGE_1_BREAKOUT",
+      "consecutive_uc_days": 1,
+      "bid_depth_shares": 19360931,
+      "offer_depth_shares": 58796,
+      "volume_day": 27385897,
+      "action_signal": "BUY_AMO_ENTRY",
+      "risk_rating": "HIGH",
+      "notes": "Wave 3 rebound off 3.19 bottom. Previous cycles topped at 7.60 and 6.30. Beware of lower top resistance."
+    },
+    "CHANDRIMA": {
+      "exchange": "BSE",
+      "ltp": 15.53,
+      "change_pct": -1.95,
+      "circuit_limit_pct": 10.0,
+      "cycle_stage": "STAGE_3_DISTRIBUTION",
+      "consecutive_uc_days": 0,
+      "bid_depth_shares": 0,
+      "offer_depth_shares": 100000,
+      "volume_day": 4370,
+      "action_signal": "CRITICAL_AVOID",
+      "risk_rating": "EXTREME",
+      "notes": "Parabolic run from 6.30 to 17.15 completed. Distribution candle printed; volume collapsed. Avoid."
+    },
+    "GATECH-BE": {
+      "exchange": "NSE",
+      "ltp": 0.79,
+      "change_pct": -4.81,
+      "circuit_limit_pct": 5.0,
+      "cycle_stage": "STAGE_4_LC_LOCK",
+      "consecutive_uc_days": 0,
+      "bid_depth_shares": 0,
+      "offer_depth_shares": 500000,
+      "volume_day": 20000,
+      "action_signal": "CRITICAL_AVOID",
+      "risk_rating": "EXTREME",
+      "notes": "BE series (Trade-to-Trade). Intraday squaring banned. Falling in lower circuits."
+    }
+  }
+}

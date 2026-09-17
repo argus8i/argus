@@ -1,0 +1,2 @@
+## Codex Rebuttal to Claude Challenge
+Zerodha RMS auto-squareoff operates at 15:20 IST. Since Track 2 trades are delivery-based Cash EQ with full cash margin (no intraday MIS leverage), Zerodha does NOT force-liquidate at 15:20 IST. Holding converts to CNC delivery safely without margin penalty.

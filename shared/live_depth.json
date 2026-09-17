@@ -1,0 +1,391 @@
+{
+  "timestamp": "2026-09-17T10:28:35.788Z",
+  "url": "https://kite.zerodha.com/markets/chart/web/tvc/NSE/AHCL/194295809",
+  "is_tab_hidden": false,
+  "visibility_state": "visible",
+  "watchlist": [
+    {
+      "symbol": "MOBIKWIK",
+      "exchange": "NSE",
+      "ltp": 198.64,
+      "change_pct": "0.14%",
+      "change_abs": 0.27
+    },
+    {
+      "symbol": "AHCL",
+      "exchange": "NSE",
+      "ltp": 21.84,
+      "change_pct": "8.98%",
+      "change_abs": 1.8
+    },
+    {
+      "symbol": "KINETICENG",
+      "exchange": "BSE",
+      "ltp": 222,
+      "change_pct": "0.09%",
+      "change_abs": 0.2
+    },
+    {
+      "symbol": "VEDAVAAG",
+      "exchange": "NSE",
+      "ltp": 21,
+      "change_pct": "6.22%",
+      "change_abs": 1.23
+    },
+    {
+      "symbol": "LOVABLE",
+      "exchange": "NSE",
+      "ltp": 70.38,
+      "change_pct": "0.90%",
+      "change_abs": 0.63
+    }
+  ],
+  "active_stock": "MOBIKWIK",
+  "stats": {
+    "open": 197,
+    "low": 193.95,
+    "prev_close": 198.37,
+    "high": 210.49,
+    "volume": 5392512,
+    "avg_price": 204.3,
+    "lower_circuit": 158.7,
+    "upper_circuit": 238.04,
+    "total_buy": 57655,
+    "total_sell": 0
+  },
+  "depth": {
+    "bids": [
+      {
+        "price": 198.64,
+        "orders": 16,
+        "quantity": 57655
+      },
+      {
+        "price": 0,
+        "orders": 0,
+        "quantity": 0
+      },
+      {
+        "price": 0,
+        "orders": 0,
+        "quantity": 0
+      },
+      {
+        "price": 0,
+        "orders": 0,
+        "quantity": 0
+      },
+      {
+        "price": 0,
+        "orders": 0,
+        "quantity": 0
+      }
+    ],
+    "offers": [
+      {
+        "price": 0,
+        "orders": 0,
+        "quantity": 0
+      },
+      {
+        "price": 0,
+        "orders": 0,
+        "quantity": 0
+      },
+      {
+        "price": 0,
+        "orders": 0,
+        "quantity": 0
+      },
+      {
+        "price": 0,
+        "orders": 0,
+        "quantity": 0
+      },
+      {
+        "price": 0,
+        "orders": 0,
+        "quantity": 0
+      }
+    ]
+  },
+  "status": "LIVE_STREAMING",
+  "local_write_time": "2026-09-17 15:58:35",
+  "time_bin": "15:45-16:00",
+  "is_stale": false,
+  "auth": {
+    "authenticated": true,
+    "user_id": "EOH733",
+    "token_source": "cdp_cookies",
+    "has_enctoken": true,
+    "last_sync": "2026-09-17 15:58:23"
+  },
+  "instrument_tokens": {
+    "MOBIKWIK": {
+      "primary_token": 7179777,
+      "primary_exchange": "NSE",
+      "bse_scrip": "544305",
+      "nse_token": 7179777,
+      "bse_token": 139342084
+    },
+    "AHCL": {
+      "primary_token": 194295809,
+      "primary_exchange": "NSE",
+      "bse_scrip": "544497",
+      "nse_token": 194295809,
+      "bse_token": 139391236
+    },
+    "ANLON": {
+      "primary_token": 194295809,
+      "primary_exchange": "NSE",
+      "bse_scrip": "544497",
+      "nse_token": 194295809,
+      "bse_token": 139391236
+    },
+    "VEDAVAAG": {
+      "primary_token": 195834881,
+      "primary_exchange": "NSE",
+      "bse_scrip": "533056",
+      "nse_token": 195834881,
+      "bse_token": 136462340
+    },
+    "LOVABLE": {
+      "primary_token": 5738241,
+      "primary_exchange": "NSE",
+      "bse_scrip": "533343",
+      "nse_token": 5738241,
+      "bse_token": 136535812
+    },
+    "KINETICENG": {
+      "primary_token": 128061444,
+      "primary_exchange": "BSE",
+      "bse_scrip": "500240",
+      "nse_token": null,
+      "bse_token": 128061444
+    },
+    "KINETIC": {
+      "primary_token": 128061444,
+      "primary_exchange": "BSE",
+      "bse_scrip": "500240",
+      "nse_token": null,
+      "bse_token": 128061444
+    },
+    "CROPSTER": {
+      "primary_token": 133914884,
+      "primary_exchange": "BSE",
+      "bse_scrip": "523105",
+      "nse_token": null,
+      "bse_token": 133914884
+    },
+    "GATECH": {
+      "primary_token": 136121092,
+      "primary_exchange": "BSE",
+      "bse_scrip": "531723",
+      "nse_token": null,
+      "bse_token": 136121092
+    },
+    "CCDL": {
+      "primary_token": 138007300,
+      "primary_exchange": "BSE",
+      "bse_scrip": "539091",
+      "nse_token": null,
+      "bse_token": 138007300
+    },
+    "CHANDRIMA": {
+      "primary_token": 138452228,
+      "primary_exchange": "BSE",
+      "bse_scrip": "540829",
+      "nse_token": null,
+      "bse_token": 138452228
+    }
+  },
+  "volume_expansion_audit": {
+    "MOBIKWIK": {
+      "symbol": "MOBIKWIK",
+      "name": "One MobiKwik Systems Ltd",
+      "scripcode": "544305",
+      "instrument_token": 7179777,
+      "exchange": "NSE",
+      "intraday_volume": 5392512,
+      "minutes_elapsed": 375,
+      "cumulative_volume_fraction": 1.0,
+      "projected_full_day_volume": 5392512,
+      "avg_20d_volume": 2334813.6,
+      "median_20d_volume": 670899.5,
+      "volume_expansion_ratio": 2.31,
+      "rule7_volume_qualified": false,
+      "volume_data_source": "kite_oms",
+      "historical_sample_count": 20
+    },
+    "AHCL": {
+      "symbol": "AHCL",
+      "name": "Anlon Healthcare Ltd",
+      "scripcode": "544497",
+      "instrument_token": 194295809,
+      "exchange": "NSE",
+      "intraday_volume": 0,
+      "minutes_elapsed": 375,
+      "cumulative_volume_fraction": 1.0,
+      "projected_full_day_volume": 0,
+      "avg_20d_volume": 25718829.4,
+      "median_20d_volume": 3862521.0,
+      "volume_expansion_ratio": 0.0,
+      "rule7_volume_qualified": false,
+      "volume_data_source": "kite_oms",
+      "historical_sample_count": 20
+    },
+    "ANLON": {
+      "symbol": "ANLON",
+      "name": "Anlon Healthcare Ltd",
+      "scripcode": "544497",
+      "instrument_token": 194295809,
+      "exchange": "NSE",
+      "intraday_volume": 0,
+      "minutes_elapsed": 375,
+      "cumulative_volume_fraction": 1.0,
+      "projected_full_day_volume": 0,
+      "avg_20d_volume": 25718829.4,
+      "median_20d_volume": 3862521.0,
+      "volume_expansion_ratio": 0.0,
+      "rule7_volume_qualified": false,
+      "volume_data_source": "kite_oms",
+      "historical_sample_count": 20
+    },
+    "VEDAVAAG": {
+      "symbol": "VEDAVAAG",
+      "name": "Vedavaag Systems Ltd",
+      "scripcode": "533056",
+      "instrument_token": 195834881,
+      "exchange": "NSE",
+      "intraday_volume": 0,
+      "minutes_elapsed": 375,
+      "cumulative_volume_fraction": 1.0,
+      "projected_full_day_volume": 0,
+      "avg_20d_volume": 108606.7,
+      "median_20d_volume": 28111.5,
+      "volume_expansion_ratio": 0.0,
+      "rule7_volume_qualified": false,
+      "volume_data_source": "kite_oms",
+      "historical_sample_count": 20
+    },
+    "LOVABLE": {
+      "symbol": "LOVABLE",
+      "name": "Lovable Lingerie Ltd",
+      "scripcode": "533343",
+      "instrument_token": 5738241,
+      "exchange": "NSE",
+      "intraday_volume": 0,
+      "minutes_elapsed": 375,
+      "cumulative_volume_fraction": 1.0,
+      "projected_full_day_volume": 0,
+      "avg_20d_volume": 14637.6,
+      "median_20d_volume": 10283.5,
+      "volume_expansion_ratio": 0.0,
+      "rule7_volume_qualified": false,
+      "volume_data_source": "kite_oms",
+      "historical_sample_count": 20
+    },
+    "KINETICENG": {
+      "symbol": "KINETICENG",
+      "name": "Kinetic Engineering Ltd",
+      "scripcode": "500240",
+      "instrument_token": 128061444,
+      "exchange": "BSE",
+      "intraday_volume": 0,
+      "minutes_elapsed": 375,
+      "cumulative_volume_fraction": 1.0,
+      "projected_full_day_volume": 0,
+      "avg_20d_volume": 42780.8,
+      "median_20d_volume": 22784.5,
+      "volume_expansion_ratio": 0.0,
+      "rule7_volume_qualified": false,
+      "volume_data_source": "kite_oms",
+      "historical_sample_count": 20
+    },
+    "KINETIC": {
+      "symbol": "KINETIC",
+      "name": "Kinetic Engineering Ltd",
+      "scripcode": "500240",
+      "instrument_token": 128061444,
+      "exchange": "BSE",
+      "intraday_volume": 0,
+      "minutes_elapsed": 375,
+      "cumulative_volume_fraction": 1.0,
+      "projected_full_day_volume": 0,
+      "avg_20d_volume": 42780.8,
+      "median_20d_volume": 22784.5,
+      "volume_expansion_ratio": 0.0,
+      "rule7_volume_qualified": false,
+      "volume_data_source": "kite_oms",
+      "historical_sample_count": 20
+    },
+    "CROPSTER": {
+      "symbol": "CROPSTER",
+      "name": "Cropster Agro Ltd",
+      "scripcode": "523105",
+      "instrument_token": 133914884,
+      "exchange": "BSE",
+      "intraday_volume": 0,
+      "minutes_elapsed": 375,
+      "cumulative_volume_fraction": 1.0,
+      "projected_full_day_volume": 0,
+      "avg_20d_volume": 12622523.3,
+      "median_20d_volume": 3767040.0,
+      "volume_expansion_ratio": 0.0,
+      "rule7_volume_qualified": false,
+      "volume_data_source": "kite_oms",
+      "historical_sample_count": 20
+    },
+    "GATECH": {
+      "symbol": "GATECH",
+      "name": "GACM Technologies Ltd",
+      "scripcode": "531723",
+      "instrument_token": 136121092,
+      "exchange": "BSE",
+      "intraday_volume": 0,
+      "minutes_elapsed": 375,
+      "cumulative_volume_fraction": 1.0,
+      "projected_full_day_volume": 0,
+      "avg_20d_volume": 10255629.1,
+      "median_20d_volume": 1240501.0,
+      "volume_expansion_ratio": 0.0,
+      "rule7_volume_qualified": false,
+      "volume_data_source": "kite_oms",
+      "historical_sample_count": 20
+    },
+    "CCDL": {
+      "symbol": "CCDL",
+      "name": "Country Club Hospitality & Holidays Ltd",
+      "scripcode": "539091",
+      "instrument_token": 138007300,
+      "exchange": "BSE",
+      "intraday_volume": 0,
+      "minutes_elapsed": 375,
+      "cumulative_volume_fraction": 1.0,
+      "projected_full_day_volume": 0,
+      "avg_20d_volume": 6139855.0,
+      "median_20d_volume": 273263.0,
+      "volume_expansion_ratio": 0.0,
+      "rule7_volume_qualified": false,
+      "volume_data_source": "kite_oms",
+      "historical_sample_count": 20
+    },
+    "CHANDRIMA": {
+      "symbol": "CHANDRIMA",
+      "name": "Chandrima Mercantiles Ltd",
+      "scripcode": "540829",
+      "instrument_token": 138452228,
+      "exchange": "BSE",
+      "intraday_volume": 0,
+      "minutes_elapsed": 375,
+      "cumulative_volume_fraction": 1.0,
+      "projected_full_day_volume": 0,
+      "avg_20d_volume": 4097949.3,
+      "median_20d_volume": 2092982.0,
+      "volume_expansion_ratio": 0.0,
+      "rule7_volume_qualified": false,
+      "volume_data_source": "kite_oms",
+      "historical_sample_count": 20
+    }
+  }
+}

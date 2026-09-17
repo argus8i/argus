@@ -1,0 +1,24 @@
+# Virtualenv / caches
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Runtime state, queues, locks
+*.db
+*.db-wal
+*.db-shm
+*.lock
+*.pid
+antigravity/messages/
+**/replay_store.db*
+
+# Credentials / secrets
+agent_keys.json
+antigravity/config/telegram_config.json
+*.token
+.env
+
+# Large binary data
+"data screenshots"/
+*.pb

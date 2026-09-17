@@ -1,0 +1,16 @@
+{
+  "key_storage_path": "C:\\Users\\yashw\\.gemini\\antigravity\\agent_keys.json",
+  "allowed_senders": [
+    "CLAUDE",
+    "CODEX",
+    "ANTIGRAVITY",
+    "USER"
+  ],
+  "allowed_responders": [
+    "ANTIGRAVITY",
+    "CLAUDE",
+    "CODEX"
+  ],
+  "token_validity_sec": 300,
+  "max_future_skew_sec": 60
+}

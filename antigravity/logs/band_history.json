@@ -1,0 +1,132 @@
+{
+  "CHANDRIMA": [
+    {
+      "ticker": "CHANDRIMA",
+      "prev_close": 15.22,
+      "upper_circuit": 15.52,
+      "lower_circuit": 14.92,
+      "band_pct": 1.97,
+      "date": "2026-09-12"
+    },
+    {
+      "ticker": "CHANDRIMA",
+      "prev_close": 14.92,
+      "upper_circuit": 15.21,
+      "lower_circuit": 14.63,
+      "band_pct": 1.94,
+      "date": "12 Sep 2026"
+    },
+    {
+      "ticker": "CHANDRIMA",
+      "prev_close": 14.92,
+      "upper_circuit": 15.21,
+      "lower_circuit": 14.63,
+      "band_pct": 1.94,
+      "date": "15 Sep 2026"
+    }
+  ],
+  "CROPSTER": [
+    {
+      "ticker": "CROPSTER",
+      "prev_close": 3.02,
+      "upper_circuit": 3.17,
+      "lower_circuit": 2.87,
+      "band_pct": 4.97,
+      "date": "12 Sep 2026"
+    },
+    {
+      "ticker": "CROPSTER",
+      "prev_close": 3.02,
+      "upper_circuit": 3.17,
+      "lower_circuit": 2.87,
+      "band_pct": 4.97,
+      "date": "15 Sep 2026"
+    }
+  ],
+  "CCDL": [
+    {
+      "ticker": "CCDL",
+      "prev_close": 1.32,
+      "upper_circuit": 1.38,
+      "lower_circuit": 1.26,
+      "band_pct": 4.55,
+      "date": "12 Sep 2026"
+    },
+    {
+      "ticker": "CCDL",
+      "prev_close": 1.32,
+      "upper_circuit": 1.38,
+      "lower_circuit": 1.26,
+      "band_pct": 4.55,
+      "date": "15 Sep 2026"
+    }
+  ],
+  "GATECH": [
+    {
+      "ticker": "GATECH",
+      "prev_close": 0.75,
+      "upper_circuit": 0.78,
+      "lower_circuit": 0.72,
+      "band_pct": 4.0,
+      "date": "12 Sep 2026"
+    },
+    {
+      "ticker": "GATECH",
+      "prev_close": 0.75,
+      "upper_circuit": 0.78,
+      "lower_circuit": 0.72,
+      "band_pct": 4.0,
+      "date": "15 Sep 2026"
+    }
+  ],
+  "MOBIKWIK": [
+    {
+      "ticker": "MOBIKWIK",
+      "prev_close": 209.55,
+      "upper_circuit": 251.45,
+      "lower_circuit": 167.65,
+      "band_pct": 20.0,
+      "date": "15 Sep 2026"
+    }
+  ],
+  "LOVABLE": [
+    {
+      "ticker": "LOVABLE",
+      "prev_close": 72.16,
+      "upper_circuit": 86.59,
+      "lower_circuit": 57.73,
+      "band_pct": 20.0,
+      "date": "15 Sep 2026"
+    }
+  ],
+  "ANLON": [
+    {
+      "ticker": "ANLON",
+      "prev_close": 19.52,
+      "upper_circuit": 23.42,
+      "lower_circuit": 15.62,
+      "band_pct": 19.98,
+      "date": "15 Sep 2026"
+    }
+  ],
+  "VEDAVAAG": [
+    {
+      "ticker": "VEDAVAAG",
+      "prev_close": 23.36,
+      "upper_circuit": 28.03,
+      "lower_circuit": 18.69,
+      "band_pct": 19.99,
+      "date": "15 Sep 2026"
+    }
+  ],
+  "KINETIC": [
+    {
+      "ticker": "KINETIC",
+      "prev_close": 229.35,
+      "upper_circuit": 240.8,
+      "lower_circuit": 217.9,
+      "band_pct": 4.99,
+      "date": "15 Sep 2026"
+    }
+  ]
+}
