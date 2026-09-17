@@ -144,7 +144,9 @@ def msg_test_env(monkeypatch):
     5. Clean teardown with Windows handle release retries.
     """
     sandbox_id = f"test_box_{uuid.uuid4().hex[:8]}"
-    sandbox_dir = os.path.join(PROJECT_ROOT, "antigravity", "messages", sandbox_id)
+    sandbox_dir = os.path.join(
+        PROJECT_ROOT, "antigravity", "messages", "_test_sandboxes", sandbox_id
+    )
 
     inbox_dir = os.path.join(sandbox_dir, "inbox")
     outbox_dir = os.path.join(sandbox_dir, "outbox")

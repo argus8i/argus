@@ -41,7 +41,10 @@ from antigravity.daemons.inbox_worker import (
 @pytest.fixture
 def hub_test_env(monkeypatch):
     """Isolated environment for hub-and-spoke testing."""
-    test_sandbox_dir = os.path.join(PROJECT_ROOT, "antigravity", "messages", f"test_hub_{uuid.uuid4().hex[:8]}")
+    test_sandbox_dir = os.path.join(
+        PROJECT_ROOT, "antigravity", "messages", "_test_sandboxes",
+        f"test_hub_{uuid.uuid4().hex[:8]}"
+    )
     reviews_dir = os.path.join(test_sandbox_dir, "shared", "reviews")
     os.makedirs(reviews_dir, exist_ok=True)
 

@@ -91,9 +91,23 @@ DIALOGUE_MD = os.path.join(LOGS_DIR, "tri_agent_dialogue.md")
 DIALOGUE_JSONL = os.path.join(LOGS_DIR, "tri_agent_dialogue.jsonl")
 
 
+def get_logs_dir() -> str:
+    """Resolve the dialogue-log directory at call time.
+
+    TRI_AGENT_LOGS_DIR redirects the audit trail, which is what lets the test
+    suite log to a temp directory. Without it the suite appended mock reviewer
+    exchanges to the canonical tri_agent_dialogue.md, seeding the record you
+    would consult to check whether a review actually happened.
+    """
+    return os.environ.get("TRI_AGENT_LOGS_DIR") or LOGS_DIR
+
+
 def log_interaction(recipient: str, prompt: str, response: str, elapsed_sec: float, exit_code: int = 0):
     """Permanently logs all inter-agent communications for Yashu to inspect in real time."""
-    os.makedirs(LOGS_DIR, exist_ok=True)
+    logs_dir = get_logs_dir()
+    os.makedirs(logs_dir, exist_ok=True)
+    dialogue_md = os.path.join(logs_dir, "tri_agent_dialogue.md")
+    dialogue_jsonl = os.path.join(logs_dir, "tri_agent_dialogue.jsonl")
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S IST")
     
     # 1. Structured JSONL Log
@@ -107,10 +121,10 @@ def log_interaction(recipient: str, prompt: str, response: str, elapsed_sec: flo
         "response": response
     }
     try:
-        with open(DIALOGUE_JSONL, "a", encoding="utf-8") as f:
+        with open(dialogue_jsonl, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception as e:
-        print(f"Warning: Failed to write to {DIALOGUE_JSONL}: {e}")
+        print(f"Warning: Failed to write to {dialogue_jsonl}: {e}")
 
     # 2. Human-Readable Markdown Log
     md_entry = f"""
@@ -129,14 +143,14 @@ def log_interaction(recipient: str, prompt: str, response: str, elapsed_sec: flo
 ---
 """
     try:
-        if not os.path.exists(DIALOGUE_MD):
+        if not os.path.exists(dialogue_md):
             header = "# Tri-Agent Communications & Audit Log\n\nTransparent real-time audit ledger of all messages, queries, and peer reviews exchanged between Antigravity, Claude Code, and OpenAI Codex.\n\n---\n"
-            with open(DIALOGUE_MD, "w", encoding="utf-8") as f:
+            with open(dialogue_md, "w", encoding="utf-8") as f:
                 f.write(header)
-        with open(DIALOGUE_MD, "a", encoding="utf-8") as f:
+        with open(dialogue_md, "a", encoding="utf-8") as f:
             f.write(md_entry)
     except Exception as e:
-        print(f"Warning: Failed to write to {DIALOGUE_MD}: {e}")
+        print(f"Warning: Failed to write to {dialogue_md}: {e}")
 
 
 # Reviewer CLIs report some hard failures on stdout while exiting 0. Claude Code
