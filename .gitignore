@@ -22,3 +22,8 @@ antigravity/config/telegram_config.json
 # Large binary data
 "data screenshots"/
 *.pb
+
+# Live broker session credentials (Zerodha enctoken harvested from Chrome)
+shared/live_depth.json
+shared/track2_liquid/live_depth_track2.json
+antigravity/logs/live_depth_ticks.csv
