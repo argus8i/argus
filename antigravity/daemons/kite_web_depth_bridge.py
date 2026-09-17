@@ -956,9 +956,8 @@ async def cdp_bridge():
                             json.dump(val, f, indent=2)
                         os.replace(tmp_path, LIVE_DEPTH_PATH)
 
-                        # Extract tick fields for logging
-                        best_bid = depth["bids"][0]["price"] if has_any_bids else None
-                        best_ask = depth["offers"][0]["price"] if has_any_offers else None
+                        # Extract tick fields for logging (Reuse post-gate best_bid/best_ask;
+                        # do not recompute from depth which is nulled on invalid/stale ticks)
                         spread_pct = None
                         if best_bid and best_ask and best_bid > 0:
                             spread_pct = round(((best_ask - best_bid) / best_bid) * 100, 4)

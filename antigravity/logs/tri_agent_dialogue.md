@@ -2815,3 +2815,31 @@ These uncertainties support failing closed; they do not justify guessing selecto
 ```
 
 ---
+
+## [2026-09-17 22:29:05 IST] Antigravity ➔ OpenAI Codex (18.0s)
+
+**Prompt / Mandate:**
+```text
+State in one sentence your readiness to audit Project Swing Trades.
+```
+
+**OpenAI Codex Output & Audit Verdict:**
+```markdown
+I’m ready to audit Project Swing Trades against its paper-trading, execution, surveillance, liquidity, consensus, and strict track-isolation rules.
+```
+
+---
+
+## [2026-09-17 22:31:16 IST] Antigravity ➔ OpenAI Codex (33.1s)
+
+**Prompt / Mandate:**
+```text
+Reply with exactly one sentence confirming you received this, and state the current model name you are running as.
+```
+
+**OpenAI Codex Output & Audit Verdict:**
+```markdown
+Confirmed, I received this, and I’m running as GPT-5.
+```
+
+---
