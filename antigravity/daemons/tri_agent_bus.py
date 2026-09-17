@@ -139,7 +139,56 @@ def log_interaction(recipient: str, prompt: str, response: str, elapsed_sec: flo
         print(f"Warning: Failed to write to {DIALOGUE_MD}: {e}")
 
 
-def ask_claude_detailed(prompt: str, timeout_sec: int = 180) -> Dict[str, Any]:
+# Reviewer CLIs report some hard failures on stdout while exiting 0. Claude Code
+# prints "Failed to authenticate: OAuth session expired..." and exits 0; treating
+# returncode as the success signal turns that string into a signed review.
+REVIEWER_FAILURE_SIGNATURES = (
+    "failed to authenticate",
+    "oauth session expired",
+    "not logged in",
+    "please run /login",
+    "authentication required",
+    "invalid api key",
+    "credit balance is too low",
+    "usage limit reached",
+    "rate limit",
+    "stream error",
+)
+
+# Anything shorter than this is not a review, whatever the exit code said.
+MIN_REVIEW_CHARS = 40
+
+
+def validate_reviewer_output(
+    agent: str,
+    output: str,
+    returncode: int,
+    min_chars: int = MIN_REVIEW_CHARS,
+) -> Optional[str]:
+    """Return an error string if this output must not be accepted as a review.
+
+    A reviewer's answer is only usable when the process succeeded AND said
+    something. Exit code alone is not evidence of either.
+    """
+    if returncode != 0:
+        return f"{agent}_NONZERO_EXIT: exited {returncode}"
+
+    text = (output or "").strip()
+    if not text:
+        return f"{agent}_EMPTY_OUTPUT: exited 0 but produced nothing"
+
+    low = text.lower()
+    for sig in REVIEWER_FAILURE_SIGNATURES:
+        if sig in low:
+            return f"{agent}_DISPATCH_FAILED: {text[:200]}"
+
+    if len(text) < min_chars:
+        return f"{agent}_OUTPUT_TOO_SHORT: {len(text)} chars, need >= {min_chars}"
+
+    return None
+
+
+def ask_claude_detailed(prompt: str, timeout_sec: int = 300, min_chars: int = MIN_REVIEW_CHARS) -> Dict[str, Any]:
     """Invokes Claude Code non-interactively in the workspace with structured returncode tracking."""
     if not os.path.exists(CLAUDE_BIN):
         err = f"ERROR: Claude binary not found at {CLAUDE_BIN}"
@@ -148,7 +197,10 @@ def ask_claude_detailed(prompt: str, timeout_sec: int = 180) -> Dict[str, Any]:
     t0 = time.time()
     try:
         proc = subprocess.run(
-            [CLAUDE_BIN, "-p", prompt],
+            [CLAUDE_BIN, "-p", prompt,
+             # Reviewers are read-only. The adapter writes the submission file.
+             "--allowedTools", "Read,Grep,Glob",
+             "--disallowedTools", "Write,Edit,NotebookEdit,Bash"],
             cwd=WORKSPACE,
             capture_output=True,
             text=True,
@@ -160,13 +212,13 @@ def ask_claude_detailed(prompt: str, timeout_sec: int = 180) -> Dict[str, Any]:
         elapsed = time.time() - t0
         res = proc.stdout.strip() or proc.stderr.strip()
         log_interaction("Claude Code", prompt, res, elapsed, proc.returncode)
-        success = (proc.returncode == 0)
+        failure = validate_reviewer_output("CLAUDE", res, proc.returncode, min_chars)
         return {
-            "success": success,
+            "success": failure is None,
             "output": res,
             "returncode": proc.returncode,
             "elapsed": elapsed,
-            "error": None if success else f"Claude exited with non-zero code {proc.returncode}: {proc.stderr.strip()}"
+            "error": failure
         }
     except subprocess.TimeoutExpired:
         elapsed = time.time() - t0
@@ -185,7 +237,7 @@ def ask_claude(prompt: str, timeout_sec: int = 180) -> str:
     return ask_claude_detailed(prompt, timeout_sec)["output"]
 
 
-def ask_codex_detailed(prompt: str, timeout_sec: int = 180) -> Dict[str, Any]:
+def ask_codex_detailed(prompt: str, timeout_sec: int = 300, min_chars: int = MIN_REVIEW_CHARS) -> Dict[str, Any]:
     """Invokes OpenAI Codex / ChatGPT non-interactively with structured returncode tracking."""
     if not os.path.exists(CODEX_BIN):
         err = f"ERROR: Codex binary not found at {CODEX_BIN}"
@@ -194,7 +246,9 @@ def ask_codex_detailed(prompt: str, timeout_sec: int = 180) -> Dict[str, Any]:
     t0 = time.time()
     try:
         proc = subprocess.run(
-            [CODEX_BIN, "exec", "--skip-git-repo-check", "--ephemeral", "-"],
+            [CODEX_BIN, "exec", "--skip-git-repo-check", "--ephemeral",
+             # Reviewers are read-only. The adapter writes the submission file.
+             "--sandbox", "read-only", "-"],
             input=prompt,
             cwd=WORKSPACE,
             capture_output=True,
@@ -215,13 +269,13 @@ def ask_codex_detailed(prompt: str, timeout_sec: int = 180) -> Dict[str, Any]:
                 cleaned_res = parts.strip()
         final_res = cleaned_res or proc.stderr.strip()
         log_interaction("OpenAI Codex", prompt, final_res, elapsed, proc.returncode)
-        success = (proc.returncode == 0)
+        failure = validate_reviewer_output("CODEX", final_res, proc.returncode, min_chars)
         return {
-            "success": success,
+            "success": failure is None,
             "output": final_res,
             "returncode": proc.returncode,
             "elapsed": elapsed,
-            "error": None if success else f"Codex exited with non-zero code {proc.returncode}: {proc.stderr.strip()}"
+            "error": failure
         }
     except subprocess.TimeoutExpired:
         elapsed = time.time() - t0
