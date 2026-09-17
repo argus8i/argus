@@ -1,0 +1,1 @@
+{"timestamp": "2026-09-18 00:16:39", "symbol": "MOBIKWIK", "ltp": null, "prev_close": null, "band_pct": null, "entry_signal": "DATA_INVALID", "entry_reason": "DATA_INVALID / FAIL-CLOSED: SNAPSHOT_AGE_29884S_EXCEEDS_120S", "sizing": {"max_shares": 0, "paper_shares": 0, "live_shares": 0, "observation_gate_passed": false}, "feed_status": "FEED_STALE_OR_UNAVAILABLE"}

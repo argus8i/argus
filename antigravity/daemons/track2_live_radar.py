@@ -37,13 +37,13 @@ from dataclasses import asdict
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
 
-from antigravity.daemons.feed_validity import check_feed, usable_watchlist
-
 import requests
 
 # Ensure repository root is on sys.path
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, REPO_ROOT)
+
+from antigravity.daemons.feed_validity import check_feed, usable_watchlist
 
 from antigravity.models.liquid_momentum_screener import LiquidMomentumEngine, SizingResult
 from antigravity.models.track2_surveillance_monitor import Track2SurveillanceMonitor

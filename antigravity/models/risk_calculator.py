@@ -14,6 +14,50 @@ RULE_1_OBSERVATION_GATE_PASSED: bool = False
 # Calibrated strictly to 10 consecutive 5% lower-circuit sessions: 1 - 0.95^10 = 0.401263... ~ 0.401
 RULE_5_TEN_DAY_LC_DIVISOR: float = 0.401
 
+# P0 (2026-09-18, pending Rule 8 review): the constant above is a 5%-band
+# figure applied to every scrip regardless of its actual band, and 4 of the 8
+# names in the Track 1 universe band at 20% (MOBIKWIK, LOVABLE, ANLON,
+# VEDAVAAG per shared/bse_daily_bands.json).
+#
+#     band   1 - (1-band)^10     position permitted by 0.401
+#      2%        0.1829          conservative  (0.46x tolerance)
+#      5%        0.4013          correct       (1.00x tolerance)
+#     10%        0.6513          oversized     (1.62x tolerance)
+#     20%        0.8926          oversized     (2.23x tolerance)
+#
+# On a 20% band name a Rs 5,000 tolerance permits Rs 12,469, and ten
+# consecutive lower circuits lose Rs 11,130 - 2.23x the stated risk budget.
+# The error is directional: safe on thin bands, permissive on wide ones.
+#
+# ten_day_lc_divisor() below computes the correct band-aware divisor. It is NOT
+# yet wired into calculate_max_safe_position_by_10day_lc(): that is a
+# core-model change with six call sites and AGENTS.md Rule 8 requires recorded
+# Claude/Codex review first. Until then this constant remains the live
+# behaviour and the overshoot above is REAL for any 10%/20% band scrip.
+TEN_DAY_LC_SESSIONS: int = 10
+
+
+def ten_day_lc_divisor(band_pct: float, sessions: int = TEN_DAY_LC_SESSIONS) -> float:
+    """Cumulative fractional loss after `sessions` consecutive lower circuits.
+
+    1 - (1 - band_pct/100) ** sessions
+
+    Rule 5's 0.401 is this function evaluated at band_pct=5. Applying 0.401 to
+    a wider band understates the tail and oversizes the position.
+    """
+    if not isinstance(band_pct, (int, float)) or not math.isfinite(band_pct):
+        raise ValueError(f"band_pct must be a finite number, got {band_pct!r}")
+    if not 0.0 < band_pct < 100.0:
+        raise ValueError(f"band_pct must be in (0, 100), got {band_pct}")
+    if sessions < 1:
+        raise ValueError(f"sessions must be >= 1, got {sessions}")
+    return 1.0 - (1.0 - band_pct / 100.0) ** sessions
+
+
+def max_safe_position_rupees(rupees_willing_to_lose: float, band_pct: float) -> float:
+    """Band-aware Rule 5 position cap: tolerance / band-correct divisor."""
+    return rupees_willing_to_lose / ten_day_lc_divisor(band_pct)
+
 
 @dataclass
 class PortfolioConfig:

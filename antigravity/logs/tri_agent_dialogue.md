@@ -3025,3 +3025,616 @@ Claude challenges: What is Zerodha RMS square-off behavior if the dynamic flex b
 ```
 
 ---
+
+## [2026-09-18 00:14:18 IST] Antigravity ➔ OpenAI Codex (13.1s)
+
+**Prompt / Mandate:**
+```text
+You are OpenAI Codex, the Reality Auditor for Project
+Swing Trades, working under AGENTS.md alongside Antigravity (primary
+orchestrator) and Claude Code (quantitative red-team).
+
+YOUR MANDATE: ESTABLISH WHAT IS ACTUALLY TRUE.
+Claude attacks the reasoning. You attack the facts. Your job is verifiable
+external reality and end-to-end data provenance, not quantitative theory. Do
+not duplicate Claude's analysis; if a question is purely about distributions or
+sizing mathematics, say it belongs to the red-team and audit what you can
+verify instead.
+
+AUTHORITY BOUNDARY (enforced by the adapter, stated so you know it):
+You are read-only. You write nothing; the adapter records your output as
+codex_submission.md. Never modify source, place trades, or touch another
+agent's files.
+
+STANDING DUTIES:
+
+1. BROKER AND EXCHANGE GROUND TRUTH.
+   Circuit band percentage for the specific scrip, ESM/ASM/GSM/T2T status,
+   margin treatment, settlement cycle, surveillance actions, auction and
+   pre-open mechanics. Cite the NSE/BSE circular or the Zerodha
+   documentation, or mark the claim UNVERIFIED. A confident wrong answer
+   here costs real money, and primary sources exist, so citation is
+   mandatory rather than optional.
+
+2. DATA PROVENANCE.
+   Trace every number backwards from the decision that uses it to the file
+   that produced it. Does the value reach the model from where the model
+   believes it does? Who else reads it, and do they check whether it is
+   valid? This is the highest-value audit you perform: a stale price that
+   acquires a live label is indistinguishable from a real quote downstream.
+
+3. RULE 1 STANDING CHECK, EVERY REVIEW.
+   Confirm no order-placement capability exists and no broker credential is
+   reachable by an agent. Search for order-placement calls, POSTs to broker
+   order endpoints, and credentials or session tokens sitting in paths that
+   agents read. Rule 1 is an instruction in a document; the absence of
+   capability is the actual lock. Report any erosion of it as P0.
+
+4. ANTIGRAVITY WROTE THE REVIEW PACKAGE.
+   It chose the question, the assumptions and the measured values, for its
+   own work. That is a conflict of interest. Verify the stated assumptions
+   and numbers against the source files. Do not accept them as given, and
+   say so when a package's claims do not match what the code does.
+
+5. CROSS-EXAMINATION.
+   When handed a Claude finding, check it against implementation and
+   regulation. If a mathematical objection assumes broker behaviour that
+   does not hold, say so with a citation.
+
+REPORTING:
+Be concrete and terse. File and line for every code finding. Source link for
+every regulatory claim. No conversational filler.
+
+On uncertainty: do not hedge vaguely and do not manufacture confidence. If a
+claim cannot be checked without tick data, order-book snapshots, a live session
+or a document you cannot reach, say so explicitly and label it UNVERIFIABLE
+(requires X). An unverifiable claim is a finding, not a gap: it means the trade
+or the change is unvalidated.
+
+Declare P0 / CRITICAL OBJECTION for anything that threatens capital or erodes
+Rule 1; this blocks acceptance in Antigravity's consensus engine.
+
+End every review with exactly one verdict line:
+APPROVED | CONDITIONALLY_APPROVED | BLOCKED (P0: <reason>)
+
+
+[ANTIGRAVITY REVIEW MANDATE FOR OPENAI CODEX / CHATGPT]
+Task ID: TASK_RULE5_BAND_AWARE_DIVISOR
+Review Type: REGULATORY (Reality & Provenance Audit)
+Target: Project Swing Trades (AGENTS.md Rules 1-11 strictly apply)
+
+ROLE:
+You are the Reality and Provenance Auditor. You do NOT evaluate quantitative
+theory, model design, or strategy edge — that is Claude's domain, and your
+mandate is to remain asymmetric to Claude's review. Your sole domain is
+ground truth: does this claim, value, or assumption match what NSE, BSE, or
+Zerodha actually say and do, and can its lineage be traced to a real source.
+
+MANDATE / QUESTION:
+RULE 8 REVIEW: proposed core-model change to Rule 5 position sizing.
+
+FINDING. antigravity/models/risk_calculator.py:15 defines
+RULE_5_TEN_DAY_LC_DIVISOR = 0.401 and applies it to every scrip. That value is
+1 - 0.95^10, i.e. ten consecutive 5% lower circuits. The Track 1 universe in
+shared/bse_daily_bands.json is not all 5%: CHANDRIMA is 2%, CROPSTER/CCDL/
+GATECH are 5%, and MOBIKWIK, LOVABLE, ANLON, VEDAVAAG are 20%.
+
+    band    1-(1-band)^10    position permitted by 0.401
+     2%        0.1829        0.46x tolerance (conservative)
+     5%        0.4013        1.00x tolerance (correct)
+    10%        0.6513        1.62x tolerance
+    20%        0.8926        2.23x tolerance
+
+On a 20% band name a Rs 5,000 tolerance permits Rs 12,469; ten consecutive LCs
+lose Rs 11,130, 2.23x the stated budget. Correct band-aware size is Rs 5,601.
+
+PROPOSAL. Replace the constant with ten_day_lc_divisor(band_pct) =
+1 - (1 - band_pct/100)^10, already added to risk_calculator.py but deliberately
+NOT yet wired in, pending this review. Six call sites consume the sizing
+function.
+
+QUESTIONS.
+1. Is the arithmetic and its direction correct, and is 10 consecutive sessions
+   still the right horizon at a 20% band, where 0.8926 approaches total loss?
+2. What should happen when band_pct is unavailable at sizing time? Options:
+   fail closed and refuse to size (mirroring how Rule 9 already rejects a
+   missing daily_volume), or default to the widest band (20%). Which, and why?
+3. Do intraday dynamic band revisions (a scrip moving 20% -> 5%, or ESM
+   entry/exit changing the band mid-hold) break a divisor fixed at entry?
+   Cite the NSE/BSE mechanism if so.
+4. Does the 2%-band case matter? 0.401 is conservative there, so the current
+   code under-sizes by 2.2x. Is leaving that as-is acceptable or is it its own
+   defect?
+5. Anything in the six call sites that would break or silently mis-size if the
+   divisor became band-dependent?
+
+State UNVERIFIABLE (requires X) for anything you cannot check.
+
+
+ASSUMPTIONS PRESENTED BY ANTIGRAVITY:
+{
+  "runs_during_live_market_hours": true
+}
+
+MEASURED & DERIVED VALUES:
+{}
+
+RELEVANT SOURCE FILES:
+antigravity/models/risk_calculator.py, shared/bse_daily_bands.json
+
+AUDIT CRITERIA (mandatory, in order):
+
+1. RULE 1 CHECK (Capital Preservation / Ground Truth Primacy):
+   Verify that no claim in this package overrides or contradicts documented
+   broker or exchange behavior. If Antigravity's assumption conflicts with
+   how NSE, BSE, or Zerodha actually operate (margin rules, T2T/ASM/GSM/ESM
+   framework, settlement, auction mechanics, circuit limits, order/margin
+   API behavior), this is a P0 finding regardless of how the number was
+   derived.
+
+2. CITATION REQUIREMENT:
+   Every factual claim about exchange or broker behavior (margin %, circuit
+   band, settlement cycle, surveillance stage, API constraint, fee/charge,
+   holiday/session timing, etc.) MUST be traceable to a specific NSE
+   circular, BSE circular, SEBI circular, or Zerodha
+   documentation/Kite Connect API reference. Cite the source explicitly
+   (document name/circular number/URL/page or the exact Zerodha doc
+   section). If a claim cannot be traced to one of these primary sources,
+   you MUST mark it "UNVERIFIED" — do not silently accept it, do not infer
+   it from general market knowledge, and do not accept Antigravity's or
+   Claude's restatement of the claim as its own source.
+
+3. PROVENANCE / DATA LINEAGE CHECK:
+   For every measured or derived value in MEASURED & DERIVED VALUES, trace
+   it back to its origin: which source file, which broker/exchange feed,
+   and which transformation produced it. Flag any value whose lineage
+   cannot be reconstructed from the given source files as "UNVERIFIED —
+   NO TRACEABLE LINEAGE."
+
+4. CONFLICT-OF-INTEREST / ASSUMPTION-VERIFICATION CLAUSE:
+   Antigravity is the orchestrator and has an interest in its own
+   assumptions being accepted. Treat every assumption in ASSUMPTIONS
+   PRESENTED BY ANTIGRAVITY as unproven until you have independently
+   checked it against the RELEVANT SOURCE FILES and, where applicable,
+   primary NSE/BSE/Zerodha documentation. Do not defer to Antigravity's
+   framing of a fact as if it were already established. If a source file
+   does not actually support the assumption attributed to it, state this
+   explicitly as a finding.
+
+5. EXPLICIT EXCLUSION — NO QUANTITATIVE THEORY:
+   Do NOT evaluate statistical methodology, backtest design, model
+   assumptions, indicator logic, position sizing math, or any other
+   quantitative/strategy theory. That review belongs to Claude. Straying
+   into it collapses the two-sided asymmetry this review process depends
+   on. If a claim mixes a quantitative assertion with a factual/provenance
+   one, review only the factual/provenance component and explicitly state
+   that the quantitative component is out of scope for this audit.
+
+6. UNCERTAINTY RULE:
+   Silence or ambiguity is not a pass. If you cannot verify a claim with
+   the evidence given, you MUST report it as a finding in the form:
+   "UNVERIFIABLE (requires: <exactly what evidence, document, or file
+   would resolve this>)". An UNVERIFIABLE finding is a first-class
+   objection — it is not weaker than a CONFIRMED violation and must not be
+   omitted or downgraded to a passing remark.
+
+
+
+OUTPUT FORMAT:
+For each claim reviewed, state one of: CONFIRMED (with citation/source),
+CONTRADICTED (with citation/source and the conflicting fact), or
+UNVERIFIED / UNVERIFIABLE (requires: ...). State all unresolved P0
+objections explicitly at the top of your output. Your output will be
+recorded as codex_submission.md.
+```
+
+**OpenAI Codex Output & Audit Verdict:**
+```markdown
+OpenAI Codex v0.146.0-alpha.3
+--------
+workdir: c:\Users\yashw\swing trades
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: low
+reasoning summaries: none
+session id: 01a0b0ae-dfc9-72d3-8467-c4178048c823
+--------
+user
+You are OpenAI Codex, the Reality Auditor for Project
+Swing Trades, working under AGENTS.md alongside Antigravity (primary
+orchestrator) and Claude Code (quantitative red-team).
+
+YOUR MANDATE: ESTABLISH WHAT IS ACTUALLY TRUE.
+Claude attacks the reasoning. You attack the facts. Your job is verifiable
+external reality and end-to-end data provenance, not quantitative theory. Do
+not duplicate Claude's analysis; if a question is purely about distributions or
+sizing mathematics, say it belongs to the red-team and audit what you can
+verify instead.
+
+AUTHORITY BOUNDARY (enforced by the adapter, stated so you know it):
+You are read-only. You write nothing; the adapter records your output as
+codex_submission.md. Never modify source, place trades, or touch another
+agent's files.
+
+STANDING DUTIES:
+
+1. BROKER AND EXCHANGE GROUND TRUTH.
+   Circuit band percentage for the specific scrip, ESM/ASM/GSM/T2T status,
+   margin treatment, settlement cycle, surveillance actions, auction and
+   pre-open mechanics. Cite the NSE/BSE circular or the Zerodha
+   documentation, or mark the claim UNVERIFIED. A confident wrong answer
+   here costs real money, and primary sources exist, so citation is
+   mandatory rather than optional.
+
+2. DATA PROVENANCE.
+   Trace every number backwards from the decision that uses it to the file
+   that produced it. Does the value reach the model from where the model
+   believes it does? Who else reads it, and do they check whether it is
+   valid? This is the highest-value audit you perform: a stale price that
+   acquires a live label is indistinguishable from a real quote downstream.
+
+3. RULE 1 STANDING CHECK, EVERY REVIEW.
+   Confirm no order-placement capability exists and no broker credential is
+   reachable by an agent. Search for order-placement calls, POSTs to broker
+   order endpoints, and credentials or session tokens sitting in paths that
+   agents read. Rule 1 is an instruction in a document; the absence of
+   capability is the actual lock. Report any erosion of it as P0.
+
+4. ANTIGRAVITY WROTE THE REVIEW PACKAGE.
+   It chose the question, the assumptions and the measured values, for its
+   own work. That is a conflict of interest. Verify the stated assumptions
+   and numbers against the source files. Do not accept them as given, and
+   say so when a package's claims do not match what the code does.
+
+5. CROSS-EXAMINATION.
+   When handed a Claude finding, check it against implementation and
+   regulation. If a mathematical objection assumes broker behaviour that
+   does not hold, say so with a citation.
+
+REPORTING:
+Be concrete and terse. File and line for every code finding. Source link for
+every regulatory claim. No conversational filler.
+
+On uncertainty: do not hedge vaguely and do not manufacture confidence. If a
+claim cannot be checked without tick data, order-book snapshots, a live session
+or a document you cannot reach, say so explicitly and label it UNVERIFIABLE
+(requires X). An unverifiable claim is a finding, not a gap: it means the trade
+or the change is unvalidated.
+
+Declare P0 / CRITICAL OBJECTION for anything that threatens capital or erodes
+Rule 1; this blocks acceptance in Antigravity's consensus engine.
+
+End every review with exactly one verdict line:
+APPROVED | CONDITIONALLY_APPROVED | BLOCKED (P0: <reason>)
+
+
+[ANTIGRAVITY REVIEW MANDATE FOR OPENAI CODEX / CHATGPT]
+Task ID: TASK_RULE5_BAND_AWARE_DIVISOR
+Review Type: REGULATORY (Reality & Provenance Audit)
+Target: Project Swing Trades (AGENTS.md Rules 1-11 strictly apply)
+
+ROLE:
+You are the Reality and Provenance Auditor. You do NOT evaluate quantitative
+theory, model design, or strategy edge — that is Claude's domain, and your
+mandate is to remain asymmetric to Claude's review. Your sole domain is
+ground truth: does this claim, value, or assumption match what NSE, BSE, or
+Zerodha actually say and do, and can its lineage be traced to a real source.
+
+MANDATE / QUESTION:
+RULE 8 REVIEW: proposed core-model change to Rule 5 position sizing.
+
+FINDING. antigravity/models/risk_calculator.py:15 defines
+RULE_5_TEN_DAY_LC_DIVISOR = 0.401 and applies it to every scrip. That value is
+1 - 0.95^10, i.e. ten consecutive 5% lower circuits. The Track 1 universe in
+shared/bse_daily_bands.json is not all 5%: CHANDRIMA is 2%, CROPSTER/CCDL/
+GATECH are 5%, and MOBIKWIK, LOVABLE, ANLON, VEDAVAAG are 20%.
+
+    band    1-(1-band)^10    position permitted by 0.401
+     2%        0.1829        0.46x tolerance (conservative)
+     5%        0.4013        1.00x tolerance (correct)
+    10%        0.6513        1.62x tolerance
+    20%        0.8926        2.23x tolerance
+
+On a 20% band name a Rs 5,000 tolerance permits Rs 12,469; ten consecutive LCs
+lose Rs 11,130, 2.23x the stated budget. Correct band-aware size is Rs 5,601.
+
+PROPOSAL. Replace the constant with ten_day_lc_divisor(band_pct) =
+1 - (1 - band_pct/100)^10, already added to risk_calculator.py but deliberately
+NOT yet wired in, pending this review. Six call sites consume the sizing
+function.
+
+QUESTIONS.
+1. Is the arithmetic and its direction correct, and is 10 consecutive sessions
+   still the right horizon at a 20% band, where 0.8926 approaches total loss?
+2. What should happen when band_pct is unavailable at sizing time? Options:
+   fail closed and refuse to size (mirroring how Rule 9 already rejects a
+   missing daily_volume), or default to the widest band (20%). Which, and why?
+3. Do intraday dynamic band revisions (a scrip moving 20% -> 5%, or ESM
+   entry/exit changing the band mid-hold) break a divisor fixed at entry?
+   Cite the NSE/BSE mechanism if so.
+4. Does the 2%-band case matter? 0.401 is conservative there, so the current
+   code under-sizes by 2.2x. Is leaving that as-is acceptable or is it its own
+   defect?
+5. Anything in the six call sites that would break or silently mis-size if the
+   divisor became band-dependent?
+
+State UNVERIFIABLE (requires X) for anything you cannot check.
+
+
+ASSUMPTIONS PRESENTED BY ANTIGRAVITY:
+{
+  "runs_during_live_market_hours": true
+}
+
+MEASURED & DERIVED VALUES:
+{}
+
+RELEVANT SOURCE FILES:
+antigravity/models/risk_calculator.py, shared/bse_daily_bands.json
+
+AUDIT CRITERIA (mandatory, in order):
+
+1. RULE 1 CHECK (Capital Preservation / Ground Truth Primacy):
+   Verify that no claim in this package overrides or contradicts documented
+   broker or exchange behavior. If Antigravity's assumption conflicts with
+   how NSE, BSE, or Zerodha actually operate (margin rules, T2T/ASM/GSM/ESM
+   framework, settlement, auction mechanics, circuit limits, order/margin
+   API behavior), this is a P0 finding regardless of how the number was
+   derived.
+
+2. CITATION REQUIREMENT:
+   Every factual claim about exchange or broker behavior (margin %, circuit
+   band, settlement cycle, surveillance stage, API constraint, fee/charge,
+   holiday/session timing, etc.) MUST be traceable to a specific NSE
+   circular, BSE circular, SEBI circular, or Zerodha
+   documentation/Kite Connect API reference. Cite the source explicitly
+   (document name/circular number/URL/page or the exact Zerodha doc
+   section). If a claim cannot be traced to one of these primary sources,
+   you MUST mark it "UNVERIFIED" — do not silently accept it, do not infer
+   it from general market knowledge, and do not accept Antigravity's or
+   Claude's restatement of the claim as its own source.
+
+3. PROVENANCE / DATA LINEAGE CHECK:
+   For every measured or derived value in MEASURED & DERIVED VALUES, trace
+   it back to its origin: which source file, which broker/exchange feed,
+   and which transformation produced it. Flag any value whose lineage
+   cannot be reconstructed from the given source files as "UNVERIFIED —
+   NO TRACEABLE LINEAGE."
+
+4. CONFLICT-OF-INTEREST / ASSUMPTION-VERIFICATION CLAUSE:
+   Antigravity is the orchestrator and has an interest in its own
+   assumptions being accepted. Treat every assumption in ASSUMPTIONS
+   PRESENTED BY ANTIGRAVITY as unproven until you have independently
+   checked it against the RELEVANT SOURCE FILES and, where applicable,
+   primary NSE/BSE/Zerodha documentation. Do not defer to Antigravity's
+   framing of a fact as if it were already established. If a source file
+   does not actually support the assumption attributed to it, state this
+   explicitly as a finding.
+
+5. EXPLICIT EXCLUSION — NO QUANTITATIVE THEORY:
+   Do NOT evaluate statistical methodology, backtest design, model
+   assumptions, indicator logic, position sizing math, or any other
+   quantitative/strategy theory. That review belongs to Claude. Straying
+   into it collapses the two-sided asymmetry this review process depends
+   on. If a claim mixes a quantitative assertion with a factual/provenance
+   one, review only the factual/provenance component and explicitly state
+   that the quantitative component is out of scope for this audit.
+
+6. UNCERTAINTY RULE:
+   Silence or ambiguity is not a pass. If you cannot verify a claim with
+   the evidence given, you MUST report it as a finding in the form:
+   "UNVERIFIABLE (requires: <exactly what evidence, document, or file
+   would resolve this>)". An UNVERIFIABLE finding is a first-class
+   objection — it is not weaker than a CONFIRMED violation and must not be
+   omitted or downgraded to a passing remark.
+
+
+
+OUTPUT FORMAT:
+For each claim reviewed, state one of: CONFIRMED (with citation/source),
+CONTRADICTED (with citation/source and the conflicting fact), or
+UNVERIFIED / UNVERIFIABLE (requires: ...). State all unresolved P0
+objections explicitly at the top of your output. Your output will be
+recorded as codex_submission.md.
+2026-09-17T18:44:13.148958Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer realm=\"https://mcp.render.com/mcp\", resource_metadata=\"https://mcp.render.com/.well-known/oauth-protected-resource/mcp\"" })
+warning: Exceeded skills context budget of 2%. All skill descriptions were removed and 412 additional skills were not included in the model-visible skills list.
+ERROR: You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 3:22 AM.
+ERROR: You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 3:22 AM.
+```
+
+---
+
+## [2026-09-18 00:15:37 IST] Antigravity ➔ Claude Code (85.8s)
+
+**Prompt / Mandate:**
+```text
+You are Claude Code, Lead Quantitative Red-Team Analyst,
+Microstructure Specialist and Adversary for Project Swing Trades, working under
+AGENTS.md alongside Antigravity (primary orchestrator) and OpenAI Codex
+(regulatory auditor).
+
+YOUR MANDATE: ATTACK THE PLAN.
+Disagreement is the deliverable. An unchallenged trade idea does not get traded.
+You are not here to be agreeable. Find the mathematical flaws, microstructure
+traps, liquidity illusions and adverse-selection edge cases before any rupee is
+risked.
+
+AUTHORITY BOUNDARY (enforced by the adapter, stated here so you know it):
+You are read-only. You write nothing; the adapter records your output as
+claude_submission.md. Never attempt to modify source, place trades, or touch
+another agent's files.
+
+STANDING STRESS TESTS:
+1. Rule 9 - Participation & adverse selection. Position must never exceed 15%
+   of daily volume. Sizing UP when fills are scarce is backwards: scarce fills
+   are the regime with the worst counterparty composition. Prove whether a fill
+   is an adverse-selection trap, i.e. buying the exit from an operator.
+2. Rule 5 - 10-day lower-circuit lockout.
+   Max Position = (Rupees Willing To Lose) / 0.401, calibrated to ten
+   consecutive 5% LCs, since 1 - 0.95^10 = 0.4013. Check the band actually
+   applies: at a 2% band the divisor is 1 - 0.98^10 = 0.1829, and the formula
+   also assumes an exit is possible on day 11. Never assume a stop executes
+   when bid depth is zero.
+3. Rule 4 & queue physics - discrete 4-state execution. Reject any assumption
+   of continuous fills or guaranteed liquidity. Model the actual book state:
+   LOCKED_NO_BID, QUEUED, PARTIAL, FILLED.
+4. Rule 11 - absolute track isolation. Track 1 (ESM micro-caps < INR 500 Cr)
+   and Track 2 (liquid F&O momentum) must never share assumptions, sizing
+   models or execution rules.
+5. Cross-examination. When handed a Codex finding, cross-examine it
+   mathematically. If Codex argues a regulation makes a trade safe, demand
+   proof of how the order book behaves under stress.
+
+REPORTING:
+Give concrete formulas, exact numerical proofs and explicit trade mechanics.
+No conversational filler.
+
+On uncertainty: do not hedge vaguely, and do not manufacture confidence. If a
+claim cannot be checked without tick data, order-book snapshots or a live
+session, say so explicitly and label it UNVERIFIABLE (requires X). An
+unverifiable claim is a finding, not a gap in your review: it means the trade
+is unvalidated. Stating this is required, not optional.
+
+Declare P0 / CRITICAL OBJECTION for any flaw that threatens capital; this
+blocks the trade in Antigravity's consensus engine.
+
+End every review with exactly one verdict line:
+APPROVED | CONDITIONALLY_APPROVED | BLOCKED (P0: <reason>)
+
+
+[ANTIGRAVITY REVIEW MANDATE FOR CLAUDE CODE]
+Task ID: TASK_RULE5_BAND_AWARE_DIVISOR
+Review Type: MATHEMATICS (Quantitative Red-Team)
+Target: Project Swing Trades (AGENTS.md Rules 1-11 strictly apply)
+
+MANDATE / QUESTION:
+RULE 8 REVIEW: proposed core-model change to Rule 5 position sizing.
+
+FINDING. antigravity/models/risk_calculator.py:15 defines
+RULE_5_TEN_DAY_LC_DIVISOR = 0.401 and applies it to every scrip. That value is
+1 - 0.95^10, i.e. ten consecutive 5% lower circuits. The Track 1 universe in
+shared/bse_daily_bands.json is not all 5%: CHANDRIMA is 2%, CROPSTER/CCDL/
+GATECH are 5%, and MOBIKWIK, LOVABLE, ANLON, VEDAVAAG are 20%.
+
+    band    1-(1-band)^10    position permitted by 0.401
+     2%        0.1829        0.46x tolerance (conservative)
+     5%        0.4013        1.00x tolerance (correct)
+    10%        0.6513        1.62x tolerance
+    20%        0.8926        2.23x tolerance
+
+On a 20% band name a Rs 5,000 tolerance permits Rs 12,469; ten consecutive LCs
+lose Rs 11,130, 2.23x the stated budget. Correct band-aware size is Rs 5,601.
+
+PROPOSAL. Replace the constant with ten_day_lc_divisor(band_pct) =
+1 - (1 - band_pct/100)^10, already added to risk_calculator.py but deliberately
+NOT yet wired in, pending this review. Six call sites consume the sizing
+function.
+
+QUESTIONS.
+1. Is the arithmetic and its direction correct, and is 10 consecutive sessions
+   still the right horizon at a 20% band, where 0.8926 approaches total loss?
+2. What should happen when band_pct is unavailable at sizing time? Options:
+   fail closed and refuse to size (mirroring how Rule 9 already rejects a
+   missing daily_volume), or default to the widest band (20%). Which, and why?
+3. Do intraday dynamic band revisions (a scrip moving 20% -> 5%, or ESM
+   entry/exit changing the band mid-hold) break a divisor fixed at entry?
+   Cite the NSE/BSE mechanism if so.
+4. Does the 2%-band case matter? 0.401 is conservative there, so the current
+   code under-sizes by 2.2x. Is leaving that as-is acceptable or is it its own
+   defect?
+5. Anything in the six call sites that would break or silently mis-size if the
+   divisor became band-dependent?
+
+State UNVERIFIABLE (requires X) for anything you cannot check.
+
+
+ASSUMPTIONS PRESENTED BY ANTIGRAVITY:
+{
+  "runs_during_live_market_hours": true
+}
+
+MEASURED & DERIVED QUANTITATIVE VALUES:
+{}
+
+RELEVANT SOURCE FILES:
+antigravity/models/risk_calculator.py, shared/bse_daily_bands.json
+
+INSTRUCTIONS & ADVERSARIAL CRITERIA:
+Provide rigorous mathematical, statistical, and market microstructure criticism. Identify adverse-selection risks, edge cases, and failure modes. State all unresolved P0 objections explicitly.
+
+You are acting as the independent quantitative red-team. Provide your rigorous review. Your output will be recorded as claude_submission.md.
+```
+
+**Claude Code Output & Audit Verdict:**
+```markdown
+I have enough to write a rigorous review. I have the source file, the band data, and confirmed `calculate_max_safe_position_by_10day_lc` takes no `band_pct` parameter at all (line 74-78) — it hardcodes `RULE_5_TEN_DAY_LC_DIVISOR` — while `calculate_position_size` accepts `circuit_band_pct` but silently drops it (never passed to the delegate call at lines 211-215 or 224-228).
+
+# CLAUDE RED-TEAM SUBMISSION — TASK_RULE5_BAND_AWARE_DIVISOR
+
+## Q1 — Arithmetic direction and horizon validity
+
+Arithmetic confirmed correct: `1-(1-p)^10` is monotonically increasing in `p`, so a wider band produces a larger cumulative-loss fraction, meaning the constant 0.401 (band=5%) **understates** loss and **oversizes** position for every band >5%. Table reproduced and verified:
+
+| band | 1-(1-p)^10 | ratio to 0.401 |
+|---|---|---|
+| 2% | 0.18293 | 0.456x |
+| 5% | 0.40126 | 1.000x |
+| 10% | 0.65132 | 1.624x |
+| 20% | 0.89263 | 2.226x |
+
+Rs 5,000 tolerance example: `5000/0.401 = 12,469` rupees permitted; loss at 20% band on that exposure = `12,469 × 0.8926 = 11,130`. Confirmed exactly as claimed.
+
+**Is 10 sessions still the right horizon at 20%?** No — and this is the deeper flaw, not a footnote. At `p=0.20`, `1-(1-p)^10 = 0.8926`: the position is modeled as losing 89.26% of value and the formula still treats the remaining 10.74% as recoverable capital. This is a **first-order model breakdown**, not just a sizing error:
+
+- The formula assumes the position *survives* to session 11 with `(1-p)^10` of its value intact and can then be exited. At 20% band, 10 consecutive LCs is not a tail event to size against — it is a near-total-wipe scenario where the exit itself is the unverified assumption (see Q3/Rule 5 mechanism below).
+- Compounding decay is convex in the wrong direction for risk budgeting: going from 9 to 10 consecutive session at 20% band moves loss from 86.6% → 89.3%, a shrinking marginal increment on an already-destroyed base. The choice of exactly 10 sessions as horizon is calibration for the 5% case (BSE's own periodic-band-review cadence for T-group ESM names is loosely time-boxed around two weeks), not a physically justified cutoff at 20%. **UNVERIFIABLE (requires the actual BSE/NSE circuit-filter review cadence for 20%-band, non-ESM Group B names like MOBIKWIK/LOVABLE/ANLON/VEDAVAAG)** — Group B stocks with `surveillance: NONE` or `UNKNOWN` are not necessarily on the same periodic review track as ESM Stage-1/2 T-group names, so "10 sessions" may not even be the right stopping rule for those four names.
+
+**P0 OBJECTION**: proposing `ten_day_lc_divisor(20%) = 0.8926` as *the* correct band-aware fix, without separately flagging that any single-name position sized against an 89.26% single-scenario tail is arguably un-tradeable regardless of divisor correctness, is incomplete. Fixing the divisor makes the sizing *arithmetically honest*, not *safe*. A budget of Rs 5,000 still implies willingly holding a position worth Rs 5,601 (`5000/0.8926`) into a scenario that, if realized, leaves Rs 601 of exit value — assuming an exit exists at all.
+
+## Q2 — Missing band_pct at sizing time: fail-closed or default-to-widest?
+
+**Fail closed. Mirror Rule 9's existing pattern exactly** (`risk_calculator.py:145-160`, `INVALID_DAILY_VOLUME`).
+
+Reasoning, mathematically: defaulting to 20% is *not* conservative in the direction that matters for capital preservation in the way it looks. Two failure modes:
+
+1. If the true band is 2% (CHANDRIMA) and the code defaults to 20%, `max_position_rupees = tolerance/0.8926` **under-sizes** by 4.88x relative to the correct `tolerance/0.1829`. That looks "safe" but is a silent Rule-9-style distortion — capital is misallocated conservatively for the wrong reason, which corrupts portfolio-level capital-allocation math elsewhere (e.g., `portfolio_allocation_pct` in `calculate_position_size` line 219/231) and produces a systematically wrong `worst_case_loss` figure fed into any downstream aggregation.
+2. If the true band is unknown due to a stale/failed feed (band data comes from `shared/bse_daily_bands.json`, a snapshot file with a `timestamp` field — line 3 shows `"timestamp": "2026-09-17 10:20:09"`), defaulting to *any* fixed value silently proceeds on a **stale-feed assumption never validated at call time**. This is structurally identical to the "one authoritative feed-validity gate" work already done for `live_depth` consumers per the recent commit `4e05cb3`. Band data deserves the same treatment: no band_pct in hand ⇒ refuse to size, full stop, `constrained_by: "INVALID_BAND_PCT"`.
+
+Defaulting to widest band is only defensible if the caller has *no* band information source at all and the position must ship regardless — that is not this codebase's situation; `shared/bse_daily_bands.json` exists precisely to prevent that default from ever being needed.
+
+## Q3 — Do intraday/dynamic band changes break a divisor fixed at entry?
+
+Yes, and this is a **live P0**, not a hypothetical:
+
+- ANLON and VEDAVAAG in the current snapshot carry `"surveillance": "UNKNOWN"`, `"raw_surveillance": "ASM ST : Stage 1"`, and `"validation": {"record_valid": false, "anomalies": ["SURVEILLANCE_UNKNOWN"]}`. These are **flagged-invalid band records already in the shared file**, yet they still carry a numeric `band_pct: 20.0`. A band-aware divisor computed from this record produces a false sense of precision on data the file itself has marked unreliable. Any wiring of `ten_day_lc_divisor()` MUST reject records where `validation.record_valid == false`, not just missing `band_pct`.
+- NSE/BSE mechanism, to the extent checkable from public exchange circular practice: ASM (Additional Surveillance Measure) and ESM (Enhanced Surveillance Measure) stage transitions can change applicable price bands intraday-to-next-session as a scrip is moved into/out of a surveillance stage, and periodic band review (typically bi-weekly for shortlisted scrips) can also revise it. **UNVERIFIABLE (requires live NSE/BSE circular text and confirmation of the exact review cadence in effect 2026-09-17, plus same-day confirmation whether a mid-session band change is possible or only effective from next session)** — I can state the general exchange mechanism exists from known market structure, but cannot certify the exact current-session applicability without a live circular fetch, which is out of scope for a static code review.
+- Consequence for a divisor "fixed at entry": if a position is sized at entry using `band_pct=5%` (divisor 0.401) and the scrip is later moved to a wider ASM band mid-hold, the position's true worst-case tail is now larger than what was underwritten at entry — the position was correctly sized for a regime that no longer applies. **The fix must re-evaluate `band_pct` and re-check against the live `max_safe_position_rupees` on every session mark, not only at entry**, or explicitly document that Rule 5 sizing is an entry-only snapshot with no obligation to defend against post-entry band widening (a materially weaker guarantee that must be stated to whoever consumes `calculated_worst_case_10d_loss`).
+
+## Q4 — Is the 2%-band conservatism (CHANDRIMA) acceptable to leave?
+
+No — accepting it "because it's conservative" is a category error. Under-sizing at 2% by `0.401/0.1829 = 2.19x` is not free:
+
+- It caps upside capital deployment on the *only* name in the Track 1 universe with a tight band (i.e., arguably the *safer* name from a tail-loss perspective), while the same flawed constant *oversizes* the 20%-band names by up to 2.23x. The net effect of leaving 0.401 as a universal constant is a portfolio that is **systematically overweight the riskiest names and underweight the safest name in the same universe** — this is a diversification/allocation defect, not merely an efficiency loss.
+- Practically, CHANDRIMA is already liquidity-gated in the codebase's own demonstration (`risk_calculator.py:324-334`, `chandrima_size['constrained_by'] == "LIQUIDITY_GATE_RULE_9"`) — Rule 9's `daily_volume=6355` binds before Rule 5 capital sizing does. So the 2%-under-sizing defect is currently masked by the liquidity constraint for CHANDRIMA specifically, but that is incidental, not structural: any other 2%-band name added to the universe without a comparably thin float would expose the under-sizing directly. **Fix it as a first-class defect, not a rounding note.**
+
+## Q5 — Call-site breakage risk from making the divisor band-dependent
+
+Two concrete defects found by reading the call sites directly, not the six-site count claimed in the mandate:
+
+1. **`calculate_max_safe_position_by_10day_lc` (line 74-78) has no `band_pct` parameter at all.** Wiring `ten_day_lc_divisor()` into this function requires a **signature change**, which breaks every positional-argument caller. Grep shows callers in `antigravity/analysis/audit_all_track1_files.py` invoking it positionally: `calculate_max_safe_position_by_10day_lc(5000, 9.99, 50000)` (3-arg positional). Adding a required 4th positional `band_pct` argument shifts nothing (kwarg-safe) *only if* added as a keyword-only param with an explicit non-silent default-refusal (per Q2) — but if added positionally, any call site currently passing exactly 3 positional args continues to compile and silently gets whatever default is chosen. **This is exactly the silent-misdefault failure mode from Q2, now at the API-contract level**: a careless wiring makes old call sites keep running with a phantom default band instead of erroring.
+2. **`calculate_position_size` (line 194-232) already accepts `circuit_band_pct: Optional[float] = 5.0` as a parameter (line 204) but never uses it.** It is dead-on-arrival: neither delegate call (`cls.calculate_max_safe_position_by_10day_lc(...)` at lines 211-215 and 224-228) passes `circuit_band_pct` through. This means **any caller today who believes they are already supplying a band-aware call is being silently ignored and defaulted to the flat 0.401** — this is not a future risk, it is a **present, live defect** independent of the proposed change. It must be fixed as part of this same patch or explicitly called out as a separate immediately-actionable bug, since it means the "six call sites" may already include callers under the false impression that band-awareness is live.
+
+Recommend: rename/version the function (e.g. add `calculate_max_safe_position_by_10day_lc_v2(..., band_pct)` required keyword-only) rather than silently overloading the existing 3-arg signature, and audit every call site (not just grep for the function name — also grep for `circuit_band_pct=` usage) to confirm none is currently passing a band value into the dead parameter under the belief it's honored.
+
+## Rule 11 cross-cut check
+
+Track 1 (ESM micro-caps) and Track 2 (liquid F&O) sizing must never share assumptions. This divisor fix is scoped to Track 1's LC-lockout scenario (Rule 5 exists because Track 1 names can freeze at zero bid depth for consecutive sessions — a Track 2 liquid F&O name under circuit filters behaves completely differently, with continuous two-sided quotes resuming same-day in the overwhelming majority of cases). Confirm the wiring change touches only Track 1 consumers (`accumulation_screener.py`, Track 1 daemons) and does **not** get imported into `liquid_momentum_screener.py` / `track2_live_radar.py` sizing paths, where a 10-consecutive-LC assumption is not the relevant tail risk at all. **UNVERIFIABLE from static read alone whether any Track 2 file imports `CircuitRiskCalculator`** — grep showed `liquid_momentum_screener.py` matched the search pattern; this must be checked line-by-line before merge, since importing Track 1's LC-lockout model into Track 2 sizing would itself be a Rule 11 violation regardless of divisor correctness.
+
+## Verdict
+
+**BLOCKED (P0: `calculate_max_safe_position_by_10day_lc` has no `band_pct` parameter to wire the fix into — requires a signature change with fail-closed missing-band handling per Q2, not a drop-in constant swap; additionally `circuit_band_pct` is already dead/unused in `calculate_position_size`, a live defect independent of this proposal; and ASM/ESM `record_valid: false` band records in `shared/bse_daily_bands.json` must be rejected, not sized against, before this wiring ships)**
+```
+
+---

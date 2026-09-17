@@ -31,9 +31,16 @@ import time
 from datetime import datetime
 from typing import Dict, Any, Optional
 
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+# This module is launched directly by launch_radar.bat, so the repo root must
+# be on sys.path before any project import: otherwise Python's stdlib
+# 'antigravity' easter-egg module wins resolution and the import fails with
+# "'antigravity' is not a package". pytest masks this via conftest.
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
 from antigravity.daemons.feed_validity import check_feed, usable_watchlist
 
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SHARED_DIR = os.path.join(REPO_ROOT, "shared")
 LOGS_DIR = os.path.join(REPO_ROOT, "antigravity", "logs")
 DB_PATH = os.path.join(LOGS_DIR, "track1_historical.db")

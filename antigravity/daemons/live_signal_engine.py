@@ -13,10 +13,9 @@ import time
 from datetime import datetime
 from typing import Dict, Any, Optional
 
-from antigravity.daemons.feed_validity import check_feed
-
 # Ensure repository root is on sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+from antigravity.daemons.feed_validity import check_feed
 from antigravity.models.circuit_rules import (
     CircuitRuleEngine,
     MarketDepthSnapshot,
