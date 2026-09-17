@@ -10,6 +10,14 @@ echo.
 set CHROME_EXE=C:\Program Files\Google\Chrome\Application\chrome.exe
 set PROFILE_DIR=C:\Users\yashw\.chrome_kite_profile
 
+REM Keeps a DevTools client attached to every tab. NOTE: the DevTools pane is
+REM itself a window that can take OS focus, working against the
+REM Page.bringToFront / setFocusEmulationEnabled enforcement in the daemon,
+REM and it halves the usable viewport. The three --disable-*backgrounding
+REM flags below are what actually prevent renderer suspension. Set this to
+REM nothing to disable.
+set DEVTOOLS_FLAG=--auto-open-devtools-for-tabs
+
 if not exist "%CHROME_EXE%" (
     if exist "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe" (
         set "CHROME_EXE=C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
@@ -24,7 +32,7 @@ if not exist "%CHROME_EXE%" (
 
 echo [1/3] Launching Google Chrome with DevTools Remote Debugging on Port 9333...
 echo       Profile Directory: %PROFILE_DIR%
-start "" "%CHROME_EXE%" --remote-debugging-port=9333 --user-data-dir="%PROFILE_DIR%" --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --auto-open-devtools-for-tabs --no-first-run --no-default-browser-check "https://kite.zerodha.com"
+start "" "%CHROME_EXE%" --remote-debugging-port=9333 --user-data-dir="%PROFILE_DIR%" --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding %DEVTOOLS_FLAG% --no-first-run --no-default-browser-check "https://kite.zerodha.com"
 
 echo.
 echo [2/3] Waiting 3 seconds for Chrome to initialize...

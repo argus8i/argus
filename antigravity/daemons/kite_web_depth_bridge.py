@@ -391,6 +391,13 @@ EXTRACT_JS = r"""
         for (const dlg of dialogs) {
             const rect = dlg.getBoundingClientRect();
             if (!rect.width || !rect.height) continue;
+            // Only trust a dialog that actually holds a depth table. Kite can
+            // have an order/GTT/alert dialog open at the same time, and naming
+            // the depth after THAT symbol is worse than UNATTRIBUTED.
+            const hasDepth = dlg.querySelector(
+                '.depth-pane, .market-depth, table.depth, [class*="depth"]'
+            );
+            if (!hasDepth) continue;
             const nm = dlg.querySelector(
                 '.instrument-name, .tradingsymbol, .nice-name, .symbol, .name, .title, h1, h2, h3'
             );
@@ -762,8 +769,12 @@ async def cdp_bridge():
                 # Enforce focus immediately on connect: if the tab is already
                 # backgrounded, the very first extraction would otherwise read
                 # an unmounted depth pane.
-                msg_id += 2
+                # enforce_tab_focus consumes msg_id AND msg_id+1, so advance
+                # twice; otherwise the next Runtime.evaluate reuses the
+                # focus-emulation id and matches its late reply instead.
+                msg_id += 1
                 focus_res = await enforce_tab_focus(ws, msg_id)
+                msg_id += 1
                 last_focus_enforce = time.time()
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] [FOCUS] "
                       f"bringToFront={focus_res['bring_to_front']} "
@@ -776,8 +787,9 @@ async def cdp_bridge():
                     # when the window is minimized or occluded by another app.
                     if (now_ts - last_focus_enforce) >= FOCUS_ENFORCE_INTERVAL_SEC:
                         last_focus_enforce = now_ts
-                        msg_id += 2
+                        msg_id += 1
                         await enforce_tab_focus(ws, msg_id)
+                        msg_id += 1  # second id consumed inside the helper
                     
                     # Refresh session authentication every 60s
                     if (now_ts - last_auth_check) >= 60.0:
@@ -857,41 +869,61 @@ async def cdp_bridge():
 
                         symbol_to_log = active_stock if active_stock else "UNATTRIBUTED"
 
-                        # Compute Rule 7 Volume Expansion for active stock and watchlist
-                        vol_audit: Dict[str, Any] = {}
-                        dom_close = float(stats.get("close") or stats.get("prev_close") or 0.0) or None
-                        for sym, m in TRACK1_INSTRUMENTS.items():
-                            sym_vol = None
-                            if active_stock == sym and isinstance(stats.get("volume"), int):
-                                sym_vol = stats["volume"]
-                            vol_audit[sym] = compute_rule7_volume_expansion(
-                                symbol=sym,
-                                meta=m,
-                                intraday_volume=sym_vol,
-                                auth=auth_state,
-                                dom_prev_close=dom_close if active_stock == sym else None
-                            )
-
-                        # FAIL CLOSED. A backgrounded tab or a frozen DOM
-                        # yields whatever Kite last rendered, which downstream
-                        # cannot distinguish from a live quote. Publishing that
-                        # as market data is worse than publishing nothing, so
-                        # null the price fields and say so explicitly rather
-                        # than leaving a consumer to infer it from is_stale.
+                        # FAIL CLOSED. A backgrounded tab or a frozen DOM yields
+                        # whatever Kite last rendered, which downstream cannot
+                        # distinguish from a live quote. This gate runs BEFORE
+                        # the Rule 7 volume audit and nulls the LOCALS, not just
+                        # val[...]: best_bid/best_ask/spread and total_buy/
+                        # total_sell are recomputed from the local `depth` and
+                        # `stats` when the tick CSV is written, so nulling only
+                        # the JSON left the CSV publishing stale quotes beside a
+                        # live_depth.json that correctly said data_valid=false.
                         STALE_STATUSES = ("STALE_TAB_BACKGROUNDED", "STALE_DATA_FROZEN")
                         data_valid = not (is_tab_hidden or stream_status in STALE_STATUSES)
 
                         if not data_valid:
+                            depth = None
+                            stats = {}
+                            wl = []
+                            ltp_to_log = None
+                            vol_to_log = None
+                            best_bid = None
+                            best_ask = None
+                            total_b = None
+                            total_s = None
                             val["depth"] = None
                             val["ltp"] = None
                             val["stats"] = None
-                            ltp_to_log = None
+                            # watchlist carries per-symbol LTPs and is read by
+                            # multi_stock_radar.py, which labels them KITE_LIVE
+                            # without checking data_valid or is_stale. Leaving
+                            # it populated was the widest stale-price path.
+                            val["watchlist"] = []
                             val["invalid_reason"] = (
                                 "TAB_HIDDEN" if is_tab_hidden else stream_status
                             )
                             is_stale = True
                         else:
                             val["invalid_reason"] = None
+
+                        # Rule 7 volume expansion. Computed after the gate so a
+                        # stale volume read cannot reach entry qualification;
+                        # when data is invalid this stays empty rather than
+                        # publishing numbers derived from a frozen DOM.
+                        vol_audit: Dict[str, Any] = {}
+                        if data_valid:
+                            dom_close = float(stats.get("close") or stats.get("prev_close") or 0.0) or None
+                            for sym, m in TRACK1_INSTRUMENTS.items():
+                                sym_vol = None
+                                if active_stock == sym and isinstance(stats.get("volume"), int):
+                                    sym_vol = stats["volume"]
+                                vol_audit[sym] = compute_rule7_volume_expansion(
+                                    symbol=sym,
+                                    meta=m,
+                                    intraday_volume=sym_vol,
+                                    auth=auth_state,
+                                    dom_prev_close=dom_close if active_stock == sym else None
+                                )
 
                         val["data_valid"] = data_valid
                         val["status"] = stream_status

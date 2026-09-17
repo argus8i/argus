@@ -2050,3 +2050,768 @@ Without a model of the ~97.8% unfilled orders (limit price, queue position, woul
 ```
 
 ---
+
+## [2026-09-17 20:31:23 IST] Antigravity ➔ Claude Code (113.5s)
+
+**Prompt / Mandate:**
+```text
+[ANTIGRAVITY REVIEW MANDATE FOR CLAUDE CODE]
+Task ID: TASK_DEPTH_BRIDGE_AUDIT
+Review Type: MATHEMATICS (Quantitative Red-Team)
+Target: Project Swing Trades (AGENTS.md Rules 1-11 strictly apply)
+
+MANDATE / QUESTION:
+Review this diff to a live Zerodha Kite market-data capture daemon.
+It runs during Indian market hours and writes shared/live_depth.json, which
+downstream trading logic consumes as live market data.
+
+Find REAL defects only. Do not restate the intent of the changes back to me,
+and do not invent problems to appear thorough. If a change is correct, say so
+briefly and move on. If you cannot verify something without the live Kite DOM
+or a running session, say exactly that rather than guessing.
+
+Pay particular attention to:
+- CDP request/response id correlation: send_cdp_cmd matches on req_id, and
+  the caller now increments msg_id by 2 per focus call and 1 per extract.
+  Can ids collide or desynchronise, and what happens if they do?
+- The fail-closed block: are there paths where stale depth, ltp or volume
+  still reach live_depth.json or the tick CSV despite data_valid=false?
+- Whether nulling stats breaks downstream consumers that assume a dict.
+- The JS regex and selector logic for correctness and for any way it could
+  attribute depth to the WRONG symbol, which is worse than UNATTRIBUTED.
+- Concurrency: enforce_tab_focus awaits ws.recv() inside the same websocket
+  the main loop reads. Can it consume a message the main loop needed?
+
+For each defect give: file, the specific problem, why it matters in live
+trading, and a concrete fix. Rank by severity.
+
+DIFF UNDER REVIEW:
+diff --git a/antigravity/daemons/kite_web_depth_bridge.py b/antigravity/daemons/kite_web_depth_bridge.py
+index a4e594e..03ad1f9 100644
+--- a/antigravity/daemons/kite_web_depth_bridge.py
++++ b/antigravity/daemons/kite_web_depth_bridge.py
+@@ -371,7 +371,40 @@ EXTRACT_JS = r"""
+         const headerSymbol = document.querySelector('.market-depth .symbol, .depth-pane .symbol, .pane-header .symbol, .depth-header .symbol, .instrument-name');
+         if (headerSymbol) activeStock = headerSymbol.innerText.trim().split('\n')[0].trim();
+     }
+-    result.active_stock = activeStock;
++    // Depth drawer / modal fallbacks. Without these the symbol is dropped as
++    // UNATTRIBUTED while the market-depth drawer is open, which is exactly
++    // when the depth being captured most needs attributing.
++    if (!activeStock) {
++        const paneSel = [
++            '.depth-pane .instrument-name', '.depth-pane .tradingsymbol',
++            '.depth-pane .nice-name', '.depth-pane .name',
++            '.instrument-name', '.tradingsymbol'
++        ].join(', ');
++        const paneName = document.querySelector(paneSel);
++        if (paneName) activeStock = paneName.innerText.trim().split('\n')[0].trim();
++    }
++    if (!activeStock) {
++        // Prefer a visible dialog: Kite leaves hidden modals in the DOM.
++        const dialogs = document.querySelectorAll(
++            '[role="dialog"], .modal, .modal-content, .su-modal, dialog[open]'
++        );
++        for (const dlg of dialogs) {
++            const rect = dlg.getBoundingClientRect();
++            if (!rect.width || !rect.height) continue;
++            const nm = dlg.querySelector(
++                '.instrument-name, .tradingsymbol, .nice-name, .symbol, .name, .title, h1, h2, h3'
++            );
++            if (nm && nm.innerText.trim()) {
++                activeStock = nm.innerText.trim().split('\n')[0].trim();
++                break;
++            }
++        }
++    }
++    if (activeStock) {
++        // Strip exchange badges, e.g. "IDEA NSE" -> "IDEA".
++        activeStock = activeStock.replace(/\s+(NSE|BSE|NFO|BFO|MCX|CDS)\b.*$/i, '').trim();
++    }
++    result.active_stock = activeStock || null;
+ 
+     return result;
+ })()
+@@ -429,6 +462,40 @@ async def send_cdp_cmd(
+     return {}
+ 
+ 
++# Chrome unmounts Kite's market-depth DOM when the window is minimized or
++# occluded, so the extractor silently sees an empty pane and the feed goes
++# stale without raising. These two CDP calls keep the renderer believing the
++# tab is foregrounded and focused.
++FOCUS_ENFORCE_INTERVAL_SEC = 30.0
++
++
++async def enforce_tab_focus(ws, req_id: int) -> Dict[str, bool]:
++    """Force the Kite tab to the foreground and pin focus emulation on.
++
++    Returns which calls were acknowledged. Failures are deliberately
++    non-fatal: a missed focus command degrades data quality, which the
++    staleness gate already catches, and is not a reason to drop the feed.
++    """
++    results = {"bring_to_front": False, "focus_emulation": False}
++    try:
++        res = await send_cdp_cmd(ws, "Page.bringToFront", req_id=req_id, timeout=3.0)
++        results["bring_to_front"] = bool(res) and "error" not in res
++    except Exception:
++        pass
++    try:
++        res = await send_cdp_cmd(
++            ws,
++            "Emulation.setFocusEmulationEnabled",
++            params={"enabled": True},
++            req_id=req_id + 1,
++            timeout=3.0,
++        )
++        results["focus_emulation"] = bool(res) and "error" not in res
++    except Exception:
++        pass
++    return results
++
++
+ async def extract_session_auth(ws) -> Dict[str, Any]:
+     """Extracts enctoken, user_id, and public_token using CDP Network.getCookies and localStorage."""
+     auth = {
+@@ -657,6 +724,7 @@ async def cdp_bridge():
+     msg_id = 1000
+     last_seen_cache = {}
+     last_auth_check = 0.0
++    last_focus_enforce = 0.0
+     auth_state = {
+         "enctoken": None,
+         "user_id": None,
+@@ -691,8 +759,25 @@ async def cdp_bridge():
+ 
+         try:
+             async with websockets.connect(ws_url, max_size=10*1024*1024) as ws:
++                # Enforce focus immediately on connect: if the tab is already
++                # backgrounded, the very first extraction would otherwise read
++                # an unmounted depth pane.
++                msg_id += 2
++                focus_res = await enforce_tab_focus(ws, msg_id)
++                last_focus_enforce = time.time()
++                print(f"[{datetime.now().strftime('%H:%M:%S')}] [FOCUS] "
++                      f"bringToFront={focus_res['bring_to_front']} "
++                      f"focusEmulation={focus_res['focus_emulation']}")
++
+                 while True:
+                     now_ts = time.time()
++
++                    # Re-assert focus periodically; Chrome drops focus emulation
++                    # when the window is minimized or occluded by another app.
++                    if (now_ts - last_focus_enforce) >= FOCUS_ENFORCE_INTERVAL_SEC:
++                        last_focus_enforce = now_ts
++                        msg_id += 2
++                        await enforce_tab_focus(ws, msg_id)
+                     
+                     # Refresh session authentication every 60s
+                     if (now_ts - last_auth_check) >= 60.0:
+@@ -787,6 +872,28 @@ async def cdp_bridge():
+                                 dom_prev_close=dom_close if active_stock == sym else None
+                             )
+ 
++                        # FAIL CLOSED. A backgrounded tab or a frozen DOM
++                        # yields whatever Kite last rendered, which downstream
++                        # cannot distinguish from a live quote. Publishing that
++                        # as market data is worse than publishing nothing, so
++                        # null the price fields and say so explicitly rather
++                        # than leaving a consumer to infer it from is_stale.
++                        STALE_STATUSES = ("STALE_TAB_BACKGROUNDED", "STALE_DATA_FROZEN")
++                        data_valid = not (is_tab_hidden or stream_status in STALE_STATUSES)
++
++                        if not data_valid:
++                            val["depth"] = None
++                            val["ltp"] = None
++                            val["stats"] = None
++                            ltp_to_log = None
++                            val["invalid_reason"] = (
++                                "TAB_HIDDEN" if is_tab_hidden else stream_status
++                            )
++                            is_stale = True
++                        else:
++                            val["invalid_reason"] = None
++
++                        val["data_valid"] = data_valid
+                         val["status"] = stream_status
+                         val["local_write_time"] = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+                         val["time_bin"] = time_bin
+diff --git a/start_kite_feed.bat b/start_kite_feed.bat
+index 37f7766..c4df3e0 100644
+--- a/start_kite_feed.bat
++++ b/start_kite_feed.bat
+@@ -24,7 +24,7 @@ if not exist "%CHROME_EXE%" (
+ 
+ echo [1/3] Launching Google Chrome with DevTools Remote Debugging on Port 9333...
+ echo       Profile Directory: %PROFILE_DIR%
+-start "" "%CHROME_EXE%" --remote-debugging-port=9333 --user-data-dir="%PROFILE_DIR%" --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --no-first-run --no-default-browser-check "https://kite.zerodha.com"
++start "" "%CHROME_EXE%" --remote-debugging-port=9333 --user-data-dir="%PROFILE_DIR%" --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --auto-open-devtools-for-tabs --no-first-run --no-default-browser-check "https://kite.zerodha.com"
+ 
+ echo.
+ echo [2/3] Waiting 3 seconds for Chrome to initialize...
+
+
+
+ASSUMPTIONS PRESENTED BY ANTIGRAVITY:
+{
+  "runs_during_live_market_hours": true
+}
+
+MEASURED & DERIVED QUANTITATIVE VALUES:
+{}
+
+RELEVANT SOURCE FILES:
+antigravity/daemons/kite_web_depth_bridge.py, start_kite_feed.bat
+
+INSTRUCTIONS & ADVERSARIAL CRITERIA:
+Provide rigorous mathematical, statistical, and market microstructure criticism. Identify adverse-selection risks, edge cases, and failure modes. State all unresolved P0 objections explicitly.
+
+You are acting as the independent quantitative red-team. Provide your rigorous review. Your output will be recorded as claude_submission.md.
+```
+
+**Claude Code Output & Audit Verdict:**
+```markdown
+I read the actual file (not just the diff) to verify claims against real code around lines 700–960. Verified findings below — ranked by severity.
+
+## P0 — Fail-closed gate doesn't actually null the data that reaches the CSV or the JSON volume block
+
+**File:** `antigravity/daemons/kite_web_depth_bridge.py`, lines 884–953
+
+The fail-closed block only mutates dict keys on `val`:
+```python
+val["depth"] = None
+val["ltp"] = None
+val["stats"] = None
+ltp_to_log = None
+```
+It does **not** touch the local variables `depth` (line 802) and `stats` (line 804) — those still hold the pre-nulled, possibly-stale extraction. Two consequences, both verified by reading the code that runs after the gate:
+
+1. **Line 928–932**: `best_bid`/`best_ask`/`spread_pct` are recomputed from the *local* `depth` variable — not `val["depth"]`, which is already `None`. When `data_valid=False`, `live_depth.json` correctly shows `depth: null`, but `live_depth_ticks.csv` still gets `best_bid`, `best_ask`, and `spread_pct` from the stale/backgrounded-tab depth snapshot.
+2. **Line 939–940**: `append_tick_log(... total_buy=stats.get("total_buy"), total_sell=stats.get("total_sell") ...)` reads the local `stats` dict, which was never nulled. Same leak.
+3. `vol_to_log` (line 813) is computed before the gate and is never reset in the invalid branch, so stale volume also reaches the CSV.
+4. `val["volume_expansion_audit"] = vol_audit` (line ~919, after the gate but using `vol_audit` computed at lines 861–873, *before* the gate) is written unconditionally into `live_depth.json` itself — so a downstream consumer reading only the JSON still gets Rule-7 volume-expansion numbers derived from a backgrounded/frozen-DOM read, with no `data_valid` guard on that key at all.
+
+**Why it matters:** this is exactly the scenario the fail-closed design claims to prevent — a backgrounded tab or frozen DOM publishing stale quotes that downstream logic can't distinguish from live ones. The JSON's top-level price fields are protected; the CSV tick log and the volume-expansion audit are not, and Rule-7 volume qualification is presumably used for entry decisions.
+
+**Fix:** null the locals, not just `val`, before anything downstream reads them:
+```python
+if not data_valid:
+    depth = None
+    stats = {}
+    val["depth"] = None
+    val["ltp"] = None
+    val["stats"] = None
+    ltp_to_log = None
+    vol_to_log = None
+    vol_audit = {sym: None for sym in TRACK1_INSTRUMENTS}  # or skip the write entirely
+    ...
+```
+And compute `vol_audit`/`val["volume_expansion_audit"]` after the gate, or explicitly guard it with `data_valid`.
+
+## P0 — `enforce_tab_focus`'s second CDP id always collides with the next extraction's id
+
+**File:** same file, lines 472–496 and 761–798
+
+`enforce_tab_focus(ws, req_id)` sends `bringToFront` with `req_id` and `Emulation.setFocusEmulationEnabled` with `req_id + 1`, but never reports that `+1` back to the caller's counter. The caller only does `msg_id += 2` before the call, so the global counter is left sitting at `req_id`, one less than the highest id actually put on the wire.
+
+Trace it: on connect, `msg_id += 2` → say 1002; `enforce_tab_focus` consumes ids 1002 and 1003. `msg_id` is still 1002. First loop iteration: `msg_id += 1` → 1003 — identical to the id just used for `Emulation.setFocusEmulationEnabled`. This isn't a rare race, it's deterministic on every single focus-enforcement cycle (initial connect and every 30s thereafter).
+
+**Why it matters:** `send_cdp_cmd` matches purely on `id`. If the focus-emulation response is slow and arrives after `enforce_tab_focus`'s own 3s timeout gives up, it sits in the websocket's read queue. The following extraction call, reusing that same id, will match against this stale `Emulation.setFocusEmulationEnabled` response instead of its own `Runtime.evaluate` response. `cmd_res.get("result", {}).get("result", {}).get("value")` on that shape yields `None`, so `val` is falsy and the tick is silently skipped — no crash, but a silent data gap with no log line explaining why, and the *actual* extraction response is later orphaned in the socket buffer, discarded by whatever future call happens to read it and wasting part of that call's timeout window. Under any WS latency, this steadily degrades the effective sample rate.
+
+**Fix:** don't let `enforce_tab_focus` hand out an id the caller doesn't know it used. Either return the highest id consumed and have the caller advance `msg_id` to it, or have the caller pass and own two ids explicitly:
+```python
+msg_id += 1
+focus_res = await enforce_tab_focus(ws, msg_id)  # uses msg_id and msg_id+1
+msg_id += 1  # advance past the second id enforce_tab_focus actually used
+```
+
+## P1 — Depth-drawer symbol fallback can attribute depth to the wrong symbol
+
+**File:** same file, lines ~371–410 (EXTRACT_JS)
+
+The dialog fallback:
+```js
+const dialogs = document.querySelectorAll('[role="dialog"], .modal, .modal-content, .su-modal, dialog[open]');
+for (const dlg of dialogs) {
+    ... if (nm && nm.innerText.trim()) { activeStock = ...; break; }
+}
+```
+takes the **first visible dialog in DOM order**, not necessarily the depth-pane's own dialog, and pulls a name from a broad selector (`h1, h2, h3, .title` included) that isn't depth-specific. If Kite has more than one dialog-like element mounted and visible at once — an order confirmation, a GTT dialog, an alert/toast implemented as `[role="dialog"]` — while the depth drawer is also open, this can attribute the currently-captured depth to whatever symbol that *other* dialog names, which the review brief correctly identifies as worse than `UNATTRIBUTED`. I can't confirm this happens on the live Kite DOM without a running session — flagging as a real risk given the selector breadth, not a confirmed reproduction.
+
+**Fix:** scope the fallback to a depth-specific ancestor (e.g. require the dialog to also contain a `.depth-pane`/bid-ask table before trusting its name), rather than any visible dialog.
+
+## P2 — `--auto-open-devtools-for-tabs` added to `start_kite_feed.bat`
+
+Opening DevTools for every tab works against the very fix being shipped alongside it: `Page.bringToFront`/`Emulation.setFocusEmulationEnabled` exist to keep Kite's tab believed-foregrounded, and an auto-opened DevTools panel is itself a competing window that can take real OS focus/occlusion. It also has nothing to do with the stated purpose of this diff (focus enforcement + fail-closed) and looks like a leftover debug flag rather than an intentional change. Flagging for a "was this deliberate?" check, not asserting the mechanics without a live run.
+
+## Correct / no issue
+
+- `send_cdp_cmd`'s id-matching filter itself (discard non-matching ids until timeout) is fine in isolation — the bug is in id issuance, not this function.
+- `ltp` nulling is done correctly both in `val["ltp"]` and the `ltp_to_log` local — this path alone doesn't leak.
+- The `\s+(NSE|BSE|...)\b` exchange-badge strip is correctly anchored on a preceding whitespace + word boundary; ordinary tickers won't false-positive.
+- `enforce_tab_focus` awaiting inside the same `ws` as the main loop is not a true concurrency race — both awaits are sequential (`await enforce_tab_focus(...)` fully resolves, including its internal timeout, before the loop proceeds to the extraction `send_cdp_cmd`), so no message is consumed out of turn by two coroutines truly running in parallel. The actual failure mode is the id-collision above, not a race.
+
+## Unresolved P0 objections
+1. Tick CSV (`live_depth_ticks.csv`) can carry stale best_bid/best_ask/spread/volume/total_buy/total_sell even when `data_valid=False` and the JSON output is correctly nulled — any consumer reading the CSV instead of/alongside the JSON is unprotected.
+2. `live_depth.json`'s `volume_expansion_audit` key is written unconditionally, bypassing the fail-closed gate entirely, and is presumably an input to Rule-7 volume-qualification entry logic.
+3. The focus-enforcement id scheme deterministically collides with the following extraction's id on every cycle, causing silent, unlogged data-gap ticks whose frequency scales with CDP round-trip latency — not verified against a live session, but verified against the code's own id arithmetic.
+```
+
+---
+
+## [2026-09-17 20:32:40 IST] Antigravity ➔ OpenAI Codex (192.3s)
+
+**Prompt / Mandate:**
+```text
+[ANTIGRAVITY REVIEW MANDATE FOR OPENAI CODEX / CHATGPT]
+Task ID: TASK_DEPTH_BRIDGE_AUDIT
+Review Type: REGULATORY (Regulatory, Broker Rules & Engineering Audit)
+Target: Project Swing Trades (AGENTS.md Rules 1-11 strictly apply)
+
+MANDATE / QUESTION:
+Review this diff to a live Zerodha Kite market-data capture daemon.
+It runs during Indian market hours and writes shared/live_depth.json, which
+downstream trading logic consumes as live market data.
+
+Find REAL defects only. Do not restate the intent of the changes back to me,
+and do not invent problems to appear thorough. If a change is correct, say so
+briefly and move on. If you cannot verify something without the live Kite DOM
+or a running session, say exactly that rather than guessing.
+
+Pay particular attention to:
+- CDP request/response id correlation: send_cdp_cmd matches on req_id, and
+  the caller now increments msg_id by 2 per focus call and 1 per extract.
+  Can ids collide or desynchronise, and what happens if they do?
+- The fail-closed block: are there paths where stale depth, ltp or volume
+  still reach live_depth.json or the tick CSV despite data_valid=false?
+- Whether nulling stats breaks downstream consumers that assume a dict.
+- The JS regex and selector logic for correctness and for any way it could
+  attribute depth to the WRONG symbol, which is worse than UNATTRIBUTED.
+- Concurrency: enforce_tab_focus awaits ws.recv() inside the same websocket
+  the main loop reads. Can it consume a message the main loop needed?
+
+For each defect give: file, the specific problem, why it matters in live
+trading, and a concrete fix. Rank by severity.
+
+DIFF UNDER REVIEW:
+diff --git a/antigravity/daemons/kite_web_depth_bridge.py b/antigravity/daemons/kite_web_depth_bridge.py
+index a4e594e..03ad1f9 100644
+--- a/antigravity/daemons/kite_web_depth_bridge.py
++++ b/antigravity/daemons/kite_web_depth_bridge.py
+@@ -371,7 +371,40 @@ EXTRACT_JS = r"""
+         const headerSymbol = document.querySelector('.market-depth .symbol, .depth-pane .symbol, .pane-header .symbol, .depth-header .symbol, .instrument-name');
+         if (headerSymbol) activeStock = headerSymbol.innerText.trim().split('\n')[0].trim();
+     }
+-    result.active_stock = activeStock;
++    // Depth drawer / modal fallbacks. Without these the symbol is dropped as
++    // UNATTRIBUTED while the market-depth drawer is open, which is exactly
++    // when the depth being captured most needs attributing.
++    if (!activeStock) {
++        const paneSel = [
++            '.depth-pane .instrument-name', '.depth-pane .tradingsymbol',
++            '.depth-pane .nice-name', '.depth-pane .name',
++            '.instrument-name', '.tradingsymbol'
++        ].join(', ');
++        const paneName = document.querySelector(paneSel);
++        if (paneName) activeStock = paneName.innerText.trim().split('\n')[0].trim();
++    }
++    if (!activeStock) {
++        // Prefer a visible dialog: Kite leaves hidden modals in the DOM.
++        const dialogs = document.querySelectorAll(
++            '[role="dialog"], .modal, .modal-content, .su-modal, dialog[open]'
++        );
++        for (const dlg of dialogs) {
++            const rect = dlg.getBoundingClientRect();
++            if (!rect.width || !rect.height) continue;
++            const nm = dlg.querySelector(
++                '.instrument-name, .tradingsymbol, .nice-name, .symbol, .name, .title, h1, h2, h3'
++            );
++            if (nm && nm.innerText.trim()) {
++                activeStock = nm.innerText.trim().split('\n')[0].trim();
++                break;
++            }
++        }
++    }
++    if (activeStock) {
++        // Strip exchange badges, e.g. "IDEA NSE" -> "IDEA".
++        activeStock = activeStock.replace(/\s+(NSE|BSE|NFO|BFO|MCX|CDS)\b.*$/i, '').trim();
++    }
++    result.active_stock = activeStock || null;
+ 
+     return result;
+ })()
+@@ -429,6 +462,40 @@ async def send_cdp_cmd(
+     return {}
+ 
+ 
++# Chrome unmounts Kite's market-depth DOM when the window is minimized or
++# occluded, so the extractor silently sees an empty pane and the feed goes
++# stale without raising. These two CDP calls keep the renderer believing the
++# tab is foregrounded and focused.
++FOCUS_ENFORCE_INTERVAL_SEC = 30.0
++
++
++async def enforce_tab_focus(ws, req_id: int) -> Dict[str, bool]:
++    """Force the Kite tab to the foreground and pin focus emulation on.
++
++    Returns which calls were acknowledged. Failures are deliberately
++    non-fatal: a missed focus command degrades data quality, which the
++    staleness gate already catches, and is not a reason to drop the feed.
++    """
++    results = {"bring_to_front": False, "focus_emulation": False}
++    try:
++        res = await send_cdp_cmd(ws, "Page.bringToFront", req_id=req_id, timeout=3.0)
++        results["bring_to_front"] = bool(res) and "error" not in res
++    except Exception:
++        pass
++    try:
++        res = await send_cdp_cmd(
++            ws,
++            "Emulation.setFocusEmulationEnabled",
++            params={"enabled": True},
++            req_id=req_id + 1,
++            timeout=3.0,
++        )
++        results["focus_emulation"] = bool(res) and "error" not in res
++    except Exception:
++        pass
++    return results
++
++
+ async def extract_session_auth(ws) -> Dict[str, Any]:
+     """Extracts enctoken, user_id, and public_token using CDP Network.getCookies and localStorage."""
+     auth = {
+@@ -657,6 +724,7 @@ async def cdp_bridge():
+     msg_id = 1000
+     last_seen_cache = {}
+     last_auth_check = 0.0
++    last_focus_enforce = 0.0
+     auth_state = {
+         "enctoken": None,
+         "user_id": None,
+@@ -691,8 +759,25 @@ async def cdp_bridge():
+ 
+         try:
+             async with websockets.connect(ws_url, max_size=10*1024*1024) as ws:
++                # Enforce focus immediately on connect: if the tab is already
++                # backgrounded, the very first extraction would otherwise read
++                # an unmounted depth pane.
++                msg_id += 2
++                focus_res = await enforce_tab_focus(ws, msg_id)
++                last_focus_enforce = time.time()
++                print(f"[{datetime.now().strftime('%H:%M:%S')}] [FOCUS] "
++                      f"bringToFront={focus_res['bring_to_front']} "
++                      f"focusEmulation={focus_res['focus_emulation']}")
++
+                 while True:
+                     now_ts = time.time()
++
++                    # Re-assert focus periodically; Chrome drops focus emulation
++                    # when the window is minimized or occluded by another app.
++                    if (now_ts - last_focus_enforce) >= FOCUS_ENFORCE_INTERVAL_SEC:
++                        last_focus_enforce = now_ts
++                        msg_id += 2
++                        await enforce_tab_focus(ws, msg_id)
+                     
+                     # Refresh session authentication every 60s
+                     if (now_ts - last_auth_check) >= 60.0:
+@@ -787,6 +872,28 @@ async def cdp_bridge():
+                                 dom_prev_close=dom_close if active_stock == sym else None
+                             )
+ 
++                        # FAIL CLOSED. A backgrounded tab or a frozen DOM
++                        # yields whatever Kite last rendered, which downstream
++                        # cannot distinguish from a live quote. Publishing that
++                        # as market data is worse than publishing nothing, so
++                        # null the price fields and say so explicitly rather
++                        # than leaving a consumer to infer it from is_stale.
++                        STALE_STATUSES = ("STALE_TAB_BACKGROUNDED", "STALE_DATA_FROZEN")
++                        data_valid = not (is_tab_hidden or stream_status in STALE_STATUSES)
++
++                        if not data_valid:
++                            val["depth"] = None
++                            val["ltp"] = None
++                            val["stats"] = None
++                            ltp_to_log = None
++                            val["invalid_reason"] = (
++                                "TAB_HIDDEN" if is_tab_hidden else stream_status
++                            )
++                            is_stale = True
++                        else:
++                            val["invalid_reason"] = None
++
++                        val["data_valid"] = data_valid
+                         val["status"] = stream_status
+                         val["local_write_time"] = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+                         val["time_bin"] = time_bin
+diff --git a/start_kite_feed.bat b/start_kite_feed.bat
+index 37f7766..c4df3e0 100644
+--- a/start_kite_feed.bat
++++ b/start_kite_feed.bat
+@@ -24,7 +24,7 @@ if not exist "%CHROME_EXE%" (
+ 
+ echo [1/3] Launching Google Chrome with DevTools Remote Debugging on Port 9333...
+ echo       Profile Directory: %PROFILE_DIR%
+-start "" "%CHROME_EXE%" --remote-debugging-port=9333 --user-data-dir="%PROFILE_DIR%" --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --no-first-run --no-default-browser-check "https://kite.zerodha.com"
++start "" "%CHROME_EXE%" --remote-debugging-port=9333 --user-data-dir="%PROFILE_DIR%" --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --auto-open-devtools-for-tabs --no-first-run --no-default-browser-check "https://kite.zerodha.com"
+ 
+ echo.
+ echo [2/3] Waiting 3 seconds for Chrome to initialize...
+
+
+
+ASSUMPTIONS PRESENTED BY ANTIGRAVITY:
+{
+  "runs_during_live_market_hours": true
+}
+
+MEASURED & DERIVED VALUES:
+{}
+
+RELEVANT SOURCE FILES:
+antigravity/daemons/kite_web_depth_bridge.py, start_kite_feed.bat
+
+INSTRUCTIONS & AUDIT CRITERIA:
+Inspect code implementation, regulatory compliance (SEBI/NSE/BSE, ESM, ASM, GSM, T2T), broker constraints (Zerodha margin/T2T delivery/auction), and forensic consistency. State all unresolved P0 objections explicitly.
+
+You are acting as the independent engineering and regulatory auditor. Provide your rigorous review. Your output will be recorded as codex_submission.md.
+```
+
+**OpenAI Codex Output & Audit Verdict:**
+```markdown
+## Audit verdict
+
+**REJECT for live/downstream trading use.** There are two P0 defects: invalid data still escapes the fail-closed boundary, and the new selector fallbacks can bind one instrument’s depth to another symbol.
+
+Rule 1 remains controlling: paper observation only; zero real-capital deployment.
+
+## P0 — Deployment blockers
+
+### 1. Fail-closed path still publishes stale prices, volume and depth to consumers
+
+**File:** `antigravity/daemons/kite_web_depth_bridge.py:884-945`
+
+When `data_valid == false`, the code nulls fields inside `val`, but continues using pre-nulling local variables:
+
+- `depth`
+- `stats`
+- `vol_to_log`
+- `best_bid`
+- `best_ask`
+- `total_buy`
+- `total_sell`
+
+Consequently, the tick CSV receives stale depth-derived values and volume at lines 927–945. Only `ltp_to_log` is cleared.
+
+The JSON also retains:
+
+- `watchlist`, including watchlist LTPs
+- `volume_expansion_audit`, computed from stale `stats["volume"]`
+- `active_stock`
+
+This is exploitable by a real downstream consumer: `multi_stock_radar.py:142-180` reads watchlist LTPs without checking `data_valid`, `is_stale`, or timestamp freshness. It can label those values `KITE_LIVE` even after the bridge declared the snapshot invalid.
+
+**Why it matters:** Stale prices can drive Rule 2 price checks, circuit headroom, sizing, and paper-trade decisions as if live. Stale volume can falsely qualify Rule 7’s ≥3× expansion and Rule 9 liquidity gates.
+
+**Concrete fix:**
+
+- Build a sanitized publication object before both JSON and CSV output.
+- On invalid data, clear `watchlist`, `depth`, `stats`, and any audit derived from current DOM data.
+- Pass `None` for every CSV market-data column, or skip the market-data tick and write a separate invalid-feed event.
+- Add `data_valid` and `invalid_reason` columns to the CSV.
+- Require every consumer to explicitly test `data_valid is True` and snapshot age before reading any market field.
+- Fail closed for extraction timeout/error too, instead of leaving the previous valid JSON on disk.
+
+### 2. New global selectors can attribute depth to the wrong instrument
+
+**File:** `antigravity/daemons/kite_web_depth_bridge.py`, `EXTRACT_JS`, new fallback block around the diff’s lines 371–404
+
+The following fallback is not scoped to the depth component:
+
+```js
+'.instrument-name', '.tradingsymbol'
+```
+
+`document.querySelector(paneSel)` returns the first matching node anywhere in the document. That can be a watchlist row, chart header, order dialog, or another retained component.
+
+The visible-dialog fallback is also unsafe. Within any visible modal it accepts:
+
+```js
+'.symbol, .name, .title, h1, h2, h3'
+```
+
+Those selectors can return a dialog title such as an order-window heading rather than the depth instrument. Visibility is tested only for the outer dialog, not the selected symbol node.
+
+Depth rows themselves are globally collected:
+
+```js
+document.querySelectorAll('table.buy ...')
+document.querySelectorAll('table.sell ...')
+```
+
+Thus the depth and symbol are independently selected from different DOM regions. The patch increases the chance of publishing plausible depth under the wrong `active_stock`, which is worse than `UNATTRIBUTED`.
+
+**Why it matters:** Downstream logic can calculate liquidity, locked-circuit state, volume qualification, and position sizing for security A using security B’s order book.
+
+**Concrete fix:**
+
+- First identify exactly one visible depth container.
+- Extract bids, offers, totals, exchange, and symbol strictly from that same container or a uniquely linked parent.
+- Do not use document-wide `.instrument-name`, `.tradingsymbol`, `.name`, `.title`, or heading fallbacks.
+- Require an exact normalized `(exchange, tradingsymbol)` match against the instrument master/universe.
+- Reject ambiguous or multiple visible depth containers.
+- Prefer an instrument token carried by the component if Kite exposes one.
+- Publish `UNATTRIBUTED` and `data_valid=false` whenever identity cannot be proven.
+
+The exchange-suffix regex itself is syntactically valid. Its correctness against Kite’s current rendered labels cannot be verified without a live DOM capture.
+
+## P1 — High severity
+
+### 3. CDP request IDs collide after every focus cycle
+
+**File:** `antigravity/daemons/kite_web_depth_bridge.py:765-796`
+
+Initial sequence:
+
+```text
+msg_id = 1000
+msg_id += 2
+focus IDs = 1002, 1003
+msg_id += 1
+extract ID = 1003
+```
+
+The same reuse occurs after every periodic focus enforcement: the second focus ID becomes the next extraction ID.
+
+Normally the focus response is consumed before extraction begins. But if the second focus request times out and its response arrives late, the extraction’s `send_cdp_cmd(..., req_id=1003)` can accept that late focus response as the extraction response. `val` will then be absent and that capture cycle is lost. Other timing patterns can cause nonmatching responses to be permanently discarded.
+
+The fixed authentication IDs `901` and `902` do not presently collide with the dynamic counter because it starts at 1000. Reusing them serially is still fragile if an auth command times out and a late response survives until the next refresh.
+
+**Concrete fix:**
+
+Use a single monotonic allocator for every CDP command:
+
+```python
+def next_id():
+    nonlocal msg_id
+    msg_id += 1
+    return msg_id
+```
+
+Call it separately for both focus commands, authentication commands, and extraction. Never use fixed IDs and never reuse an ID during a connection.
+
+For robust handling, use one dedicated WebSocket reader task that dispatches responses into pending futures keyed by ID and routes events separately. Timed-out IDs should be retired so late responses cannot satisfy a later request.
+
+### 4. `stats = None` crashes an existing downstream consumer
+
+**Files:**
+
+- `antigravity/daemons/kite_web_depth_bridge.py:887`
+- `antigravity/daemons/multi_stock_radar.py:156,192-195`
+
+`dict.get("stats", {})` returns `None` when the key exists with a null value. It does not return the default. The radar then executes:
+
+```python
+active_stats.get("volume")
+```
+
+If the invalid snapshot retains a matching `active_stock`, this raises `AttributeError`.
+
+`live_signal_engine.py` currently returns at its stale gate before dereferencing `stats`, so this particular path is safe there. It still should explicitly gate on `data_valid`.
+
+**Concrete fix:**
+
+Maintain schema stability:
+
+```python
+val["stats"] = {}
+```
+
+and harden consumers:
+
+```python
+active_stats = live_depth.get("stats") or {}
+```
+
+The same convention should apply to `depth`, `watchlist`, and derived-audit objects.
+
+### 5. Extraction failure leaves the last valid JSON looking current to weak consumers
+
+**File:** `antigravity/daemons/kite_web_depth_bridge.py:800-801`
+
+If CDP times out, returns an error, or receives the collided response described above, `val` is falsy and the daemon writes nothing. The old `live_depth.json` remains in place.
+
+`live_signal_engine.py` checks timestamp age, but `multi_stock_radar.py` does not. It can therefore continue using the last successful snapshot indefinitely.
+
+**Concrete fix:**
+
+On every failed extraction, atomically publish an invalid heartbeat containing:
+
+- current `local_write_time`
+- `data_valid=false`
+- `invalid_reason="CDP_EXTRACTION_FAILED"`
+- empty market-data containers
+- no carried-forward watchlist or derived metrics
+
+All consumers must reject stale timestamps independently.
+
+### 6. `data_valid` is too permissive
+
+**File:** `antigravity/daemons/kite_web_depth_bridge.py:881-896`
+
+The value is false only for hidden or frozen data. It remains true for:
+
+- `CONNECTED_NO_DATA`
+- `CONNECTED_NO_DEPTH`
+- `PARTIAL_DEPTH`
+- unattributed depth
+- a potentially unrecognized `active_stock`
+
+For a depth feed, “connected” is not equivalent to validated live market data. In particular, `PARTIAL_DEPTH` may represent legitimate locked-circuit states, so it must not simply be discarded; it must be classified under the required four-state execution model. But it cannot be marked generically valid without identity and freshness validation.
+
+**Concrete fix:**
+
+Separate validity dimensions:
+
+```text
+identity_valid
+quote_valid
+depth_valid
+freshness_valid
+execution_state
+```
+
+Set overall `data_valid` only after exact symbol binding and freshness validation. Represent legitimate one-sided books as `LOCKED_NO_BID`, `QUEUED`, `PARTIAL`, or `FILLED` inputs rather than conflating them with missing/unmounted DOM.
+
+## Concurrency finding
+
+`enforce_tab_focus()` does **not currently race a separate main-loop `ws.recv()`**. All calls are awaited serially in one coroutine, and the main loop reads the socket only through `send_cdp_cmd()`.
+
+Therefore, it cannot presently consume a message that another concurrently active receiver is waiting for.
+
+However, `send_cdp_cmd()` discards every nonmatching response or event it receives. Combined with timeouts and ID reuse, this loses messages and enables the late-response mis-correlation described above. A single reader/dispatcher is the correct architecture if any concurrency is introduced.
+
+## Broker and regulatory finding
+
+No order-placement, margin, auction, or T2T behavior is changed in this diff, so there is no substantiated Zerodha margin/T2T defect to report here.
+
+There is nevertheless an unresolved production-governance issue: this daemon extracts browser session credentials and scrapes Kite’s rendered DOM instead of using the documented market-data interface. Zerodha documents its WebSocket feed as the supported efficient source for LTP, volume and five-level depth, identified by instrument token. Its terms say API access must use documented means and restrict market-data usage and redistribution. Written broker/compliance confirmation would be needed before treating this browser bridge as an approved production data source. [Zerodha WebSocket documentation](https://kite.trade/docs/connect/v3/websocket/), [Kite Connect terms](https://kite.trade/terms/)
+
+SEBI’s retail-algo framework becomes relevant if this data eventually drives automated order submission, but this patch contains no order path and Rule 1 forbids live deployment. No further regulatory violation can be established from this diff alone.
+
+## Unresolved live-session verification
+
+The following cannot be established without a live Kite session and captured DOM fixtures:
+
+- Whether Chrome actually unmounts the relevant depth component under each minimized/occluded state.
+- Whether `Emulation.setFocusEmulationEnabled` persists or is dropped under the claimed conditions.
+- Kite’s current drawer/modal hierarchy and exact symbol label format.
+- Whether hidden duplicate depth tables remain mounted.
+- Whether the displayed buy/sell column order still matches the parser.
+
+These uncertainties support failing closed; they do not justify guessing selectors.
+
+**Final disposition:** P0 objections remain unresolved. Do not approve this diff for downstream trading decisions, even paper-entry logging, until stale-field publication and symbol/depth binding are corrected and tested with recorded DOM fixtures.
+```
+
+---
