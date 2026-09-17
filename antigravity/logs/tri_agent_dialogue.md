@@ -3638,3 +3638,65 @@ Track 1 (ESM micro-caps) and Track 2 (liquid F&O) sizing must never share assump
 ```
 
 ---
+
+## [2026-09-18 00:23:00 IST] Antigravity ➔ OpenAI Codex (14.8s)
+
+**Prompt / Mandate:**
+```text
+Reply with exactly: OK
+```
+
+**OpenAI Codex Output & Audit Verdict:**
+```markdown
+2026-09-17T18:52:45.874802Z ERROR codex_models_manager::cache: failed to load models cache: missing field `base_instructions` at line 134 column 5
+OpenAI Codex v0.146.0-alpha.3
+--------
+workdir: c:\Users\yashw\swing trades
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: low
+reasoning summaries: none
+session id: 01a0b0b6-d223-7d80-895b-0c430c9634fc
+--------
+user
+Reply with exactly: OK
+2026-09-17T18:52:54.404627Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer realm=\"https://mcp.render.com/mcp\", resource_metadata=\"https://mcp.render.com/.well-known/oauth-protected-resource/mcp\"" })
+2026-09-17T18:52:56.292152Z ERROR codex_rmcp_client::oauth::refresh_transaction: error=failed to refresh OAuth tokens for server cloudflare-api: OAuth token refresh failed: Server returned error response: invalid_grant: Grant not found
+warning: Exceeded skills context budget of 2%. All skill descriptions were removed and 412 additional skills were not included in the model-visible skills list.
+ERROR: You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 3:22 AM.
+ERROR: You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 3:22 AM.
+```
+
+---
+
+## [2026-09-18 00:23:18 IST] Antigravity ➔ OpenAI Codex (11.5s)
+
+**Prompt / Mandate:**
+```text
+Reply with exactly: OK
+```
+
+**OpenAI Codex Output & Audit Verdict:**
+```markdown
+OpenAI Codex v0.146.0-alpha.3
+--------
+workdir: c:\Users\yashw\swing trades
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: low
+reasoning summaries: none
+session id: 01a0b0b7-2329-7af3-9ffe-229d73256c37
+--------
+user
+Reply with exactly: OK
+2026-09-17T18:53:14.215060Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer realm=\"https://mcp.render.com/mcp\", resource_metadata=\"https://mcp.render.com/.well-known/oauth-protected-resource/mcp\"" })
+warning: Exceeded skills context budget of 2%. All skill descriptions were removed and 412 additional skills were not included in the model-visible skills list.
+ERROR: You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 3:22 AM.
+ERROR: You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 3:22 AM.
+```
+
+---

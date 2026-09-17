@@ -166,9 +166,17 @@ REVIEWER_FAILURE_SIGNATURES = (
     "authentication required",
     "invalid api key",
     "credit balance is too low",
-    "usage limit reached",
+    # Match on the noun phrase, not a guessed sentence. Codex says "You've hit
+    # your usage limit", which "usage limit reached" does not match: that near
+    # miss meant quota exhaustion was caught only because the exit code was
+    # non-zero, and would have passed as a review at exit 0.
+    "usage limit",
+    "quota",
+    "insufficient credit",
     "rate limit",
     "stream error",
+    "overloaded",
+    "503 service",
 )
 
 # Anything shorter than this is not a review, whatever the exit code said.
@@ -187,7 +195,12 @@ def validate_reviewer_output(
     something. Exit code alone is not evidence of either.
     """
     if returncode != 0:
-        return f"{agent}_NONZERO_EXIT: exited {returncode}"
+        # Surface what the CLI actually said. "exited 1" is indistinguishable
+        # between a crash, an auth failure and exhausted quota, which sends the
+        # reader off retrying something that cannot succeed yet.
+        tail = " ".join((output or "").split())[-300:]
+        detail = f": {tail}" if tail else ""
+        return f"{agent}_NONZERO_EXIT: exited {returncode}{detail}"
 
     text = (output or "").strip()
     if not text:

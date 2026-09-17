@@ -104,3 +104,48 @@ def test_reviewers_are_dispatched_read_only():
                  "--dangerously-bypass-approvals-and-sandbox",
                  "danger-full-access"):
         assert flag not in full, f"permission-bypass flag present: {flag}"
+
+
+# Observed verbatim from codex.exe on 2026-09-18 when the ChatGPT account hit
+# its cap. The old signature list contained "usage limit reached", which does
+# NOT appear in this string: the phrasing guess missed, and quota exhaustion was
+# caught only incidentally because the exit code happened to be 1.
+CODEX_QUOTA_MESSAGE = (
+    "ERROR: You've hit your usage limit. Upgrade to Pro "
+    "(https://chatgpt.com/explore/pro), visit "
+    "https://chatgpt.com/codex/settings/usage to purchase more credits or "
+    "try again at 3:22 AM."
+)
+
+
+def test_real_codex_quota_message_is_rejected_at_exit_zero():
+    """Must not depend on the exit code to catch exhausted quota."""
+    err = validate_reviewer_output("CODEX", CODEX_QUOTA_MESSAGE, 0)
+    assert err is not None
+    assert "CODEX_DISPATCH_FAILED" in err
+
+
+@pytest.mark.parametrize("text", [
+    "You've hit your usage limit.",
+    "Usage limit reached for this account",
+    "You have exceeded your quota",
+    "Insufficient credit remaining",
+    "Error: model overloaded, retry later",
+    "503 Service Unavailable",
+])
+def test_capacity_and_quota_phrasings_all_rejected(text):
+    """Match the noun phrase rather than one guessed sentence."""
+    assert validate_reviewer_output("CODEX", text, 0) is not None
+
+
+def test_nonzero_exit_reports_what_the_cli_said():
+    """A bare "exited 1" cannot be told apart from a crash or an auth failure,
+    which sends the reader off retrying something that cannot yet succeed."""
+    err = validate_reviewer_output("CODEX", CODEX_QUOTA_MESSAGE, 1)
+    assert "exited 1" in err
+    assert "usage limit" in err.lower(), "the reason must survive into the error"
+
+
+def test_nonzero_exit_with_no_output_still_reports_cleanly():
+    err = validate_reviewer_output("CLAUDE", "", 1)
+    assert err == "CLAUDE_NONZERO_EXIT: exited 1"
