@@ -60,6 +60,33 @@ ALLOWED_CLAUDE_ARTIFACTS = {
 }
 
 
+# A dispatch hook means the "reviewer" is a stub, not a reviewer. Writing stub
+# text to the canonical review directory is how claude_submission.md,
+# codex_submission.md and antigravity_synthesis.md came to contain fabricated
+# APPROVED reviews (now quarantined in _SIMULATED/). status.py --demo still
+# targeted shared/reviews, so prose in a README is not enough: refuse the write.
+CANONICAL_REVIEW_DIRS = (
+    os.path.normcase(os.path.abspath(os.path.join(WORKSPACE_DIR, "shared", "reviews"))),
+    os.path.normcase(os.path.abspath(os.path.join(WORKSPACE_DIR, "shared", "track1_esm", "reviews"))),
+    os.path.normcase(os.path.abspath(os.path.join(WORKSPACE_DIR, "shared", "track2_liquid", "reviews"))),
+)
+
+
+def assert_not_simulating_into_canonical(abs_submission_path: str, hook) -> None:
+    """Raise if a stub dispatch hook would write to a canonical review path."""
+    if hook is None:
+        return
+    target_dir = os.path.normcase(os.path.abspath(os.path.dirname(abs_submission_path)))
+    if target_dir in CANONICAL_REVIEW_DIRS:
+        raise RuntimeError(
+            "SIMULATION_TO_CANONICAL_PATH: a dispatch hook is installed, so this "
+            "output is simulated, and it was about to be written to the canonical "
+            f"review directory {target_dir}. Simulated reviews must go to a "
+            "temporary directory. Real reviews come from the reviewer CLI with no "
+            "hook installed."
+        )
+
+
 # Standing brief for every dispatched Claude review. The reviewer is a fresh
 # Claude Code process with no memory of prior sessions, so the role has to be
 # restated on every call or it does not exist.
@@ -198,6 +225,9 @@ class ClaudeReviewAdapter:
         valid_p, abs_sub, err = validate_path_security(submission_rel, track, self.workspace_dir)
         if not valid_p or not abs_sub:
             return False, {}, err or "INVALID_PATH"
+
+        # Refuse to write simulated output into a canonical review path.
+        assert_not_simulating_into_canonical(abs_sub, CLAUDE_DISPATCH_HOOK)
 
         # Ensure submission path is within an allowed reviews directory
         norm_abs = os.path.normcase(abs_sub)

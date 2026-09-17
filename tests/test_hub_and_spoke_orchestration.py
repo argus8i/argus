@@ -404,3 +404,51 @@ def test_status_interface_reports_accurately(hub_test_env):
     assert "codex" in status["adapters"]
     assert status["adapters"]["antigravity"]["status"] in ["READY", "NO_KEY"]
     assert "queues" in status
+
+
+def test_simulated_output_cannot_be_written_to_canonical_review_paths():
+    """A dispatch hook means the reviewer is a stub. Writing stub text to
+    shared/reviews is how the fabricated APPROVED reviews (now quarantined in
+    _SIMULATED/) came to exist, and status.py --demo targeted that path.
+
+    The adapters must refuse the combination outright, not rely on prose.
+    """
+    import antigravity.adapters.claude_adapter as claude_ad
+    import antigravity.adapters.codex_adapter as codex_ad
+
+    stub = lambda prompt, timeout: {
+        "success": True,
+        "output": "## FAKE APPROVED REVIEW\nNo objections whatsoever.",
+        "returncode": 0,
+        "elapsed": 0.01,
+    }
+
+    for mod, hook_attr, fname in (
+        (claude_ad, "CLAUDE_DISPATCH_HOOK", "claude_submission.md"),
+        (codex_ad, "CODEX_DISPATCH_HOOK", "codex_submission.md"),
+    ):
+        canonical = os.path.join(mod.WORKSPACE_DIR, "shared", "reviews", fname)
+        with pytest.raises(RuntimeError, match="SIMULATION_TO_CANONICAL_PATH"):
+            mod.assert_not_simulating_into_canonical(canonical, stub)
+
+        # With no hook installed the same path is permitted: real reviews work.
+        assert mod.assert_not_simulating_into_canonical(canonical, None) is None
+
+        # A sandbox path is fine even while simulating.
+        sandbox = os.path.join(mod.WORKSPACE_DIR, "antigravity", "messages",
+                               "_test_sandboxes", "x", "shared", "reviews", fname)
+        assert mod.assert_not_simulating_into_canonical(sandbox, stub) is None
+
+
+def test_demo_does_not_target_the_canonical_review_directory():
+    """status.py --demo previously wrote simulated submissions straight into
+    shared/reviews, overwriting genuine reviews."""
+    status_path = os.path.join(PROJECT_ROOT, "antigravity", "orchestrator", "status.py")
+    with open(status_path, encoding="utf-8") as f:
+        src = f.read()
+
+    assert 'submission_dir="shared/reviews"' in src, "demo still uses a relative dir"
+    assert "_DEMO_WORKSPACE = tempfile.mkdtemp(" in src, "demo must use a sandbox workspace"
+    assert "AntigravityCoordinator(_DEMO_WORKSPACE)" in src, \
+        "demo must run against the sandbox workspace, not WORKSPACE_DIR"
+    assert "NO REVIEWER WAS CONTACTED" in src, "demo output must declare it is simulated"

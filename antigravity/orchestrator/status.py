@@ -13,6 +13,7 @@ Inspects and displays:
 
 import os
 import sys
+import tempfile
 import json
 import glob
 from typing import Any, Dict, Optional
@@ -200,11 +201,19 @@ def run_hub_demonstration():
 
 
     print("=" * 78)
-    print("  PROJECT SWING TRADES: HUB-AND-SPOKE TRI-AGENT END-TO-END DEMONSTRATION")
+    print("  PROJECT SWING TRADES: HUB-AND-SPOKE PLUMBING DEMO [SIMULATED REVIEWERS]")
     print("  Central Orchestrator: ANTIGRAVITY | Secondary Reviewers: CLAUDE & CODEX")
     print("=" * 78)
 
-    coordinator = AntigravityCoordinator(WORKSPACE_DIR)
+    # The demo runs against a throwaway sandbox WORKSPACE, the way the hub
+    # tests do. The adapters whitelist <workspace>/shared/reviews for a
+    # non-default workspace, so this passes path validation while keeping
+    # simulated output away from the canonical review directory.
+    _DEMO_WORKSPACE = tempfile.mkdtemp(prefix="agy_demo_ws_")
+    _DEMO_REVIEW_DIR = os.path.join(_DEMO_WORKSPACE, "shared", "reviews")
+    os.makedirs(_DEMO_REVIEW_DIR, exist_ok=True)
+    print(f"  [DEMO] Simulated submissions -> {_DEMO_REVIEW_DIR}")
+    coordinator = AntigravityCoordinator(_DEMO_WORKSPACE)
 
     # STEP 1: Antigravity Primary Quantitative Analysis
     print("\n[STEP 1] Antigravity: Formulating Primary Quantitative Modeling...")
@@ -245,6 +254,7 @@ def run_hub_demonstration():
             "band_pct": 0.20
         },
         requested_review="HIGH_IMPACT_CORE",
+        # Relative to the sandbox workspace, never the canonical tree.
         submission_dir="shared/reviews"
     )
     print(f"  -> Package created with Correlation ID: {pkg['correlation_id']}")
@@ -294,8 +304,8 @@ def run_hub_demonstration():
 
     # STEP 5: Authority Boundary Verification
     print("\n[STEP 5] Verifying Authority Boundaries and Dedicated Submissions...")
-    claude_sub_path = os.path.join(WORKSPACE_DIR, "shared", "reviews", "claude_submission.md")
-    codex_sub_path = os.path.join(WORKSPACE_DIR, "shared", "reviews", "codex_submission.md")
+    claude_sub_path = os.path.join(_DEMO_REVIEW_DIR, "claude_submission.md")
+    codex_sub_path = os.path.join(_DEMO_REVIEW_DIR, "codex_submission.md")
     assert os.path.exists(claude_sub_path), "Claude submission file missing!"
     assert os.path.exists(codex_sub_path), "Codex submission file missing!"
     print(f"  [OK] Claude submission recorded at: shared/reviews/claude_submission.md ({os.path.getsize(claude_sub_path)} bytes)")
@@ -341,7 +351,8 @@ def run_hub_demonstration():
         synthesis_file_rel="shared/reviews/antigravity_synthesis.md"
     )
 
-    synthesis_path = os.path.join(WORKSPACE_DIR, "shared", "reviews", "antigravity_synthesis.md")
+    # Sandbox workspace, not the canonical tree.
+    synthesis_path = os.path.join(_DEMO_REVIEW_DIR, "antigravity_synthesis.md")
     assert os.path.exists(synthesis_path), "Synthesis file missing!"
     print(f"  [OK] Synthesis decision: {synthesis_res['decision']} (Confidence: {synthesis_res['confidence']})")
     print("  [OK] Canonical synthesis written to: shared/reviews/antigravity_synthesis.md")
@@ -367,7 +378,13 @@ def run_hub_demonstration():
     print("  [OK] Codex submission HMAC-SHA256 signature verified.")
 
     print("\n" + "=" * 78)
-    print("  DEMONSTRATION COMPLETE: HUB-AND-SPOKE ARCHITECTURE VERIFIED 100%")
+    print("  SIMULATED DEMONSTRATION COMPLETE - NO REVIEWER WAS CONTACTED")
+    print("=" * 78)
+    print("  Claude and Codex responses above came from hardcoded stubs in this")
+    print("  file. This exercises the plumbing ONLY. It is not a verification of")
+    print("  any trade, model or review, and must never be reported as one.")
+    print("  A real review requires the reviewer CLI with no dispatch hook.")
+    print(f"  Simulated artifacts were written to: {_DEMO_WORKSPACE}")
     print("=" * 78)
 
 
