@@ -31,6 +31,8 @@ import time
 from datetime import datetime
 from typing import Dict, Any, Optional
 
+from antigravity.daemons.feed_validity import check_feed, usable_watchlist
+
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SHARED_DIR = os.path.join(REPO_ROOT, "shared")
 LOGS_DIR = os.path.join(REPO_ROOT, "antigravity", "logs")
@@ -139,7 +141,14 @@ def evaluate_radar_state(
     results = {}
     
     # Extract watchlist LTPs from Kite Web
-    kite_wl = live_depth.get("watchlist", [])
+    # Gate the feed before trusting any price from it. This list is
+    # stamped KITE_LIVE below, so a stale entry here becomes a live
+    # quote downstream.
+    feed_ok, feed_reason = check_feed(live_depth)
+    kite_wl = usable_watchlist(live_depth)
+    if not feed_ok:
+        print(f"[FEED] Kite snapshot unusable ({feed_reason}); "
+              f"falling back to BSE_OFFICIAL only.")
     kite_ltps = {}
     if isinstance(kite_wl, list):
         for item in kite_wl:
@@ -151,7 +160,7 @@ def evaluate_radar_state(
                 except (ValueError, TypeError):
                     pass
 
-    active_kite_stock = (live_depth.get("active_stock") or "").upper()
+    active_kite_stock = (live_depth.get("active_stock") or "").upper() if feed_ok else ""
     active_depth = live_depth.get("depth")
     active_stats = live_depth.get("stats", {})
 

@@ -8,6 +8,7 @@ import os
 import sys
 import csv
 import pytest
+from datetime import datetime
 
 # Ensure project root is in sys.path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -419,6 +420,11 @@ class TestLiveSignalEngineStaleness:
             "is_stale": False,
             "is_tab_hidden": False,
             "status": "ACTIVE_MONITORING",
+            # The producer writes local_write_time on every snapshot; without
+            # it the shared feed gate fails closed on NO_TIMESTAMP before the
+            # BSE-record check this test targets can run.
+            "data_valid": True,
+            "local_write_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
         bands_data = {
             "TEST_TICKER": {

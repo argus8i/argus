@@ -49,7 +49,9 @@ ALLOWED_CODEX_REVIEW_TYPES = {
     "SURVEILLANCE",
     "ENGINEERING",
     "REBUTTAL",
-    "HIGH_IMPACT_CORE"
+    "HIGH_IMPACT_CORE",
+    "REALITY_AUDIT",
+    "PROVENANCE_AUDIT",
 }
 
 # Codex owns exactly these two artifacts. Rebuttals are a separate file:
@@ -61,7 +63,7 @@ ALLOWED_CODEX_ARTIFACTS = {
 
 
 def build_codex_prompt(package: Dict[str, Any]) -> str:
-    """Formats a structured engineering and regulatory audit prompt for Codex."""
+    """Formats a structured reality/provenance audit prompt for Codex."""
     task_id = package.get("task_id", "UNKNOWN")
     question = package.get("exact_question", "")
     assumptions = package.get("assumptions", {})
@@ -72,8 +74,15 @@ def build_codex_prompt(package: Dict[str, Any]) -> str:
 
     prompt = f"""[ANTIGRAVITY REVIEW MANDATE FOR OPENAI CODEX / CHATGPT]
 Task ID: {task_id}
-Review Type: {review_type} (Regulatory, Broker Rules & Engineering Audit)
+Review Type: {review_type} (Reality & Provenance Audit)
 Target: Project Swing Trades (AGENTS.md Rules 1-11 strictly apply)
+
+ROLE:
+You are the Reality and Provenance Auditor. You do NOT evaluate quantitative
+theory, model design, or strategy edge — that is Claude's domain, and your
+mandate is to remain asymmetric to Claude's review. Your sole domain is
+ground truth: does this claim, value, or assumption match what NSE, BSE, or
+Zerodha actually say and do, and can its lineage be traced to a real source.
 
 MANDATE / QUESTION:
 {question}
@@ -87,10 +96,70 @@ MEASURED & DERIVED VALUES:
 RELEVANT SOURCE FILES:
 {', '.join(source_files) if source_files else 'None'}
 
-INSTRUCTIONS & AUDIT CRITERIA:
-{instructions or 'Inspect code implementation, regulatory compliance (SEBI/NSE/BSE, ESM, ASM, GSM, T2T), broker constraints (Zerodha margin/T2T delivery/auction), and forensic consistency. State all unresolved P0 objections explicitly.'}
+AUDIT CRITERIA (mandatory, in order):
 
-You are acting as the independent engineering and regulatory auditor. Provide your rigorous review. Your output will be recorded as codex_submission.md.
+1. RULE 1 CHECK (Capital Preservation / Ground Truth Primacy):
+   Verify that no claim in this package overrides or contradicts documented
+   broker or exchange behavior. If Antigravity's assumption conflicts with
+   how NSE, BSE, or Zerodha actually operate (margin rules, T2T/ASM/GSM/ESM
+   framework, settlement, auction mechanics, circuit limits, order/margin
+   API behavior), this is a P0 finding regardless of how the number was
+   derived.
+
+2. CITATION REQUIREMENT:
+   Every factual claim about exchange or broker behavior (margin %, circuit
+   band, settlement cycle, surveillance stage, API constraint, fee/charge,
+   holiday/session timing, etc.) MUST be traceable to a specific NSE
+   circular, BSE circular, SEBI circular, or Zerodha
+   documentation/Kite Connect API reference. Cite the source explicitly
+   (document name/circular number/URL/page or the exact Zerodha doc
+   section). If a claim cannot be traced to one of these primary sources,
+   you MUST mark it "UNVERIFIED" — do not silently accept it, do not infer
+   it from general market knowledge, and do not accept Antigravity's or
+   Claude's restatement of the claim as its own source.
+
+3. PROVENANCE / DATA LINEAGE CHECK:
+   For every measured or derived value in MEASURED & DERIVED VALUES, trace
+   it back to its origin: which source file, which broker/exchange feed,
+   and which transformation produced it. Flag any value whose lineage
+   cannot be reconstructed from the given source files as "UNVERIFIED —
+   NO TRACEABLE LINEAGE."
+
+4. CONFLICT-OF-INTEREST / ASSUMPTION-VERIFICATION CLAUSE:
+   Antigravity is the orchestrator and has an interest in its own
+   assumptions being accepted. Treat every assumption in ASSUMPTIONS
+   PRESENTED BY ANTIGRAVITY as unproven until you have independently
+   checked it against the RELEVANT SOURCE FILES and, where applicable,
+   primary NSE/BSE/Zerodha documentation. Do not defer to Antigravity's
+   framing of a fact as if it were already established. If a source file
+   does not actually support the assumption attributed to it, state this
+   explicitly as a finding.
+
+5. EXPLICIT EXCLUSION — NO QUANTITATIVE THEORY:
+   Do NOT evaluate statistical methodology, backtest design, model
+   assumptions, indicator logic, position sizing math, or any other
+   quantitative/strategy theory. That review belongs to Claude. Straying
+   into it collapses the two-sided asymmetry this review process depends
+   on. If a claim mixes a quantitative assertion with a factual/provenance
+   one, review only the factual/provenance component and explicitly state
+   that the quantitative component is out of scope for this audit.
+
+6. UNCERTAINTY RULE:
+   Silence or ambiguity is not a pass. If you cannot verify a claim with
+   the evidence given, you MUST report it as a finding in the form:
+   "UNVERIFIABLE (requires: <exactly what evidence, document, or file
+   would resolve this>)". An UNVERIFIABLE finding is a first-class
+   objection — it is not weaker than a CONFIRMED violation and must not be
+   omitted or downgraded to a passing remark.
+
+{instructions or ''}
+
+OUTPUT FORMAT:
+For each claim reviewed, state one of: CONFIRMED (with citation/source),
+CONTRADICTED (with citation/source and the conflicting fact), or
+UNVERIFIED / UNVERIFIABLE (requires: ...). State all unresolved P0
+objections explicitly at the top of your output. Your output will be
+recorded as codex_submission.md.
 """
     return prompt.strip()
 

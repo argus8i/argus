@@ -13,6 +13,8 @@ import time
 from datetime import datetime
 from typing import Dict, Any, Optional
 
+from antigravity.daemons.feed_validity import check_feed
+
 # Ensure repository root is on sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from antigravity.models.circuit_rules import (
@@ -79,7 +81,10 @@ def analyze_live_ticker(
         except Exception:
             is_timestamp_stale = True
 
-    if depth_data.get("is_stale", False) or depth_data.get("is_tab_hidden", False) or depth_data.get("status") == "STALE_TAB_BACKGROUNDED" or is_timestamp_stale:
+    # Shared gate: this previously missed data_valid and
+    # STALE_DATA_FROZEN, so a frozen DOM could pass as live.
+    feed_ok, feed_reason = check_feed(depth_data)
+    if not feed_ok or is_timestamp_stale:
         return {
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "symbol": depth_data.get("active_stock") or "UNKNOWN",
@@ -87,7 +92,7 @@ def analyze_live_ticker(
             "prev_close": None,
             "band_pct": None,
             "entry_signal": EntrySignal.DATA_INVALID.value,
-            "entry_reason": "DATA_INVALID / FAIL-CLOSED: Live market depth feed is stale or browser tab is backgrounded.",
+            "entry_reason": f"DATA_INVALID / FAIL-CLOSED: {feed_reason or 'TIMESTAMP_STALE'}",
             "sizing": {"max_shares": 0, "paper_shares": 0, "live_shares": 0, "observation_gate_passed": False},
             "feed_status": "FEED_STALE_OR_UNAVAILABLE"
         }

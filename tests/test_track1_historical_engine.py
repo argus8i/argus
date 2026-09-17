@@ -8,6 +8,7 @@ import os
 import sys
 import sqlite3
 import pytest
+from datetime import datetime
 
 # Ensure project root is in sys.path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -312,7 +313,11 @@ def test_multi_stock_radar_evaluation():
             {"symbol": "ANLON", "ltp": 21.0}
         ],
         "depth": {"bids": [{"price": 20.9, "quantity": 100}], "offers": [{"price": 21.0, "quantity": 200}]},
-        "stats": {"volume": 120000}
+        "stats": {"volume": 120000},
+        # Required by the shared feed gate: a snapshot whose freshness cannot
+        # be proven is unusable, and the producer always stamps this.
+        "data_valid": True,
+        "local_write_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
     dummy_vols = {

@@ -37,6 +37,8 @@ from dataclasses import asdict
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
 
+from antigravity.daemons.feed_validity import check_feed, usable_watchlist
+
 import requests
 
 # Ensure repository root is on sys.path
@@ -293,8 +295,14 @@ class Track2LiveRadar:
             try:
                 with open(kite_t2_path, "r", encoding="utf-8") as kf:
                     k_data = json.load(kf)
+                    # enctoken is session auth, not market data, so it stays
+                    # readable even when the snapshot is stale.
                     enctoken = k_data.get("enctoken")
-                    for item in k_data.get("watchlist", []):
+                    t2_ok, t2_reason = check_feed(k_data)
+                    if not t2_ok:
+                        print(f"[FEED] Track 2 Kite snapshot unusable ({t2_reason}); "
+                              f"ignoring its ticks this cycle.")
+                    for item in usable_watchlist(k_data):
                         if item.get("symbol") and item.get("ltp"):
                             kite_ticks[item["symbol"]] = item
             except Exception:
