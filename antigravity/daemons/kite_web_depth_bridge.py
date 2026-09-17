@@ -371,7 +371,40 @@ EXTRACT_JS = r"""
         const headerSymbol = document.querySelector('.market-depth .symbol, .depth-pane .symbol, .pane-header .symbol, .depth-header .symbol, .instrument-name');
         if (headerSymbol) activeStock = headerSymbol.innerText.trim().split('\n')[0].trim();
     }
-    result.active_stock = activeStock;
+    // Depth drawer / modal fallbacks. Without these the symbol is dropped as
+    // UNATTRIBUTED while the market-depth drawer is open, which is exactly
+    // when the depth being captured most needs attributing.
+    if (!activeStock) {
+        const paneSel = [
+            '.depth-pane .instrument-name', '.depth-pane .tradingsymbol',
+            '.depth-pane .nice-name', '.depth-pane .name',
+            '.instrument-name', '.tradingsymbol'
+        ].join(', ');
+        const paneName = document.querySelector(paneSel);
+        if (paneName) activeStock = paneName.innerText.trim().split('\n')[0].trim();
+    }
+    if (!activeStock) {
+        // Prefer a visible dialog: Kite leaves hidden modals in the DOM.
+        const dialogs = document.querySelectorAll(
+            '[role="dialog"], .modal, .modal-content, .su-modal, dialog[open]'
+        );
+        for (const dlg of dialogs) {
+            const rect = dlg.getBoundingClientRect();
+            if (!rect.width || !rect.height) continue;
+            const nm = dlg.querySelector(
+                '.instrument-name, .tradingsymbol, .nice-name, .symbol, .name, .title, h1, h2, h3'
+            );
+            if (nm && nm.innerText.trim()) {
+                activeStock = nm.innerText.trim().split('\n')[0].trim();
+                break;
+            }
+        }
+    }
+    if (activeStock) {
+        // Strip exchange badges, e.g. "IDEA NSE" -> "IDEA".
+        activeStock = activeStock.replace(/\s+(NSE|BSE|NFO|BFO|MCX|CDS)\b.*$/i, '').trim();
+    }
+    result.active_stock = activeStock || null;
 
     return result;
 })()
@@ -427,6 +460,40 @@ async def send_cdp_cmd(
             pass
             
     return {}
+
+
+# Chrome unmounts Kite's market-depth DOM when the window is minimized or
+# occluded, so the extractor silently sees an empty pane and the feed goes
+# stale without raising. These two CDP calls keep the renderer believing the
+# tab is foregrounded and focused.
+FOCUS_ENFORCE_INTERVAL_SEC = 30.0
+
+
+async def enforce_tab_focus(ws, req_id: int) -> Dict[str, bool]:
+    """Force the Kite tab to the foreground and pin focus emulation on.
+
+    Returns which calls were acknowledged. Failures are deliberately
+    non-fatal: a missed focus command degrades data quality, which the
+    staleness gate already catches, and is not a reason to drop the feed.
+    """
+    results = {"bring_to_front": False, "focus_emulation": False}
+    try:
+        res = await send_cdp_cmd(ws, "Page.bringToFront", req_id=req_id, timeout=3.0)
+        results["bring_to_front"] = bool(res) and "error" not in res
+    except Exception:
+        pass
+    try:
+        res = await send_cdp_cmd(
+            ws,
+            "Emulation.setFocusEmulationEnabled",
+            params={"enabled": True},
+            req_id=req_id + 1,
+            timeout=3.0,
+        )
+        results["focus_emulation"] = bool(res) and "error" not in res
+    except Exception:
+        pass
+    return results
 
 
 async def extract_session_auth(ws) -> Dict[str, Any]:
@@ -657,6 +724,7 @@ async def cdp_bridge():
     msg_id = 1000
     last_seen_cache = {}
     last_auth_check = 0.0
+    last_focus_enforce = 0.0
     auth_state = {
         "enctoken": None,
         "user_id": None,
@@ -691,8 +759,25 @@ async def cdp_bridge():
 
         try:
             async with websockets.connect(ws_url, max_size=10*1024*1024) as ws:
+                # Enforce focus immediately on connect: if the tab is already
+                # backgrounded, the very first extraction would otherwise read
+                # an unmounted depth pane.
+                msg_id += 2
+                focus_res = await enforce_tab_focus(ws, msg_id)
+                last_focus_enforce = time.time()
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] [FOCUS] "
+                      f"bringToFront={focus_res['bring_to_front']} "
+                      f"focusEmulation={focus_res['focus_emulation']}")
+
                 while True:
                     now_ts = time.time()
+
+                    # Re-assert focus periodically; Chrome drops focus emulation
+                    # when the window is minimized or occluded by another app.
+                    if (now_ts - last_focus_enforce) >= FOCUS_ENFORCE_INTERVAL_SEC:
+                        last_focus_enforce = now_ts
+                        msg_id += 2
+                        await enforce_tab_focus(ws, msg_id)
                     
                     # Refresh session authentication every 60s
                     if (now_ts - last_auth_check) >= 60.0:
@@ -787,6 +872,28 @@ async def cdp_bridge():
                                 dom_prev_close=dom_close if active_stock == sym else None
                             )
 
+                        # FAIL CLOSED. A backgrounded tab or a frozen DOM
+                        # yields whatever Kite last rendered, which downstream
+                        # cannot distinguish from a live quote. Publishing that
+                        # as market data is worse than publishing nothing, so
+                        # null the price fields and say so explicitly rather
+                        # than leaving a consumer to infer it from is_stale.
+                        STALE_STATUSES = ("STALE_TAB_BACKGROUNDED", "STALE_DATA_FROZEN")
+                        data_valid = not (is_tab_hidden or stream_status in STALE_STATUSES)
+
+                        if not data_valid:
+                            val["depth"] = None
+                            val["ltp"] = None
+                            val["stats"] = None
+                            ltp_to_log = None
+                            val["invalid_reason"] = (
+                                "TAB_HIDDEN" if is_tab_hidden else stream_status
+                            )
+                            is_stale = True
+                        else:
+                            val["invalid_reason"] = None
+
+                        val["data_valid"] = data_valid
                         val["status"] = stream_status
                         val["local_write_time"] = now_dt.strftime("%Y-%m-%d %H:%M:%S")
                         val["time_bin"] = time_bin
