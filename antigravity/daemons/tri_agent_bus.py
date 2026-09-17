@@ -335,12 +335,30 @@ def ask_codex(prompt: str, timeout_sec: int = 180) -> str:
     return ask_codex_detailed(prompt, timeout_sec)["output"]
 
 
-def ask_antigravity_detailed(prompt: str, timeout_sec: int = 120) -> Dict[str, Any]:
-    """Invokes Antigravity reasoning model non-interactively with structured returncode tracking."""
+def ask_antigravity_detailed(
+    prompt: str,
+    timeout_sec: int = 300,
+    min_chars: int = MIN_REVIEW_CHARS,
+) -> Dict[str, Any]:
+    """Invokes the Antigravity reasoning model non-interactively.
+
+    Mirrors the Codex dispatcher: no subprocess pipes (children can inherit the
+    stdout handle and hold it open long after the model has answered), and exit
+    code alone is never treated as success.
+    """
     import antigravity.daemons.inbox_worker as iw
+
     if iw.MODEL_DISPATCH_HOOK:
-        res = iw.MODEL_DISPATCH_HOOK(prompt, timeout_sec)
-        log_interaction("Antigravity Model", prompt, res.get("output", ""), res.get("elapsed_sec", 0.0), res.get("returncode", 0))
+        res = iw.MODEL_DISPATCH_HOOK(prompt, timeout_sec) or {}
+        out = res.get("output", "")
+        rc = res.get("returncode", 0)
+        log_interaction("Antigravity Model", prompt, out, res.get("elapsed_sec", 0.0), rc)
+        # Validate hook output too. The hook is how tests inject responses, and
+        # an unvalidated hook is exactly how simulated text reached canonical
+        # review files once already.
+        failure = validate_reviewer_output("ANTIGRAVITY", out, rc, min_chars)
+        res["success"] = failure is None
+        res["error"] = failure
         return res
 
     if not os.path.exists(AGY_BIN):
@@ -349,32 +367,40 @@ def ask_antigravity_detailed(prompt: str, timeout_sec: int = 120) -> Dict[str, A
         return {"success": False, "output": err, "returncode": 1, "elapsed": 0.0, "error": err}
 
     t0 = time.time()
+    work_dir = tempfile.mkdtemp(prefix="agy_exec_")
+    console_path = os.path.join(work_dir, "console.log")
+
     try:
-        proc = subprocess.run(
-            [
-                AGY_BIN,
-                "--sandbox",
-                "--disable-slash-commands",
-                "--model", "gemini-3.8-flash-low",
-                "-p", prompt
-            ],
-            cwd=WORKSPACE,
-            capture_output=True,
-            text=True,
-            timeout=timeout_sec,
-            encoding="utf-8",
-            errors="replace"
-        )
+        with open(console_path, "w", encoding="utf-8") as console:
+            proc = subprocess.run(
+                [
+                    AGY_BIN,
+                    "--sandbox",
+                    "--disable-slash-commands",
+                    "--model", "gemini-3.8-flash-low",
+                    "-p", prompt
+                ],
+                cwd=WORKSPACE,
+                stdout=console,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=timeout_sec,
+                encoding="utf-8",
+                errors="replace"
+            )
         elapsed = time.time() - t0
-        out = proc.stdout.strip() or proc.stderr.strip()
+
+        with open(console_path, encoding="utf-8", errors="replace") as f:
+            out = f.read().strip()
+
         log_interaction("Antigravity Model", prompt, out, elapsed, proc.returncode)
-        success = (proc.returncode == 0)
+        failure = validate_reviewer_output("ANTIGRAVITY", out, proc.returncode, min_chars)
         return {
-            "success": success,
+            "success": failure is None,
             "output": out,
             "returncode": proc.returncode,
             "elapsed": elapsed,
-            "error": None if success else f"Antigravity CLI exited with code {proc.returncode}: {proc.stderr.strip()}"
+            "error": failure
         }
     except subprocess.TimeoutExpired:
         elapsed = time.time() - t0
@@ -386,6 +412,8 @@ def ask_antigravity_detailed(prompt: str, timeout_sec: int = 120) -> Dict[str, A
         err = f"ERROR invoking Antigravity: {e}"
         log_interaction("Antigravity Model", prompt, err, elapsed, 1)
         return {"success": False, "output": err, "returncode": 1, "elapsed": elapsed, "error": err}
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def ask_antigravity(prompt: str, timeout_sec: int = 120) -> str:
