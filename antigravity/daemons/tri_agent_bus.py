@@ -5,6 +5,8 @@ Eliminates manual copy-pasting between chat windows.
 """
 
 import subprocess
+import shutil
+import tempfile
 import os
 import sys
 import time
@@ -252,39 +254,59 @@ def ask_claude(prompt: str, timeout_sec: int = 180) -> str:
 
 
 def ask_codex_detailed(prompt: str, timeout_sec: int = 300, min_chars: int = MIN_REVIEW_CHARS) -> Dict[str, Any]:
-    """Invokes OpenAI Codex / ChatGPT non-interactively with structured returncode tracking."""
+    """Invokes OpenAI Codex non-interactively and returns its final message.
+
+    Deliberately does NOT use subprocess pipes. codex.exe spawns children
+    (codex-code-mode-host.exe and friends) that inherit the stdout handle, so
+    capture_output=True waits for EOF on a pipe a grandchild still holds open
+    long after the model has answered. Measured on this host: identical args
+    take 22-36s writing to a file, but time out past 180s through a pipe.
+
+    stdout/stderr therefore go to a temp file, and the answer is read from
+    --output-last-message, which also removes the old "
+codex
+" /
+    "
+tokens used
+" stdout scraping.
+    """
     if not os.path.exists(CODEX_BIN):
         err = f"ERROR: Codex binary not found at {CODEX_BIN}"
         log_interaction("OpenAI Codex", prompt, err, 0.0, 1)
         return {"success": False, "output": err, "returncode": 1, "elapsed": 0.0, "error": err}
+
     t0 = time.time()
+    work_dir = tempfile.mkdtemp(prefix="codex_exec_")
+    last_message_path = os.path.join(work_dir, "last_message.txt")
+    console_path = os.path.join(work_dir, "console.log")
+
     try:
-        proc = subprocess.run(
-            # NOTE: --sandbox read-only hangs indefinitely on this Windows
-            # host (>10min vs 22s without it), so it is deliberately absent.
-            # Codex therefore runs workspace-write and CAN edit the repo; the
-            # read-only boundary here is enforced adapter-side, not by the CLI.
-            # Revisit if codex-windows-sandbox-setup.exe is configured.
-            [CODEX_BIN, "exec", "--skip-git-repo-check", "--ephemeral", "-"],
-            input=prompt,
-            cwd=WORKSPACE,
-            capture_output=True,
-            text=True,
-            timeout=timeout_sec,
-            encoding="utf-8",
-            errors="replace"
-        )
+        with open(console_path, "w", encoding="utf-8") as console:
+            proc = subprocess.run(
+                [CODEX_BIN, "exec", "--skip-git-repo-check", "--ephemeral",
+                 # Reviewers are read-only; the adapter writes the submission file.
+                 "--sandbox", "read-only",
+                 "--output-last-message", last_message_path, "-"],
+                input=prompt,
+                cwd=WORKSPACE,
+                stdout=console,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=timeout_sec,
+                encoding="utf-8",
+                errors="replace",
+            )
         elapsed = time.time() - t0
-        out = proc.stdout.strip()
-        # Cleanly extract the agent's message between "codex" and "tokens used" if present
-        cleaned_res = out
-        if "\ncodex\n" in out:
-            parts = out.split("\ncodex\n", 1)[1]
-            if "\ntokens used\n" in parts:
-                cleaned_res = parts.split("\ntokens used\n", 1)[0].strip()
-            else:
-                cleaned_res = parts.strip()
-        final_res = cleaned_res or proc.stderr.strip()
+
+        final_res = ""
+        if os.path.exists(last_message_path):
+            with open(last_message_path, encoding="utf-8", errors="replace") as f:
+                final_res = f.read().strip()
+        if not final_res:
+            # Fall back to the console so a real failure is reported, not silence.
+            with open(console_path, encoding="utf-8", errors="replace") as f:
+                final_res = f.read().strip()
+
         log_interaction("OpenAI Codex", prompt, final_res, elapsed, proc.returncode)
         failure = validate_reviewer_output("CODEX", final_res, proc.returncode, min_chars)
         return {
@@ -304,6 +326,8 @@ def ask_codex_detailed(prompt: str, timeout_sec: int = 300, min_chars: int = MIN
         err = f"ERROR invoking Codex: {e}"
         log_interaction("OpenAI Codex", prompt, err, elapsed, 1)
         return {"success": False, "output": err, "returncode": 1, "elapsed": elapsed, "error": err}
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def ask_codex(prompt: str, timeout_sec: int = 180) -> str:

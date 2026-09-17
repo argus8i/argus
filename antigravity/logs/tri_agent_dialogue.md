@@ -1893,3 +1893,83 @@ ERROR: Codex timed out after 500s
 ```
 
 ---
+
+## [2026-09-17 19:48:32 IST] Antigravity ➔ OpenAI Codex (424.3s)
+
+**Prompt / Mandate:**
+```text
+Reply with exactly: BRIDGE_OK
+```
+
+**OpenAI Codex Output & Audit Verdict:**
+```markdown
+ERROR: Codex timed out after 180s
+```
+
+---
+
+## [2026-09-17 19:50:15 IST] Antigravity ➔ OpenAI Codex (16.8s)
+
+**Prompt / Mandate:**
+```text
+Reply with exactly: BRIDGE_OK
+```
+
+**OpenAI Codex Output & Audit Verdict:**
+```markdown
+BRIDGE_OK
+```
+
+---
+
+## [2026-09-17 19:51:22 IST] Antigravity ➔ OpenAI Codex (42.9s)
+
+**Prompt / Mandate:**
+```text
+[ANTIGRAVITY REVIEW MANDATE FOR OPENAI CODEX / CHATGPT]
+Task ID: TASK_FIRST_REAL_REVIEW
+Review Type: REGULATORY (Regulatory, Broker Rules & Engineering Audit)
+Target: Project Swing Trades (AGENTS.md Rules 1-11 strictly apply)
+
+MANDATE / QUESTION:
+Our Track 1 ESM strategy buys into stocks locked at upper circuit. Historical fills show the only counterparties are sellers exiting. Identify the single biggest flaw in treating this as a sizing problem rather than an adverse-selection problem. Be specific and brief.
+
+ASSUMPTIONS PRESENTED BY ANTIGRAVITY:
+{
+  "fills_only_from_exiting_sellers": true
+}
+
+MEASURED & DERIVED VALUES:
+{
+  "observed_fill_rate_pct": 2.2
+}
+
+RELEVANT SOURCE FILES:
+None
+
+INSTRUCTIONS & AUDIT CRITERIA:
+Inspect code implementation, regulatory compliance (SEBI/NSE/BSE, ESM, ASM, GSM, T2T), broker constraints (Zerodha margin/T2T delivery/auction), and forensic consistency. State all unresolved P0 objections explicitly.
+
+You are acting as the independent engineering and regulatory auditor. Provide your rigorous review. Your output will be recorded as codex_submission.md.
+```
+
+**OpenAI Codex Output & Audit Verdict:**
+```markdown
+# Regulatory Review — TASK_FIRST_REAL_REVIEW
+
+**Verdict: REJECT / P0**
+
+The biggest flaw is **conditioning entry on toxic order flow**: with a 2.2% fill rate, execution occurs only when an informed or urgent holder chooses to sell into an otherwise locked upper circuit. Thus, being filled is itself a negative signal—likely distribution or weakening demand. Smaller sizing limits loss severity; it cannot repair negative conditional expectancy or selection bias.
+
+**Unresolved P0 objections:**
+
+- Direct violation of Rule 3: locked-UC buys with zero/negligible offers are prohibited.
+- Direct violation of Rule 7: this is not a two-sided accumulation entry with a valid executable stop.
+- Exit liquidity remains unbounded; a stop cannot execute during zero-bid lower circuits.
+- No code, order-book snapshots, queue ranks, surveillance history, or fill-level forward returns were supplied, so Rules 4, 6, and 9 cannot be verified.
+- If the security is T2T/ESM, compulsory delivery and enhanced surveillance restrictions further amplify—not cure—the risk. [NSE ESM framework](https://www.nseindia.com/static/regulations/enhanced-surveillance-measure-esm), [Zerodha T2T rules](https://support.zerodha.com/category/trading-and-markets/trading-faqs/general/articles/what-are-trade-to-trade-stocks)
+
+**Required disposition:** freeze the setup. Do not submit or recommend locked-UC buys, including paper orders modeled as realistically fillable. Any research must separately estimate returns **conditional on fill**, not unconditional returns or fill rate.
+```
+
+---
