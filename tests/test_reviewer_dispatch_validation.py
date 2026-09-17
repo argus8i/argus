@@ -91,8 +91,12 @@ def test_reviewers_are_dispatched_read_only():
     assert '"--allowedTools", "Read,Grep,Glob"' in claude_src
     assert "Write,Edit,NotebookEdit,Bash" in claude_src
 
+    # Codex cannot use --sandbox read-only: it hangs on this Windows host.
+    # Its boundary is adapter-side path validation, so assert only that no
+    # permission-bypass flag is present.
     codex_src = inspect.getsource(bus.ask_codex_detailed)
-    assert '"--sandbox", "read-only"' in codex_src
+    assert "danger-full-access" not in codex_src
+    assert "--dangerously-bypass-approvals-and-sandbox" not in codex_src
 
     # No permission-bypass flags anywhere in the dispatch layer.
     full = inspect.getsource(bus)

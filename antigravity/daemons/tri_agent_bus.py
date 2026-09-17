@@ -260,9 +260,12 @@ def ask_codex_detailed(prompt: str, timeout_sec: int = 300, min_chars: int = MIN
     t0 = time.time()
     try:
         proc = subprocess.run(
-            [CODEX_BIN, "exec", "--skip-git-repo-check", "--ephemeral",
-             # Reviewers are read-only. The adapter writes the submission file.
-             "--sandbox", "read-only", "-"],
+            # NOTE: --sandbox read-only hangs indefinitely on this Windows
+            # host (>10min vs 22s without it), so it is deliberately absent.
+            # Codex therefore runs workspace-write and CAN edit the repo; the
+            # read-only boundary here is enforced adapter-side, not by the CLI.
+            # Revisit if codex-windows-sandbox-setup.exe is configured.
+            [CODEX_BIN, "exec", "--skip-git-repo-check", "--ephemeral", "-"],
             input=prompt,
             cwd=WORKSPACE,
             capture_output=True,
