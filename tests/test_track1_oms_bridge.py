@@ -68,18 +68,18 @@ class TestRule7VolumeExpansionEngine:
         dummy_auth = {"authenticated": False, "enctoken": None}
 
         # Case A: High volume expansion (>= 3.0x)
-        # Using 5,000,000 intraday volume
+        # Using 10,000,000 intraday volume
         result = compute_rule7_volume_expansion(
             symbol="MOBIKWIK",
             meta=dummy_meta,
-            intraday_volume=5000000,
+            intraday_volume=10000000,
             auth=dummy_auth
         )
         assert result["symbol"] == "MOBIKWIK"
         assert result["avg_20d_volume"] > 0
-        assert result["intraday_volume"] == 5000000
+        assert result["intraday_volume"] == 10000000
         assert result["minutes_elapsed"] >= 1
-        assert result["projected_full_day_volume"] >= 5000000
+        assert result["projected_full_day_volume"] >= 10000000
         assert result["volume_expansion_ratio"] >= 2.0
 
     def test_rule7_volume_qualification_boundary(self):

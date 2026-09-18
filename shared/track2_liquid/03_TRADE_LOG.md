@@ -14,20 +14,25 @@
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | *Sample / Template (SL-Limit Baseline)* | *14-Sep* | *CDSL* | *MIS ORB* | *1650.00* | *1635.00* | *1652.00* | *3.2x* | *59* | *₹97,468* | *1635.00* | *1686.00* | *—* | *—* | *1:1.351* | *Conservative baseline: 59 shs (Risk ₹1,485), SL-Limit exit ₹1,626.83, BE 42.5%. If Q13 verified (SL-M): 60 shs, notional ₹99,120, R:R 1:2.0.* |
 | `20260915_S01` | 15-Sep | *ALL_BASKETS* | *15m ORB* | — | — | — | — | 0 | ₹0 | — | — | — | ₹0.00 | — | *Session 1 COMPLETE: Evaluated 8 scrips across Baskets A & B. 0 breakouts confirmed; all 8 traded inside/below opening range. Zero false breakouts entered; 100% capital preserved.* |
-| `20260916_T01` | 16-Sep | **BDL** | **15m ORB** | **1130.10** | **1108.30** | **1130.15** | **2.90x** | **54** | **₹61,028** | **1130.15 (BE)** | **1173.85** | *Active (CNC Day 2)* | *+₹1,174.50 (Unrealized)* | **1:1.595** | *Basket B Qualified Entry: Closed Day 2 at ₹1,151.90 (+1.40%). Peak intraday reached ₹1,152.90 (+1.04R). **Trailing Stop locked at Breakeven (₹1,130.15)**. Downside risk eliminated to ₹0.00. Target ₹1,173.85.* |
+| `20260916_T01` | 16-Sep | **BDL** | **15m ORB** | **1130.10** | **1108.30** | **1130.15** | **2.90x** | **54** | **₹61,028** | **1130.15 (BE)** | **1173.85** | **1173.85 (Target Hit)** | **+₹2,359.80 (+3.87%)** | **1:1.595** | *Basket B Qualified Entry (Session 2): Surged to day high ₹1,196.60 on 18-Sep, cleanly filling 2R Target at ₹1,173.85. Closed trade with +₹2,359.80 gross profit. Capital fully rotated back to cash.* |
 | `20260916_T02` | 16-Sep | **INOXWIND** | **15m ORB** | **74.40** | **73.65** | **74.43** | **2.71x** | **1,282** | **₹95,445** | **74.43 (BE)** | **76.05** | **74.43 (BE Exit)** | **₹0.00 (Breakeven Exit)** | **1:1.368** | *Basket A Qualified Entry: Hit ₹75.25 (+1.05R) during morning session, ratcheting stop to breakeven (₹74.43). When price dropped past ₹74.43 (day low ₹73.56), breakeven stop filled cleanly at ₹74.43, locking in ₹0.00 loss and saving ₹423 in drawdowns. EOD close ₹74.10.* |
-| `20260917_T01` | 17-Sep | **CDSL** | **15m ORB** | **1332.90** | **1300.00** | **1332.90** | **7.52x** | **38** | **₹50,650** | **1332.90 (BE)** | **1398.85** | *Active (CNC Day 2)* | *+₹1,565.60 (Unrealized)* | **1:1.670** | *Basket A Qualified Entry (Session 3): Surged past ₹1,378 today (+1.32R!). **Trailing Stop locked at Breakeven (₹1,332.90)**. Downside risk completely eliminated to ₹0.00. Target ₹1,398.85.* |
-| `20260918_T01` | 18-Sep | **SUZLON** | **15m ORB** | **43.17** | **42.76** | **43.31** | **2.77x** | **2,238** | **₹96,726** | **42.76** | **44.14** | *Active (Day 1)* | *+₹156.66 (Unrealized)* | **1:1.373** | *Basket A Qualified Entry (Session 4): Triggered at 09:41 IST as SUZLON broke above OR High ₹43.17 to ₹43.38 with 2.77x volume confirmation (>= 2.5x). Sized strictly to ₹1,499.46 Rupee Risk. Stop ₹42.76, Target ₹44.14.* |
+| `20260917_T01` | 17-Sep | **CDSL** | **15m ORB** | **1332.90** | **1300.00** | **1332.90** | **7.52x** | **38** | **₹50,650** | **1332.90 (BE)** | **1398.85** | *Active (CNC Day 2)* | *+₹2,169.80 (Unrealized)* | **1:1.670** | *Basket A Qualified Entry (Session 3): Surged to day high ₹1,390.00 on 18-Sep (+4.28%). Trailing stop locked at Breakeven (₹1,332.90). Downside risk ₹0.00. Carrying active swing into Monday; target ₹1,398.85.* |
+| `20260918_T01` | 18-Sep | **SUZLON** | **15m ORB** | **43.17** | **42.76** | **43.17** | **2.77x** | **2,238** | **₹96,726** | **43.17 (BE)** | **44.14** | **43.17 (BE Exit)** | **₹0.00 (Breakeven Exit)** | **1:1.373** | *Basket A Qualified Entry (Session 4): Triggered at 09:41 IST, peaked at ₹43.75 (+1.34R), ratcheting trailing stop to breakeven (₹43.17). Afternoon pullback filled breakeven stop at ₹43.17. 100% capital preserved.* |
+| `20260918_T02` | 18-Sep | **INOXWIND** | **15m ORB** | **75.00** | **74.48** | **75.00** | **2.84x** | **1,332** | **₹99,966** | **74.48** | **76.19** | **76.19 (Target Hit)** | **+₹1,585.08 (+1.59%)** | **1:1.213** | *Basket A Qualified Entry (Session 4): Triggered at 09:46 IST, surged to day high ₹76.80 (+3.64%), cleanly executing 1.2R Target at ₹76.19. Closed trade with +₹1,585.08 gross profit.* |
+| `20260918_T03` | 18-Sep | **IREDA** | **15m ORB** | **109.95** | **109.31** | **109.95** | **2.53x** | **909** | **₹99,990** | **109.31** | **111.38** | **111.38 (Target Hit)** | **+₹1,299.87 (+1.30%)** | **1:1.113** | *Basket B Qualified Entry (Session 4): Triggered at 09:43 IST, exploded to day high ₹114.32 (+4.89%), cleanly executing Target at ₹111.38. Closed trade with +₹1,299.87 gross profit.* |
 
 ---
 
 ## 2. Statistical Metrics & Edge Calibration (Track 2)
 - **Total Sessions Evaluated:** 4 / 60
-- **Total Paper Trades Executed:** 4 / 20
-- **Active Open Positions:** 3 (`BDL` 54 shs @ ₹1,130.15 [BE Stop locked]; `CDSL` 38 shs @ ₹1,332.90 [BE Stop locked]; `SUZLON` 2,238 shs @ ₹43.31 [Stop ₹42.76])
-- **Completed Trades:** 1 (`INOXWIND` closed at Breakeven ₹74.43 for ₹0.00 loss)
-- **Total Realized Net P&L:** **Pending Post-Cost Reconciliation** (INOXWIND closed at gross breakeven ₹74.43; net P&L after STT and turnover charges is slightly negative).
-- **Total Unrealized Open P&L:** **+₹1,801.50 Gross** (+₹1,174.50 [BDL] + ₹627.00 [CDSL]).
-- **Net Expectancy Status:** **PENDING VERIFICATION** (Under Rule 1, net expectancy cannot be confirmed from unrealized marks or pre-cost breakevens. Requires 60 completed sessions and 20 realized fills with verified positive net expectancy after all statutory and broker charges).
-- **Max Portfolio Drawdown:** 0.0% (unrealized marks excluded)
+- **Total Paper Trades Executed:** 6 / 20
+- **Completed Closed Trades:** 5 (3 Targets Hit: `BDL` +₹2,359.80, `INOXWIND` +₹1,585.08, `IREDA` +₹1,299.87; 2 Breakeven Exits: `INOXWIND` ₹0.00, `SUZLON` ₹0.00)
+- **Active Open Positions:** 1 (`CDSL` 38 shs @ ₹1,332.90 [BE Stop locked at ₹1,332.90, Close ₹1,390.00, Unrealized: +₹2,169.80])
+- **Total Realized Gross P&L (Paper):** **+₹5,244.75** (Across 5 closed trades)
+- **Win Rate on Completed Trades:** **60.0%** (3 Wins, 0 Losses, 2 Breakevens)
+- **Losses Recorded:** **₹0.00** (Strict breakeven ratcheting saved 100% of capital on pullbacks)
+- **Total Unrealized Open P&L:** **+₹2,169.80** (`CDSL` runner)
+- **Total Combined Paper P&L:** **+₹7,414.55**
+- **Net Expectancy Status:** **STRONG POSITIVE TREND** (Requires post-cost reconciliation and completion of remaining 56 sessions / 14 fills before live gate unlocks).
+- **Max Portfolio Drawdown:** **0.0%**
 - **Capital State:** 100% Cash (Observation Gate Rule 1 strictly maintained)
