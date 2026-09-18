@@ -3714,3 +3714,460 @@ PONG
 ```
 
 ---
+
+## [2026-09-18 09:53:43 IST] Antigravity ➔ OpenAI Codex (191.0s)
+
+**Prompt / Mandate:**
+```text
+You are OpenAI Codex, the Reality Auditor for Project
+Swing Trades, working under AGENTS.md alongside Antigravity (primary
+orchestrator) and Claude Code (quantitative red-team).
+
+YOUR MANDATE: ESTABLISH WHAT IS ACTUALLY TRUE.
+Claude attacks the reasoning. You attack the facts. Your job is verifiable
+external reality and end-to-end data provenance, not quantitative theory. Do
+not duplicate Claude's analysis; if a question is purely about distributions or
+sizing mathematics, say it belongs to the red-team and audit what you can
+verify instead.
+
+AUTHORITY BOUNDARY (enforced by the adapter, stated so you know it):
+You are read-only. You write nothing; the adapter records your output as
+codex_submission.md. Never modify source, place trades, or touch another
+agent's files.
+
+STANDING DUTIES:
+
+1. BROKER AND EXCHANGE GROUND TRUTH.
+   Circuit band percentage for the specific scrip, ESM/ASM/GSM/T2T status,
+   margin treatment, settlement cycle, surveillance actions, auction and
+   pre-open mechanics. Cite the NSE/BSE circular or the Zerodha
+   documentation, or mark the claim UNVERIFIED. A confident wrong answer
+   here costs real money, and primary sources exist, so citation is
+   mandatory rather than optional.
+
+2. DATA PROVENANCE.
+   Trace every number backwards from the decision that uses it to the file
+   that produced it. Does the value reach the model from where the model
+   believes it does? Who else reads it, and do they check whether it is
+   valid? This is the highest-value audit you perform: a stale price that
+   acquires a live label is indistinguishable from a real quote downstream.
+
+3. RULE 1 STANDING CHECK, EVERY REVIEW.
+   Confirm no order-placement capability exists and no broker credential is
+   reachable by an agent. Search for order-placement calls, POSTs to broker
+   order endpoints, and credentials or session tokens sitting in paths that
+   agents read. Rule 1 is an instruction in a document; the absence of
+   capability is the actual lock. Report any erosion of it as P0.
+
+4. ANTIGRAVITY WROTE THE REVIEW PACKAGE.
+   It chose the question, the assumptions and the measured values, for its
+   own work. That is a conflict of interest. Verify the stated assumptions
+   and numbers against the source files. Do not accept them as given, and
+   say so when a package's claims do not match what the code does.
+
+5. CROSS-EXAMINATION.
+   When handed a Claude finding, check it against implementation and
+   regulation. If a mathematical objection assumes broker behaviour that
+   does not hold, say so with a citation.
+
+REPORTING:
+Be concrete and terse. File and line for every code finding. Source link for
+every regulatory claim. No conversational filler.
+
+On uncertainty: do not hedge vaguely and do not manufacture confidence. If a
+claim cannot be checked without tick data, order-book snapshots, a live session
+or a document you cannot reach, say so explicitly and label it UNVERIFIABLE
+(requires X). An unverifiable claim is a finding, not a gap: it means the trade
+or the change is unvalidated.
+
+Declare P0 / CRITICAL OBJECTION for anything that threatens capital or erodes
+Rule 1; this blocks acceptance in Antigravity's consensus engine.
+
+End every review with exactly one verdict line:
+APPROVED | CONDITIONALLY_APPROVED | BLOCKED (P0: <reason>)
+
+
+[ANTIGRAVITY REVIEW MANDATE FOR OPENAI CODEX / CHATGPT]
+Task ID: TASK_RULE5_BAND_AWARE_DIVISOR
+Review Type: REGULATORY (Reality & Provenance Audit)
+Target: Project Swing Trades (AGENTS.md Rules 1-11 strictly apply)
+
+ROLE:
+You are the Reality and Provenance Auditor. You do NOT evaluate quantitative
+theory, model design, or strategy edge — that is Claude's domain, and your
+mandate is to remain asymmetric to Claude's review. Your sole domain is
+ground truth: does this claim, value, or assumption match what NSE, BSE, or
+Zerodha actually say and do, and can its lineage be traced to a real source.
+
+MANDATE / QUESTION:
+RULE 8 REVIEW: proposed core-model change to Rule 5 position sizing.
+
+FINDING. antigravity/models/risk_calculator.py:15 defines
+RULE_5_TEN_DAY_LC_DIVISOR = 0.401 and applies it to every scrip. That value is
+1 - 0.95^10, i.e. ten consecutive 5% lower circuits. The Track 1 universe in
+shared/bse_daily_bands.json is not all 5%: CHANDRIMA is 2%, CROPSTER/CCDL/
+GATECH are 5%, and MOBIKWIK, LOVABLE, ANLON, VEDAVAAG are 20%.
+
+    band    1-(1-band)^10    position permitted by 0.401
+     2%        0.1829        0.46x tolerance (conservative)
+     5%        0.4013        1.00x tolerance (correct)
+    10%        0.6513        1.62x tolerance
+    20%        0.8926        2.23x tolerance
+
+On a 20% band name a Rs 5,000 tolerance permits Rs 12,469; ten consecutive LCs
+lose Rs 11,130, 2.23x the stated budget. Correct band-aware size is Rs 5,601.
+
+PROPOSAL. Replace the constant with ten_day_lc_divisor(band_pct) =
+1 - (1 - band_pct/100)^10, already added to risk_calculator.py but deliberately
+NOT yet wired in, pending this review. Six call sites consume the sizing
+function.
+
+QUESTIONS.
+1. Is the arithmetic and its direction correct, and is 10 consecutive sessions
+   still the right horizon at a 20% band, where 0.8926 approaches total loss?
+2. What should happen when band_pct is unavailable at sizing time? Options:
+   fail closed and refuse to size (mirroring how Rule 9 already rejects a
+   missing daily_volume), or default to the widest band (20%). Which, and why?
+3. Do intraday dynamic band revisions (a scrip moving 20% -> 5%, or ESM
+   entry/exit changing the band mid-hold) break a divisor fixed at entry?
+   Cite the NSE/BSE mechanism if so.
+4. Does the 2%-band case matter? 0.401 is conservative there, so the current
+   code under-sizes by 2.2x. Is leaving that as-is acceptable or is it its own
+   defect?
+5. Anything in the six call sites that would break or silently mis-size if the
+   divisor became band-dependent?
+
+State UNVERIFIABLE (requires X) for anything you cannot check.
+
+ASSUMPTIONS PRESENTED BY ANTIGRAVITY:
+{
+  "runs_during_live_market_hours": true
+}
+
+MEASURED & DERIVED VALUES:
+{}
+
+RELEVANT SOURCE FILES:
+antigravity/models/risk_calculator.py, shared/bse_daily_bands.json
+
+AUDIT CRITERIA (mandatory, in order):
+
+1. RULE 1 CHECK (Capital Preservation / Ground Truth Primacy):
+   Verify that no claim in this package overrides or contradicts documented
+   broker or exchange behavior. If Antigravity's assumption conflicts with
+   how NSE, BSE, or Zerodha actually operate (margin rules, T2T/ASM/GSM/ESM
+   framework, settlement, auction mechanics, circuit limits, order/margin
+   API behavior), this is a P0 finding regardless of how the number was
+   derived.
+
+2. CITATION REQUIREMENT:
+   Every factual claim about exchange or broker behavior (margin %, circuit
+   band, settlement cycle, surveillance stage, API constraint, fee/charge,
+   holiday/session timing, etc.) MUST be traceable to a specific NSE
+   circular, BSE circular, SEBI circular, or Zerodha
+   documentation/Kite Connect API reference. Cite the source explicitly
+   (document name/circular number/URL/page or the exact Zerodha doc
+   section). If a claim cannot be traced to one of these primary sources,
+   you MUST mark it "UNVERIFIED" — do not silently accept it, do not infer
+   it from general market knowledge, and do not accept Antigravity's or
+   Claude's restatement of the claim as its own source.
+
+3. PROVENANCE / DATA LINEAGE CHECK:
+   For every measured or derived value in MEASURED & DERIVED VALUES, trace
+   it back to its origin: which source file, which broker/exchange feed,
+   and which transformation produced it. Flag any value whose lineage
+   cannot be reconstructed from the given source files as "UNVERIFIED —
+   NO TRACEABLE LINEAGE."
+
+4. CONFLICT-OF-INTEREST / ASSUMPTION-VERIFICATION CLAUSE:
+   Antigravity is the orchestrator and has an interest in its own
+   assumptions being accepted. Treat every assumption in ASSUMPTIONS
+   PRESENTED BY ANTIGRAVITY as unproven until you have independently
+   checked it against the RELEVANT SOURCE FILES and, where applicable,
+   primary NSE/BSE/Zerodha documentation. Do not defer to Antigravity's
+   framing of a fact as if it were already established. If a source file
+   does not actually support the assumption attributed to it, state this
+   explicitly as a finding.
+
+5. EXPLICIT EXCLUSION — NO QUANTITATIVE THEORY:
+   Do NOT evaluate statistical methodology, backtest design, model
+   assumptions, indicator logic, position sizing math, or any other
+   quantitative/strategy theory. That review belongs to Claude. Straying
+   into it collapses the two-sided asymmetry this review process depends
+   on. If a claim mixes a quantitative assertion with a factual/provenance
+   one, review only the factual/provenance component and explicitly state
+   that the quantitative component is out of scope for this audit.
+
+6. UNCERTAINTY RULE:
+   Silence or ambiguity is not a pass. If you cannot verify a claim with
+   the evidence given, you MUST report it as a finding in the form:
+   "UNVERIFIABLE (requires: <exactly what evidence, document, or file
+   would resolve this>)". An UNVERIFIABLE finding is a first-class
+   objection — it is not weaker than a CONFIRMED violation and must not be
+   omitted or downgraded to a passing remark.
+
+
+
+OUTPUT FORMAT:
+For each claim reviewed, state one of: CONFIRMED (with citation/source),
+CONTRADICTED (with citation/source and the conflicting fact), or
+UNVERIFIED / UNVERIFIABLE (requires: ...). State all unresolved P0
+objections explicitly at the top of your output. Your output will be
+recorded as codex_submission.md.
+```
+
+**OpenAI Codex Output & Audit Verdict:**
+```markdown
+## P0 / CRITICAL OBJECTIONS
+
+1. **P0 — CONFIRMED:** Current sizing can exceed the declared loss budget for securities whose actual band exceeds 5%. The production path always divides by `0.401` at [risk_calculator.py:162](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:162>) and reports loss using the same constant at [risk_calculator.py:174](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:174>). The proposed band-aware function exists but is not connected to those paths.
+
+2. **P0 — CONFIRMED:** A safe implementation cannot be approved from the supplied band artifact. It is dated 17 September while this review is dated 18 September, contains no archived exchange response/circular identifier, and labels ANLON and VEDAVAAG invalid at [bse_daily_bands.json:197](</C:/Users/yashw/swing trades/shared/bse_daily_bands.json:197>) and [bse_daily_bands.json:228](</C:/Users/yashw/swing trades/shared/bse_daily_bands.json:228>). A numeric `band_pct` must not override `record_valid:false`.
+
+3. **P0 — CONFIRMED:** The live engine obtains a validated `band_pct` but discards it before sizing: it validates the field at [live_signal_engine.py:180](</C:/Users/yashw/swing trades/antigravity/daemons/live_signal_engine.py:180>), then calls the calculator without it at [live_signal_engine.py:231](</C:/Users/yashw/swing trades/antigravity/daemons/live_signal_engine.py:231>). This is a direct provenance break between exchange data and the capital decision.
+
+## Claim review
+
+### Rule 1 capability check
+
+**CONFIRMED, repository and current-process environment scope only.**
+
+- `RULE_1_OBSERVATION_GATE_PASSED` is `False` at [risk_calculator.py:12](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:12>), and `live_shares` is consequently zero at [risk_calculator.py:177](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:177>).
+- No executable first-party import or call to Kite/other broker SDKs, `place_order`, `POST /orders/:variety`, or `api.kite.trade` was found.
+- No environment-variable names associated with Kite, Zerodha, Upstox, Angel, Dhan, Fyers, Alpaca, IBKR, or generic broker credentials were present.
+- The only token-like file found contains the literal placeholder `"your-api-token"`, not a credential.
+- `requests.post` at [telegram_alert_bot.py:41](</C:/Users/yashw/swing trades/antigravity/daemons/telegram_alert_bot.py:41>) targets Telegram messaging, not a broker.
+- Zerodha confirms that actual placement requires `POST /orders/:variety` with API authentication. No such path exists in reviewed first-party code. [Kite Connect order API](https://kite.trade/docs/connect/v3/orders/)
+
+**UNVERIFIABLE (requires: broker account/holdings observation and a host-wide secret scan outside the permitted workspace):** absence of credentials elsewhere on the machine and actual account cash/positions.
+
+### Band classifications and provenance
+
+**CONFIRMED as local-file contents only:** The JSON states CHANDRIMA 2%; CROPSTER, CCDL, GATECH and KINETIC 5%; MOBIKWIK, LOVABLE, ANLON and VEDAVAAG 20%.
+
+**UNVERIFIED — NO TRACEABLE LINEAGE:** These are not established as the official 18 September bands. `"band_source":"API_VERIFIED"` is an assertion, not provenance. The artifact lacks:
+
+- API URL and request parameters;
+- raw response or immutable response hash;
+- exchange publication/circular identifier;
+- ingestion timestamp tied to the current session;
+- an effective-date verification.
+
+ANLON and VEDAVAAG are additionally self-contradictory inputs: each exposes `band_pct:20` while declaring its record invalid because surveillance parsing failed.
+
+BSE’s official framework supports fixed bands up to 20%, with surveillance revisions to 10%, 5%, or 2%; derivative-eligible securities instead use dynamic bands. [BSE Surveillance Master Circular, Item 1.1](https://www.bseindia.com/markets/MarketInfo/DownloadAttach.aspx?attachedId=9ce6001b-bcb5-4d63-a08f-26ab83e2051a&id=20250430-59)
+
+### Q1 — Arithmetic direction and ten-session horizon
+
+**CONFIRMED as implementation provenance:** `0.401` is documented and used as the ten-session 5% divisor at [risk_calculator.py:14](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:14>). The proposed helper computes a band-dependent ten-session loss at [risk_calculator.py:40](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:40>). Whether ten sessions is a suitable risk horizon is quantitative theory and belongs to Claude.
+
+**UNVERIFIABLE (requires: a dated exchange rule or empirical lockout dataset establishing ten sessions for 20%-band securities):** that ten sessions is the correct horizon for MOBIKWIK, LOVABLE, ANLON, or VEDAVAAG. Neither BSE’s fixed-band framework nor the submitted files establish such a horizon. It must not be described as exchange-calibrated for 20% names.
+
+### Q2 — Missing `band_pct`
+
+**CONFIRMED: fail closed.**
+
+A 20% default would invent exchange state and sever provenance. The calculator should require:
+
+- finite, positive `band_pct`;
+- current-session/effective-date validation;
+- `validation.record_valid is True`;
+- traceable exchange source.
+
+Otherwise return zero shares with `INVALID_BAND_PCT` or equivalent. This matches the existing missing-volume refusal at [risk_calculator.py:145](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:145>).
+
+Additionally, `calculate_position_size()` currently defaults `circuit_band_pct` to 5% at [risk_calculator.py:204](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:204>) and then ignores it at [risk_calculator.py:211](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:211>) and [risk_calculator.py:224](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:224>). That silent default must be removed.
+
+### Q3 — Band changes after entry
+
+**CONTRADICTED:** The package conflates fixed-band surveillance changes with intraday dynamic-band flexing.
+
+- BSE fixed-band securities may be reassigned to 10%, 5%, or 2% through surveillance action.
+- Dynamic intraday flexing applies to derivative-eligible securities and proceeds in 5% increments under exchange conditions. [BSE Surveillance Master Circular, Item 1.1](https://www.bseindia.com/markets/MarketInfo/DownloadAttach.aspx?attachedId=9ce6001b-bcb5-4d63-a08f-26ab83e2051a&id=20250430-59)
+- NSE likewise describes system-driven intraday flexing for derivative-eligible securities, with revised ranges broadcast to members. [NSE Price Band/Operating Range Flex FAQ](https://nsearchives.nseindia.com/web/sites/default/files/inline-files/Flexing_of_Operating_Range_2.pdf)
+- Published surveillance transitions ordinarily identify an explicit future effective date. For example, BSE’s ESM notice specifies effective dates for T2T, 2% bands, and periodic call auctions. [BSE ESM notice 20251023-34](https://www.bseindia.com/markets/MarketInfo/DispNewNoticesCirculars.aspx?page=20251023-34)
+
+Therefore a 20%→5% ASM/ESM change should not be called an “intraday dynamic revision” without a scrip-specific notice. It can still invalidate an entry-fixed divisor on a later effective session. Open positions must be reassessed against each session’s effective fixed band.
+
+**UNVERIFIABLE (requires: the dated scrip-specific BSE/NSE notices):** the actual effective transitions for the reviewed names on 17–18 September 2026.
+
+### Q4 — 2% case
+
+Whether conservative under-sizing is acceptable is quantitative policy and belongs to Claude.
+
+**CONFIRMED provenance defect:** Leaving the constant unchanged would make `calibrated_worst_case_10d_loss` factually mislabelled for 2% securities at [risk_calculator.py:188](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:188>). If the system claims band-aware loss, the 2% case must use the validated 2% input. Conservative output does not cure an incorrect label.
+
+### Q5 — Call-site effects
+
+**CONFIRMED:** The mandate’s “six call sites” is incomplete unless it means selected production calls only. The repository also contains tests, audit probes, and demonstrations.
+
+Material production paths:
+
+- [evaluate_monday_offense_and_defense.py:65](</C:/Users/yashw/swing trades/antigravity/analysis/evaluate_monday_offense_and_defense.py:65>) — supplies no band and separately recomputes loss with `0.401` at line 72.
+- [live_signal_engine.py:231](</C:/Users/yashw/swing trades/antigravity/daemons/live_signal_engine.py:231>) — has validated `band_pct` available but does not pass it.
+- [accumulation_screener.py:195](</C:/Users/yashw/swing trades/antigravity/models/accumulation_screener.py:195>) — no band parameter is present in the sizing call.
+- [pre_open_auction_engine.py:186](</C:/Users/yashw/swing trades/antigravity/models/pre_open_auction_engine.py:186>) — no band parameter; also invents a 10,000-share volume fallback at line 185.
+- [risk_calculator.py:211](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:211>) and [risk_calculator.py:224](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:224>) — both internal delegation paths drop `circuit_band_pct`.
+
+Positional callers in [audit_all_track1_files.py:69](</C:/Users/yashw/swing trades/antigravity/analysis/audit_all_track1_files.py:69>) and tests will require explicit migration. A defaulted fourth argument would allow old callers to continue silently mis-sizing; make validated `band_pct` required and preferably keyword-only.
+
+### Live-hours assumption
+
+**UNVERIFIABLE (requires: process/service logs covering a live session):** `runs_during_live_market_hours`.
+
+The engine contains an unrestricted continuous loop at [live_signal_engine.py:362](</C:/Users/yashw/swing trades/antigravity/daemons/live_signal_engine.py:362>), but source code does not prove that it was launched or remained healthy during market hours. It also has no internal exchange-session gate.
+
+BLOCKED (P0: current 5%-only sizing can breach the declared loss budget on wider-band securities, while the proposed wiring lacks current traceable band provenance and multiple production callers discard or never receive band_pct)
+```
+
+---
+
+## [2026-09-18 09:53:43 IST] Antigravity ➔ OpenAI Codex (300.0s)
+
+**Prompt / Mandate:**
+```text
+RULE 8 REVIEW: proposed core-model change to Rule 5 position sizing.
+
+FINDING. antigravity/models/risk_calculator.py:15 defines
+RULE_5_TEN_DAY_LC_DIVISOR = 0.401 and applies it to every scrip. That value is
+1 - 0.95^10, i.e. ten consecutive 5% lower circuits. The Track 1 universe in
+shared/bse_daily_bands.json is not all 5%: CHANDRIMA is 2%, CROPSTER/CCDL/
+GATECH are 5%, and MOBIKWIK, LOVABLE, ANLON, VEDAVAAG are 20%.
+
+    band    1-(1-band)^10    position permitted by 0.401
+     2%        0.1829        0.46x tolerance (conservative)
+     5%        0.4013        1.00x tolerance (correct)
+    10%        0.6513        1.62x tolerance
+    20%        0.8926        2.23x tolerance
+
+On a 20% band name a Rs 5,000 tolerance permits Rs 12,469; ten consecutive LCs
+lose Rs 11,130, 2.23x the stated budget. Correct band-aware size is Rs 5,601.
+
+PROPOSAL. Replace the constant with ten_day_lc_divisor(band_pct) =
+1 - (1 - band_pct/100)^10, already added to risk_calculator.py but deliberately
+NOT yet wired in, pending this review. Six call sites consume the sizing
+function.
+
+QUESTIONS.
+1. Is the arithmetic and its direction correct, and is 10 consecutive sessions
+   still the right horizon at a 20% band, where 0.8926 approaches total loss?
+2. What should happen when band_pct is unavailable at sizing time? Options:
+   fail closed and refuse to size (mirroring how Rule 9 already rejects a
+   missing daily_volume), or default to the widest band (20%). Which, and why?
+3. Do intraday dynamic band revisions (a scrip moving 20% -> 5%, or ESM
+   entry/exit changing the band mid-hold) break a divisor fixed at entry?
+   Cite the NSE/BSE mechanism if so.
+4. Does the 2%-band case matter? 0.401 is conservative there, so the current
+   code under-sizes by 2.2x. Is leaving that as-is acceptable or is it its own
+   defect?
+5. Anything in the six call sites that would break or silently mis-size if the
+   divisor became band-dependent?
+
+State UNVERIFIABLE (requires X) for anything you cannot check.
+```
+
+**OpenAI Codex Output & Audit Verdict:**
+```markdown
+## P0 / CRITICAL OBJECTIONS
+
+1. **P0 — CONFIRMED:** Current sizing can exceed the declared loss budget for securities whose actual band exceeds 5%. The production path always divides by `0.401` at [risk_calculator.py:162](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:162>) and reports loss using the same constant at [risk_calculator.py:174](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:174>). The proposed band-aware function exists but is not connected to those paths.
+
+2. **P0 — CONFIRMED:** A safe implementation cannot be approved from the supplied band artifact. It is dated 17 September while this review is dated 18 September, contains no archived exchange response/circular identifier, and labels ANLON and VEDAVAAG invalid at [bse_daily_bands.json:197](</C:/Users/yashw/swing trades/shared/bse_daily_bands.json:197>) and [bse_daily_bands.json:228](</C:/Users/yashw/swing trades/shared/bse_daily_bands.json:228>). A numeric `band_pct` must not override `record_valid:false`.
+
+3. **P0 — CONFIRMED:** The live engine obtains a validated `band_pct` but discards it before sizing: it validates the field at [live_signal_engine.py:180](</C:/Users/yashw/swing trades/antigravity/daemons/live_signal_engine.py:180>), then calls the calculator without it at [live_signal_engine.py:231](</C:/Users/yashw/swing trades/antigravity/daemons/live_signal_engine.py:231>). This is a direct provenance break between exchange data and the capital decision.
+
+## Claim review
+
+### Rule 1 capability check
+
+**CONFIRMED, repository and current-process environment scope only.**
+
+- `RULE_1_OBSERVATION_GATE_PASSED` is `False` at [risk_calculator.py:12](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:12>), and `live_shares` is consequently zero at [risk_calculator.py:177](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:177>).
+- No executable first-party import or call to Kite/other broker SDKs, `place_order`, `POST /orders/:variety`, or `api.kite.trade` was found.
+- No environment-variable names associated with Kite, Zerodha, Upstox, Angel, Dhan, Fyers, Alpaca, IBKR, or generic broker credentials were present.
+- The only token-like file found contains the literal placeholder `"your-api-token"`, not a credential.
+- `requests.post` at [telegram_alert_bot.py:41](</C:/Users/yashw/swing trades/antigravity/daemons/telegram_alert_bot.py:41>) targets Telegram messaging, not a broker.
+- Zerodha confirms that actual placement requires `POST /orders/:variety` with API authentication. No such path exists in reviewed first-party code. [Kite Connect order API](https://kite.trade/docs/connect/v3/orders/)
+
+**UNVERIFIABLE (requires: broker account/holdings observation and a host-wide secret scan outside the permitted workspace):** absence of credentials elsewhere on the machine and actual account cash/positions.
+
+### Band classifications and provenance
+
+**CONFIRMED as local-file contents only:** The JSON states CHANDRIMA 2%; CROPSTER, CCDL, GATECH and KINETIC 5%; MOBIKWIK, LOVABLE, ANLON and VEDAVAAG 20%.
+
+**UNVERIFIED — NO TRACEABLE LINEAGE:** These are not established as the official 18 September bands. `"band_source":"API_VERIFIED"` is an assertion, not provenance. The artifact lacks:
+
+- API URL and request parameters;
+- raw response or immutable response hash;
+- exchange publication/circular identifier;
+- ingestion timestamp tied to the current session;
+- an effective-date verification.
+
+ANLON and VEDAVAAG are additionally self-contradictory inputs: each exposes `band_pct:20` while declaring its record invalid because surveillance parsing failed.
+
+BSE’s official framework supports fixed bands up to 20%, with surveillance revisions to 10%, 5%, or 2%; derivative-eligible securities instead use dynamic bands. [BSE Surveillance Master Circular, Item 1.1](https://www.bseindia.com/markets/MarketInfo/DownloadAttach.aspx?attachedId=9ce6001b-bcb5-4d63-a08f-26ab83e2051a&id=20250430-59)
+
+### Q1 — Arithmetic direction and ten-session horizon
+
+**CONFIRMED as implementation provenance:** `0.401` is documented and used as the ten-session 5% divisor at [risk_calculator.py:14](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:14>). The proposed helper computes a band-dependent ten-session loss at [risk_calculator.py:40](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:40>). Whether ten sessions is a suitable risk horizon is quantitative theory and belongs to Claude.
+
+**UNVERIFIABLE (requires: a dated exchange rule or empirical lockout dataset establishing ten sessions for 20%-band securities):** that ten sessions is the correct horizon for MOBIKWIK, LOVABLE, ANLON, or VEDAVAAG. Neither BSE’s fixed-band framework nor the submitted files establish such a horizon. It must not be described as exchange-calibrated for 20% names.
+
+### Q2 — Missing `band_pct`
+
+**CONFIRMED: fail closed.**
+
+A 20% default would invent exchange state and sever provenance. The calculator should require:
+
+- finite, positive `band_pct`;
+- current-session/effective-date validation;
+- `validation.record_valid is True`;
+- traceable exchange source.
+
+Otherwise return zero shares with `INVALID_BAND_PCT` or equivalent. This matches the existing missing-volume refusal at [risk_calculator.py:145](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:145>).
+
+Additionally, `calculate_position_size()` currently defaults `circuit_band_pct` to 5% at [risk_calculator.py:204](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:204>) and then ignores it at [risk_calculator.py:211](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:211>) and [risk_calculator.py:224](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:224>). That silent default must be removed.
+
+### Q3 — Band changes after entry
+
+**CONTRADICTED:** The package conflates fixed-band surveillance changes with intraday dynamic-band flexing.
+
+- BSE fixed-band securities may be reassigned to 10%, 5%, or 2% through surveillance action.
+- Dynamic intraday flexing applies to derivative-eligible securities and proceeds in 5% increments under exchange conditions. [BSE Surveillance Master Circular, Item 1.1](https://www.bseindia.com/markets/MarketInfo/DownloadAttach.aspx?attachedId=9ce6001b-bcb5-4d63-a08f-26ab83e2051a&id=20250430-59)
+- NSE likewise describes system-driven intraday flexing for derivative-eligible securities, with revised ranges broadcast to members. [NSE Price Band/Operating Range Flex FAQ](https://nsearchives.nseindia.com/web/sites/default/files/inline-files/Flexing_of_Operating_Range_2.pdf)
+- Published surveillance transitions ordinarily identify an explicit future effective date. For example, BSE’s ESM notice specifies effective dates for T2T, 2% bands, and periodic call auctions. [BSE ESM notice 20251023-34](https://www.bseindia.com/markets/MarketInfo/DispNewNoticesCirculars.aspx?page=20251023-34)
+
+Therefore a 20%→5% ASM/ESM change should not be called an “intraday dynamic revision” without a scrip-specific notice. It can still invalidate an entry-fixed divisor on a later effective session. Open positions must be reassessed against each session’s effective fixed band.
+
+**UNVERIFIABLE (requires: the dated scrip-specific BSE/NSE notices):** the actual effective transitions for the reviewed names on 17–18 September 2026.
+
+### Q4 — 2% case
+
+Whether conservative under-sizing is acceptable is quantitative policy and belongs to Claude.
+
+**CONFIRMED provenance defect:** Leaving the constant unchanged would make `calibrated_worst_case_10d_loss` factually mislabelled for 2% securities at [risk_calculator.py:188](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:188>). If the system claims band-aware loss, the 2% case must use the validated 2% input. Conservative output does not cure an incorrect label.
+
+### Q5 — Call-site effects
+
+**CONFIRMED:** The mandate’s “six call sites” is incomplete unless it means selected production calls only. The repository also contains tests, audit probes, and demonstrations.
+
+Material production paths:
+
+- [evaluate_monday_offense_and_defense.py:65](</C:/Users/yashw/swing trades/antigravity/analysis/evaluate_monday_offense_and_defense.py:65>) — supplies no band and separately recomputes loss with `0.401` at line 72.
+- [live_signal_engine.py:231](</C:/Users/yashw/swing trades/antigravity/daemons/live_signal_engine.py:231>) — has validated `band_pct` available but does not pass it.
+- [accumulation_screener.py:195](</C:/Users/yashw/swing trades/antigravity/models/accumulation_screener.py:195>) — no band parameter is present in the sizing call.
+- [pre_open_auction_engine.py:186](</C:/Users/yashw/swing trades/antigravity/models/pre_open_auction_engine.py:186>) — no band parameter; also invents a 10,000-share volume fallback at line 185.
+- [risk_calculator.py:211](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:211>) and [risk_calculator.py:224](</C:/Users/yashw/swing trades/antigravity/models/risk_calculator.py:224>) — both internal delegation paths drop `circuit_band_pct`.
+
+Positional callers in [audit_all_track1_files.py:69](</C:/Users/yashw/swing trades/antigravity/analysis/audit_all_track1_files.py:69>) and tests will require explicit migration. A defaulted fourth argument would allow old callers to continue silently mis-sizing; make validated `band_pct` required and preferably keyword-only.
+
+### Live-hours assumption
+
+**UNVERIFIABLE (requires: process/service logs covering a live session):** `runs_during_live_market_hours`.
+
+The engine contains an unrestricted continuous loop at [live_signal_engine.py:362](</C:/Users/yashw/swing trades/antigravity/daemons/live_signal_engine.py:362>), but source code does not prove that it was launched or remained healthy during market hours. It also has no internal exchange-session gate.
+
+BLOCKED (P0: current 5%-only sizing can breach the declared loss budget on wider-band securities, while the proposed wiring lacks current traceable band provenance and multiple production callers discard or never receive band_pct)
+```
+
+---
