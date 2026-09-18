@@ -23,6 +23,7 @@ field cannot silently bypass a subset of readers.
 Fails closed: anything unparseable, unexpected or missing is unusable.
 """
 
+import math
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -30,6 +31,7 @@ from typing import Any, Dict, List, Optional, Tuple
 STALE_STATUSES = frozenset({
     "STALE_TAB_BACKGROUNDED",
     "STALE_DATA_FROZEN",
+    "CONNECTED_NO_DATA",
 })
 
 # A snapshot older than this is dead regardless of its flags: the producer may
@@ -64,14 +66,18 @@ def check_feed(
     Usable means every market-data field in the snapshot may be treated as a
     live quote. Not usable means none of them may be - including watchlist
     LTPs, which is the field that leaked.
+    Fails closed on missing or non-boolean data_valid, unhashable/non-string status,
+    or stale timestamps.
     """
     if not isinstance(snapshot, dict) or not snapshot:
         return False, "NO_SNAPSHOT"
 
-    # data_valid is authoritative when present. Absent means an older producer
-    # wrote the file, so fall through to the legacy flags rather than assume OK.
-    if snapshot.get("data_valid") is False:
-        return False, snapshot.get("invalid_reason") or "DATA_INVALID"
+    # data_valid must be exact Boolean True
+    data_valid = snapshot.get("data_valid")
+    if data_valid is not True:
+        if data_valid is False:
+            return False, snapshot.get("invalid_reason") or "DATA_INVALID"
+        return False, "DATA_VALID_NOT_BOOLEAN_TRUE"
 
     if snapshot.get("is_tab_hidden") is True:
         return False, "TAB_HIDDEN"
@@ -80,8 +86,11 @@ def check_feed(
         return False, "STALE"
 
     status = snapshot.get("status")
-    if status in STALE_STATUSES:
-        return False, status
+    if status is not None:
+        if not isinstance(status, str):
+            return False, "INVALID_STATUS_TYPE"
+        if status in STALE_STATUSES:
+            return False, status
 
     age = snapshot_age_seconds(snapshot, now=now)
     if age is None:
@@ -95,15 +104,35 @@ def check_feed(
 def usable_watchlist(
     snapshot: Any,
     now: Optional[datetime] = None,
-) -> List[Any]:
+) -> List[Dict[str, Any]]:
     """Watchlist entries, or [] when the snapshot is not usable.
 
     multi_stock_radar and track2_live_radar both read watchlist LTPs and label
     them live; routing them through this stops a stale price acquiring a
-    KITE_LIVE stamp.
+    KITE_LIVE stamp. Validates that symbols are non-empty strings and LTPs
+    are finite, positive numbers.
     """
     ok, _ = check_feed(snapshot, now=now)
     if not ok:
         return []
     wl = snapshot.get("watchlist")
-    return wl if isinstance(wl, list) else []
+    if not isinstance(wl, list):
+        return []
+
+    sanitized = []
+    for item in wl:
+        if not isinstance(item, dict):
+            continue
+        sym = item.get("symbol")
+        if not sym or not isinstance(sym, str) or not sym.strip():
+            continue
+        ltp = item.get("ltp")
+        try:
+            ltp_float = float(ltp)
+            if math.isnan(ltp_float) or math.isinf(ltp_float) or ltp_float <= 0:
+                continue
+        except (ValueError, TypeError):
+            continue
+        sanitized.append(item)
+    return sanitized
+

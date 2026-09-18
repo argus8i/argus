@@ -98,7 +98,14 @@ def write_json_atomic(filepath: str, data: Dict[str, Any]):
         json.dump(data, f, indent=2, ensure_ascii=False)
         f.flush()
         os.fsync(f.fileno())
-    os.replace(tmp_path, filepath)
+    for attempt in range(5):
+        try:
+            os.replace(tmp_path, filepath)
+            return
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.02)
 
 
 class FileLock:
@@ -570,9 +577,17 @@ class InboxWorker:
             with FileLock(base_path, timeout_sec=2.0):
                 if not os.path.exists(base_path):
                     return None
-                try:
-                    os.replace(base_path, claimed_path)
-                except OSError:
+                replaced = False
+                for _attempt in range(5):
+                    try:
+                        os.replace(base_path, claimed_path)
+                        replaced = True
+                        break
+                    except PermissionError:
+                        time.sleep(0.02)
+                    except OSError:
+                        return None
+                if not replaced:
                     return None
 
                 try:

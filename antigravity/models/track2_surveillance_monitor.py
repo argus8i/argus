@@ -13,8 +13,10 @@ This monitor verifies daily:
 """
 
 import json
+import math
 import os
 from dataclasses import dataclass, asdict
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 
@@ -71,8 +73,42 @@ class Track2SurveillanceMonitor:
         Evaluates a single Track 2 scrip against surveillance and liquidity criteria.
         Fails closed on any surveillance flag, non-F&O status, fixed circuit band,
         or unverified/missing surveillance check (tri-state enforcement).
+        Enforces strict Boolean types, numeric ranges, and parsed ISO timestamps.
         """
-        # 1. Fail-closed on missing/unverified checks or absent timestamp (DISQUALIFIED_UNKNOWN)
+        # 1. Strict type and bounds verification for numeric and boolean fields
+        if not isinstance(is_fno_underlying, bool):
+            state = Track2SurveillanceState(
+                symbol=symbol,
+                is_fno_underlying=False,
+                asm_stage=asm_stage if isinstance(asm_stage, int) and not isinstance(asm_stage, bool) else None,
+                gsm_stage=gsm_stage if isinstance(gsm_stage, int) and not isinstance(gsm_stage, bool) else None,
+                band_pct=band_pct if isinstance(band_pct, (int, float)) and not math.isnan(band_pct) else 0.0,
+                is_dynamic_flexing=False,
+                date_str=date_str,
+                checked_at=checked_at,
+                status="DISQUALIFIED_UNKNOWN",
+                reason=f"{symbol} is_fno_underlying must be an exact boolean (got {type(is_fno_underlying).__name__}: {is_fno_underlying!r}). Fail-closed."
+            )
+            self._record_state(state)
+            return state
+
+        if not isinstance(band_pct, (int, float)) or math.isnan(band_pct) or math.isinf(band_pct):
+            state = Track2SurveillanceState(
+                symbol=symbol,
+                is_fno_underlying=is_fno_underlying,
+                asm_stage=asm_stage if isinstance(asm_stage, int) and not isinstance(asm_stage, bool) else None,
+                gsm_stage=gsm_stage if isinstance(gsm_stage, int) and not isinstance(gsm_stage, bool) else None,
+                band_pct=0.0,
+                is_dynamic_flexing=False,
+                date_str=date_str,
+                checked_at=checked_at,
+                status="DISQUALIFIED_UNKNOWN",
+                reason=f"{symbol} band_pct must be a valid finite number (got {band_pct!r}). Fail-closed."
+            )
+            self._record_state(state)
+            return state
+
+        # Fail-closed on missing/unverified checks or absent timestamp (DISQUALIFIED_UNKNOWN)
         if asm_stage is None or gsm_stage is None or not checked_at:
             state = Track2SurveillanceState(
                 symbol=symbol,
@@ -89,8 +125,89 @@ class Track2SurveillanceMonitor:
             self._record_state(state)
             return state
 
-        # 1b. Staleness check: checked_at date must match date_str (preventing yesterday's surveillance cache)
-        if not checked_at.startswith(date_str):
+        # Validate asm_stage and gsm_stage types and bounds (exclude bools since isinstance(True, int) is True)
+        if isinstance(asm_stage, bool) or not isinstance(asm_stage, int) or asm_stage < 0 or asm_stage > 4:
+            state = Track2SurveillanceState(
+                symbol=symbol,
+                is_fno_underlying=is_fno_underlying,
+                asm_stage=None,
+                gsm_stage=gsm_stage,
+                band_pct=band_pct,
+                is_dynamic_flexing=False,
+                date_str=date_str,
+                checked_at=checked_at,
+                status="DISQUALIFIED_UNKNOWN",
+                reason=f"{symbol} asm_stage must be an integer between 0 and 4 (got {asm_stage!r}). Fail-closed."
+            )
+            self._record_state(state)
+            return state
+
+        if isinstance(gsm_stage, bool) or not isinstance(gsm_stage, int) or gsm_stage < 0 or gsm_stage > 6:
+            state = Track2SurveillanceState(
+                symbol=symbol,
+                is_fno_underlying=is_fno_underlying,
+                asm_stage=asm_stage,
+                gsm_stage=None,
+                band_pct=band_pct,
+                is_dynamic_flexing=False,
+                date_str=date_str,
+                checked_at=checked_at,
+                status="DISQUALIFIED_UNKNOWN",
+                reason=f"{symbol} gsm_stage must be an integer between 0 and 6 (got {gsm_stage!r}). Fail-closed."
+            )
+            self._record_state(state)
+            return state
+
+        # Strict timestamp validation and date matching
+        if not isinstance(checked_at, str):
+            state = Track2SurveillanceState(
+                symbol=symbol,
+                is_fno_underlying=is_fno_underlying,
+                asm_stage=asm_stage,
+                gsm_stage=gsm_stage,
+                band_pct=band_pct,
+                is_dynamic_flexing=False,
+                date_str=date_str,
+                checked_at=None,
+                status="DISQUALIFIED_UNKNOWN",
+                reason=f"{symbol} checked_at must be a string timestamp. Fail-closed."
+            )
+            self._record_state(state)
+            return state
+
+        parsed_date_str = None
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                parsed_dt = datetime.strptime(checked_at.strip(), fmt)
+                parsed_date_str = parsed_dt.date().isoformat()
+                break
+            except ValueError:
+                pass
+
+        if parsed_date_str is None:
+            try:
+                parsed_dt = datetime.fromisoformat(checked_at.strip().replace("Z", "+00:00"))
+                parsed_date_str = parsed_dt.date().isoformat()
+            except Exception:
+                parsed_date_str = None
+
+        if parsed_date_str is None:
+            state = Track2SurveillanceState(
+                symbol=symbol,
+                is_fno_underlying=is_fno_underlying,
+                asm_stage=asm_stage,
+                gsm_stage=gsm_stage,
+                band_pct=band_pct,
+                is_dynamic_flexing=False,
+                date_str=date_str,
+                checked_at=checked_at,
+                status="DISQUALIFIED_UNKNOWN",
+                reason=f"{symbol} checked_at timestamp '{checked_at}' cannot be parsed as valid ISO or standard datetime. Fail-closed."
+            )
+            self._record_state(state)
+            return state
+
+        if parsed_date_str != date_str:
             state = Track2SurveillanceState(
                 symbol=symbol,
                 is_fno_underlying=is_fno_underlying,
@@ -101,7 +218,7 @@ class Track2SurveillanceMonitor:
                 date_str=date_str,
                 checked_at=checked_at,
                 status="DISQUALIFIED_STALE",
-                reason=f"{symbol} surveillance check is stale (checked_at '{checked_at}' does not match today '{date_str}'). Fail-closed."
+                reason=f"{symbol} surveillance check is stale (checked_at date '{parsed_date_str}' does not match today '{date_str}'). Fail-closed."
             )
             self._record_state(state)
             return state

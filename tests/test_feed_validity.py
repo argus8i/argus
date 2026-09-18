@@ -98,15 +98,36 @@ def test_fails_closed_on_unparseable_timestamp(ts):
     assert ok is False and reason == "NO_TIMESTAMP"
 
 
-def test_missing_data_valid_falls_through_to_legacy_flags():
-    """An older producer may not write data_valid; absence must not mean OK."""
+def test_missing_data_valid_fails_closed():
+    """data_valid must be exact Boolean True; absence or non-bool is rejected."""
     s = snap()
     del s["data_valid"]
-    assert check_feed(s, now=NOW)[0] is True          # otherwise healthy
+    ok, reason = check_feed(s, now=NOW)
+    assert ok is False
+    assert reason == "DATA_VALID_NOT_BOOLEAN_TRUE"
 
-    s2 = snap(is_tab_hidden=True)
-    del s2["data_valid"]
-    assert check_feed(s2, now=NOW)[0] is False        # legacy flag still bites
+    # String "false" or "true" or None must also fail closed
+    assert check_feed(snap(data_valid="false"), now=NOW)[0] is False
+    assert check_feed(snap(data_valid="true"), now=NOW)[0] is False
+    assert check_feed(snap(data_valid=None), now=NOW)[0] is False
+
+
+def test_connected_no_data_is_rejected():
+    """CONNECTED_NO_DATA must be rejected as unusable."""
+    ok, reason = check_feed(snap(status="CONNECTED_NO_DATA"), now=NOW)
+    assert ok is False
+    assert reason == "CONNECTED_NO_DATA"
+
+
+def test_unhashable_status_fails_closed():
+    """List or dict status must not raise TypeError; fails closed with INVALID_STATUS_TYPE."""
+    ok, reason = check_feed(snap(status=["STALE_DATA_FROZEN"]), now=NOW)
+    assert ok is False
+    assert reason == "INVALID_STATUS_TYPE"
+
+    ok2, reason2 = check_feed(snap(status={"status": "LIVE"}), now=NOW)
+    assert ok2 is False
+    assert reason2 == "INVALID_STATUS_TYPE"
 
 
 # --------------------------------------------------------------------------
@@ -120,14 +141,35 @@ def test_watchlist_returned_when_feed_is_healthy():
 
 @pytest.mark.parametrize("over", [
     {"data_valid": False},
+    {"data_valid": "false"},
     {"is_tab_hidden": True},
     {"is_stale": True},
     {"status": "STALE_DATA_FROZEN"},
+    {"status": "CONNECTED_NO_DATA"},
 ])
 def test_watchlist_is_empty_whenever_feed_is_unusable(over):
     """multi_stock_radar stamps these LTPs KITE_LIVE; a stale one must not
     reach that stamp."""
     assert usable_watchlist(snap(**over), now=NOW) == []
+
+
+def test_watchlist_sanitizes_malformed_items():
+    """Rejects items with non-string symbol, zero/negative LTP, NaN or infinity."""
+    malformed_wl = [
+        {"symbol": "GOOD", "ltp": 125.50},
+        {"symbol": "ZERO_PRICE", "ltp": 0.0},
+        {"symbol": "NEG_PRICE", "ltp": -10.0},
+        {"symbol": "NAN_PRICE", "ltp": float("nan")},
+        {"symbol": "INF_PRICE", "ltp": float("inf")},
+        {"symbol": "", "ltp": 50.0},
+        {"symbol": 12345, "ltp": 50.0},
+        "not-a-dict",
+        {"symbol": "BAD_PRICE_STR", "ltp": "garbage"},
+    ]
+    wl = usable_watchlist(snap(watchlist=malformed_wl), now=NOW)
+    assert len(wl) == 1
+    assert wl[0]["symbol"] == "GOOD"
+    assert wl[0]["ltp"] == 125.50
 
 
 def test_watchlist_empty_for_stale_timestamp():

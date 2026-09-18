@@ -168,8 +168,10 @@ def evaluate_radar_state(
                     pass
 
     active_kite_stock = (live_depth.get("active_stock") or "").upper() if feed_ok else ""
-    active_depth = live_depth.get("depth")
-    active_stats = live_depth.get("stats", {})
+    active_depth = live_depth.get("depth") or {}
+    active_stats = live_depth.get("stats") or {}
+    if not isinstance(active_stats, dict):
+        active_stats = {}
 
     for cand in CANDIDATES:
         sym = cand["symbol"]
@@ -187,28 +189,28 @@ def evaluate_radar_state(
         bse_vol = bse_info.get("volume_shares") or 0
         surv = bse_info.get("surveillance", "UNKNOWN")
 
-        # Resolve LTP: prefer Kite Web live tick if available, else BSE LTP
+        # Resolve LTP: prefer Kite Web live tick if available, else BSE LTP (exact symbol match)
         ltp = None
         ltp_source = "NONE"
-        for k_sym, k_ltp in kite_ltps.items():
-            if sym in k_sym or k_sym in sym:
-                ltp = k_ltp
-                ltp_source = "KITE_LIVE"
-                break
+        if sym in kite_ltps:
+            ltp = kite_ltps[sym]
+            ltp_source = "KITE_LIVE"
+        elif raw_bse_ltp is not None:
+            try:
+                ltp = float(raw_bse_ltp)
+                ltp_source = "BSE_OFFICIAL"
+            except (ValueError, TypeError):
+                ltp = None
 
-        if ltp is None and raw_bse_ltp is not None:
-            ltp = float(raw_bse_ltp)
-            ltp_source = "BSE_OFFICIAL"
+        # Baseline volume (20d average) - fail closed if missing, do NOT invent 10,000 baseline
+        avg_20d = avg_20d_vols.get(sym)
 
-        # Baseline volume (20d average)
-        avg_20d = avg_20d_vols.get(sym, 10000.0)
-
-        # Volume resolution (Kite active stock volume or BSE volume)
+        # Volume resolution (Kite active stock volume or BSE volume) - exact symbol match
         current_vol = bse_vol
-        if sym in active_kite_stock:
+        if active_kite_stock and sym == active_kite_stock:
             kite_vol = active_stats.get("volume")
-            if kite_vol and isinstance(kite_vol, int):
-                current_vol = kite_vol
+            if kite_vol is not None and isinstance(kite_vol, (int, float)) and kite_vol >= 0:
+                current_vol = int(kite_vol)
 
         # Headroom to Upper Circuit
         uc_headroom_pct = None
@@ -221,7 +223,7 @@ def evaluate_radar_state(
             day_chg_pct = round(((ltp - prev_close) / prev_close) * 100.0, 2)
 
         # Volume Multiplier
-        vol_multiple = round(current_vol / avg_20d, 2) if avg_20d > 0 else 0.0
+        vol_multiple = round(current_vol / avg_20d, 2) if (avg_20d and avg_20d > 0) else 0.0
 
         # Rule 2: Price Floor Gate (>= Rs. 10.00)
         rule2_pass = bool(ltp and ltp >= 10.00)
@@ -232,7 +234,7 @@ def evaluate_radar_state(
             rule5_max_shares = int(math.floor(risk_budget / (0.401 * ltp)))
 
         # Rule 9: Liquidity Participation Gate (15% max volume over 2 sessions)
-        rule9_max_shares = int(math.floor(2 * 0.15 * avg_20d))
+        rule9_max_shares = int(math.floor(2 * 0.15 * avg_20d)) if (avg_20d and avg_20d > 0) else 0
 
         # Final Approved Combined Paper Shares
         paper_shares = min(rule5_max_shares, rule9_max_shares) if (rule2_pass and rule5_max_shares > 0 and rule9_max_shares > 0) else 0

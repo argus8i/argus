@@ -35,6 +35,7 @@ from antigravity.daemons.inbox_worker import (
     write_json_atomic,
     load_auth_config,
     get_agent_secret_key,
+    compute_envelope_hmac,
 )
 
 
@@ -317,15 +318,23 @@ def test_unresolved_p0_blocks_synthesis(hub_test_env):
     coordinator = AntigravityCoordinator(hub_test_env["workspace"])
 
     # Simulate Claude finding a critical P0 mathematical defect
+    sub_claude = os.path.join(hub_test_env["reviews_dir"], "claude_submission.md")
+    with open(sub_claude, "w", encoding="utf-8") as f:
+        f.write("CRITICAL: P0 defect detected! Formula underestimates 10-day LC drawdown.")
+    sha_claude = compute_sha256(sub_claude)
+
     p0_claude_review = {
+        "task_id": "TASK_P0_TEST",
         "sender": "CLAUDE",
-        "submission_file": "shared/reviews/claude_submission.md",
-        "auth_signature": "sig_claude_12345",
+        "submission_file": os.path.relpath(sub_claude, hub_test_env["workspace"]),
+        "sha256": sha_claude,
         "output_payload": {
             "review_text": "CRITICAL: P0 defect detected! Formula underestimates 10-day LC drawdown.",
             "has_p0_objection": True
         }
     }
+    claude_key = get_agent_secret_key("CLAUDE")
+    p0_claude_review["auth_signature"] = compute_envelope_hmac(p0_claude_review, claude_key)
 
     syn_result = coordinator.synthesize_outcome(
         task_id="TASK_P0_TEST",
@@ -354,24 +363,41 @@ def test_dissent_preservation_in_synthesis(hub_test_env):
     """Antigravity cannot silence reviewer objections; full dissent is preserved."""
     coordinator = AntigravityCoordinator(hub_test_env["workspace"])
 
+    sub_claude = os.path.join(hub_test_env["reviews_dir"], "claude_submission.md")
+    with open(sub_claude, "w", encoding="utf-8") as f:
+        f.write("## Claude Findings\nDissent: Liquidity participation at 15% assumes continuous order book matching.")
+    sha_claude = compute_sha256(sub_claude)
+
     claude_dissent = {
+        "task_id": "TASK_DISSENT_TEST",
         "sender": "CLAUDE",
-        "submission_file": "shared/reviews/claude_submission.md",
-        "auth_signature": "sig_claude_999",
+        "submission_file": os.path.relpath(sub_claude, hub_test_env["workspace"]),
+        "sha256": sha_claude,
         "output_payload": {
             "review_text": "Dissent: Liquidity participation at 15% assumes continuous order book matching.",
             "has_p0_objection": False
         }
     }
+    claude_key = get_agent_secret_key("CLAUDE")
+    claude_dissent["auth_signature"] = compute_envelope_hmac(claude_dissent, claude_key)
+
+    sub_codex = os.path.join(hub_test_env["reviews_dir"], "codex_submission.md")
+    with open(sub_codex, "w", encoding="utf-8") as f:
+        f.write("## Codex Findings\nAudit note: BSE PCAS periodic call auction operates once every 60 minutes.")
+    sha_codex = compute_sha256(sub_codex)
+
     codex_dissent = {
+        "task_id": "TASK_DISSENT_TEST",
         "sender": "CODEX",
-        "submission_file": "shared/reviews/codex_submission.md",
-        "auth_signature": "sig_codex_999",
+        "submission_file": os.path.relpath(sub_codex, hub_test_env["workspace"]),
+        "sha256": sha_codex,
         "output_payload": {
             "review_text": "Audit note: BSE PCAS periodic call auction operates once every 60 minutes.",
             "has_p0_objection": False
         }
     }
+    codex_key = get_agent_secret_key("CODEX")
+    codex_dissent["auth_signature"] = compute_envelope_hmac(codex_dissent, codex_key)
 
     syn_result = coordinator.synthesize_outcome(
         task_id="TASK_DISSENT_TEST",

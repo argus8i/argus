@@ -21,6 +21,8 @@ import sys
 import time
 import json
 import uuid
+import re
+import hmac
 from typing import Any, Dict, List, Optional, Tuple
 
 # Ensure workspace root is in sys.path
@@ -48,6 +50,12 @@ from antigravity.adapters.claude_adapter import (
 from antigravity.adapters.codex_adapter import (
     CodexReviewAdapter,
     ALLOWED_CODEX_REVIEW_TYPES,
+)
+
+COMPOSITE_REVIEW_TYPES = {"HIGH_IMPACT_CORE", "BOTH"}
+ALL_VALID_REVIEW_TYPES = (
+    (ALLOWED_CLAUDE_REVIEW_TYPES | ALLOWED_CODEX_REVIEW_TYPES | COMPOSITE_REVIEW_TYPES)
+    - {"REBUTTAL"}
 )
 
 
@@ -102,8 +110,9 @@ class AntigravityCoordinator:
         """
         Routes review package to the appropriate secondary reviewer(s) based on domain:
         - Mathematics, Microstructure, Adverse Selection -> Claude
-        - Regulatory, Broker Rules, Code Audit -> Codex
-        - High-Impact Core Model Change -> Both Claude and Codex
+        - Regulatory, Broker Rules, Code Audit, Reality/Provenance -> Codex
+        - High-Impact Core Model Change or BOTH -> Both Claude and Codex
+        Fails closed on unknown review types or zero-recipient routing.
         """
         review_type = package.get("requested_review", "HIGH_IMPACT_CORE").upper()
         track = package.get("track", "SHARED")
@@ -119,10 +128,33 @@ class AntigravityCoordinator:
             "errors": []
         }
 
+        # Validate against known allowed review types
+        if review_type not in ALL_VALID_REVIEW_TYPES:
+            results["status"] = "REJECTED_UNKNOWN_TYPE"
+            results["errors"].append(
+                f"Unknown review_type: '{review_type}'. Must be one of {sorted(ALL_VALID_REVIEW_TYPES)}"
+            )
+            return results
+
+        # Determine dispatch targets
+        should_dispatch_claude = (
+            review_type in ALLOWED_CLAUDE_REVIEW_TYPES or review_type in COMPOSITE_REVIEW_TYPES
+        )
+        should_dispatch_codex = (
+            review_type in ALLOWED_CODEX_REVIEW_TYPES or review_type in COMPOSITE_REVIEW_TYPES
+        )
+
+        if not should_dispatch_claude and not should_dispatch_codex:
+            results["status"] = "ZERO_RECIPIENTS"
+            results["errors"].append(f"No reviewers configured for review_type: '{review_type}'")
+            return results
+
         # 1. Dispatch to Claude if relevant
-        if review_type in ["MATHEMATICS", "STATISTICS", "MICROSTRUCTURE", "ADVERSE_SELECTION", "FAILURE_MODES", "HIGH_IMPACT_CORE", "BOTH"]:
+        if should_dispatch_claude:
             claude_pkg = dict(package)
-            claude_pkg["review_type"] = "MICROSTRUCTURE" if review_type == "HIGH_IMPACT_CORE" else review_type
+            claude_pkg["review_type"] = (
+                "MICROSTRUCTURE" if review_type in COMPOSITE_REVIEW_TYPES else review_type
+            )
             claude_pkg["submission_file"] = f"{sub_dir}/claude_submission.md"
 
             success, env, err = self.claude_adapter.execute_review(claude_pkg, timeout_sec)
@@ -133,9 +165,11 @@ class AntigravityCoordinator:
                 results["errors"].append(f"Claude review failed: {err}")
 
         # 2. Dispatch to Codex if relevant
-        if review_type in ["REGULATORY", "CODE_AUDIT", "BROKER_RULES", "SURVEILLANCE", "ENGINEERING", "HIGH_IMPACT_CORE", "BOTH"]:
+        if should_dispatch_codex:
             codex_pkg = dict(package)
-            codex_pkg["review_type"] = "REGULATORY" if review_type == "HIGH_IMPACT_CORE" else review_type
+            codex_pkg["review_type"] = (
+                "REALITY_AUDIT" if review_type in COMPOSITE_REVIEW_TYPES else review_type
+            )
             codex_pkg["submission_file"] = f"{sub_dir}/codex_submission.md"
 
             success, env, err = self.codex_adapter.execute_review(codex_pkg, timeout_sec)
@@ -202,15 +236,20 @@ class AntigravityCoordinator:
         claude_review: Optional[Dict[str, Any]],
         codex_review: Optional[Dict[str, Any]],
         rebuttal_review: Optional[Dict[str, Any]] = None,
-        synthesis_file_rel: str = "shared/reviews/antigravity_synthesis.md"
+        synthesis_file_rel: str = "shared/reviews/antigravity_synthesis.md",
+        review_package: Optional[Dict[str, Any]] = None,
+        account_observation_verified: bool = False
     ) -> Dict[str, Any]:
         """
         Synthesizes primary analysis, secondary reviews, and rebuttals into antigravity_synthesis.md.
         Enforces:
+          - Cryptographic verification of all reviewer envelope HMAC signatures.
+          - On-disk existence and SHA-256 integrity verification of declared artifacts.
+          - Mandatory reviewer presence enforcement based on review_package requested_review.
+          - Task and correlation identity alignment between package and review envelopes.
           - Preservation of all dissents and counterarguments.
-          - Unresolved P0 / Critical objections immediately BLOCK approval.
-          - Rule 8 Tri-Agent Consensus Protocol compliance check.
-          - Rule 1 (100% Cash / Paper Observation only) invariant check.
+          - Unresolved P0 / Critical objections or unauthenticated evidence strictly BLOCK approval.
+          - Rule 1 (100% Cash / Paper Observation) cash state attestation backed by observation log.
         """
         abs_synthesis = os.path.abspath(os.path.join(self.workspace_dir, synthesis_file_rel))
         os.makedirs(os.path.dirname(abs_synthesis), exist_ok=True)
@@ -219,15 +258,117 @@ class AntigravityCoordinator:
         agreed_points = []
         p0_objections_found = False
 
+        # 1. Verify original review package requirements if package provided
+        if review_package:
+            pkg_task_id = review_package.get("task_id")
+            if pkg_task_id and pkg_task_id != task_id:
+                p0_objections_found = True
+                unresolved_objections.append(
+                    f"[Identity Mismatch]: Package task_id '{pkg_task_id}' does not match synthesis task_id '{task_id}'."
+                )
+
+            req_review = review_package.get("requested_review", "HIGH_IMPACT_CORE").upper()
+            if req_review in COMPOSITE_REVIEW_TYPES:
+                if not claude_review:
+                    p0_objections_found = True
+                    unresolved_objections.append(
+                        f"[Missing Required Reviewer]: Claude review is mandatory for '{req_review}' but was not provided."
+                    )
+                if not codex_review:
+                    p0_objections_found = True
+                    unresolved_objections.append(
+                        f"[Missing Required Reviewer]: Codex review is mandatory for '{req_review}' but was not provided."
+                    )
+            elif req_review in ALLOWED_CLAUDE_REVIEW_TYPES and req_review not in ALLOWED_CODEX_REVIEW_TYPES:
+                if not claude_review:
+                    p0_objections_found = True
+                    unresolved_objections.append(
+                        f"[Missing Required Reviewer]: Claude review is mandatory for '{req_review}' but was not provided."
+                    )
+            elif req_review in ALLOWED_CODEX_REVIEW_TYPES and req_review not in ALLOWED_CLAUDE_REVIEW_TYPES:
+                if not codex_review:
+                    p0_objections_found = True
+                    unresolved_objections.append(
+                        f"[Missing Required Reviewer]: Codex review is mandatory for '{req_review}' but was not provided."
+                    )
+
+            # Verify declared artifact hashes in review package
+            declared_hashes = review_package.get("artifact_hashes", {})
+            if isinstance(declared_hashes, dict):
+                for rel_path, expected_hash in declared_hashes.items():
+                    abs_art = os.path.abspath(os.path.join(self.workspace_dir, rel_path))
+                    if not os.path.exists(abs_art):
+                        p0_objections_found = True
+                        unresolved_objections.append(
+                            f"[Artifact Missing]: Declared artifact '{rel_path}' does not exist on disk."
+                        )
+                    else:
+                        actual_hash = compute_sha256(abs_art)
+                        if actual_hash != expected_hash:
+                            p0_objections_found = True
+                            unresolved_objections.append(
+                                f"[Artifact Hash Mismatch]: '{rel_path}' sha256 ({actual_hash[:12]}...) != expected ({expected_hash[:12]}...)."
+                            )
+
+        # 2. Helper to verify each reviewer envelope integrity
+        def _verify_envelope(env: Dict[str, Any], default_sender: str, role_title: str):
+            nonlocal p0_objections_found
+            sender = (env.get("sender") or default_sender).upper()
+            env_task_id = env.get("task_id")
+            if env_task_id and env_task_id != task_id:
+                p0_objections_found = True
+                unresolved_objections.append(
+                    f"[{role_title} Identity Mismatch]: envelope task_id '{env_task_id}' != synthesis task_id '{task_id}'."
+                )
+
+            # HMAC signature verification
+            sig = env.get("auth_signature")
+            if not sig:
+                p0_objections_found = True
+                unresolved_objections.append(f"[{role_title} Unauthenticated]: Missing auth_signature in envelope.")
+            else:
+                key = get_agent_secret_key(sender)
+                if not key:
+                    p0_objections_found = True
+                    unresolved_objections.append(f"[{role_title} Key Missing]: No secret key configured for {sender}.")
+                else:
+                    expected_sig = compute_envelope_hmac(env, key)
+                    if not hmac.compare_digest(sig, expected_sig):
+                        p0_objections_found = True
+                        unresolved_objections.append(f"[{role_title} Signature Invalid]: auth_signature failed HMAC verification.")
+
+            # Submission file & sha256 verification
+            sub_file = env.get("submission_file")
+            if sub_file:
+                abs_sub = os.path.abspath(os.path.join(self.workspace_dir, sub_file))
+                if not os.path.exists(abs_sub):
+                    p0_objections_found = True
+                    unresolved_objections.append(f"[{role_title} Submission Missing]: File '{sub_file}' not found on disk.")
+                elif env.get("sha256"):
+                    actual_sha = compute_sha256(abs_sub)
+                    if actual_sha != env.get("sha256"):
+                        p0_objections_found = True
+                        unresolved_objections.append(f"[{role_title} Artifact Tampered]: '{sub_file}' sha256 does not match envelope sha256.")
+
+            # Inspect payload and verdict
+            payload = env.get("output_payload", {})
+            if payload.get("has_p0_objection"):
+                p0_objections_found = True
+                unresolved_objections.append(f"[{role_title} P0 / Critical Objection]: Blocking risk detected.")
+
+            rev_text = payload.get("review_text", "")
+            if re.search(r"\b(?:VERDICT:\s*(?:BLOCKED|REJECTED)|Verdict:\s*(?:BLOCKED|REJECTED))\b", rev_text, re.I):
+                p0_objections_found = True
+                if not any(f"[{role_title} P0" in o for o in unresolved_objections):
+                    unresolved_objections.append(f"[{role_title} Verdict Blocked]: Review text explicitly states BLOCKED/REJECTED.")
+
         # Inspect Claude Findings
         claude_text = ""
         claude_sig = ""
         if claude_review:
             claude_text = claude_review.get("output_payload", {}).get("review_text", "")
             claude_sig = claude_review.get("auth_signature", "")
-            if claude_review.get("output_payload", {}).get("has_p0_objection"):
-                p0_objections_found = True
-                unresolved_objections.append("[Claude P0 / Critical Quantitative Objection]: Critical risk detected in mathematical or adverse-selection modeling.")
+            _verify_envelope(claude_review, "CLAUDE", "Claude")
 
         # Inspect Codex Findings
         codex_text = ""
@@ -235,20 +376,20 @@ class AntigravityCoordinator:
         if codex_review:
             codex_text = codex_review.get("output_payload", {}).get("review_text", "")
             codex_sig = codex_review.get("auth_signature", "")
-            if codex_review.get("output_payload", {}).get("has_p0_objection"):
-                p0_objections_found = True
-                unresolved_objections.append("[Codex P0 / Critical Audit Objection]: Critical violation detected in regulatory compliance or broker execution rules.")
+            _verify_envelope(codex_review, "CODEX", "Codex")
 
         # Inspect Rebuttal
         rebuttal_text = ""
         if rebuttal_review:
             rebuttal_text = rebuttal_review.get("output_payload", {}).get("review_text", "")
+            reb_sender = rebuttal_review.get("sender", "CODEX")
+            _verify_envelope(rebuttal_review, reb_sender, f"Rebuttal ({reb_sender})")
 
         # Determine Decision
         if p0_objections_found:
             decision = "BLOCKED"
             confidence = "LOW"
-            decision_rationale = "Proposal is strictly BLOCKED due to unresolved P0 / Critical objections raised by independent reviewers."
+            decision_rationale = f"Proposal is strictly BLOCKED due to {len(unresolved_objections)} unresolved objections or verification failures."
         elif not claude_review and not codex_review:
             decision = "INCOMPLETE"
             confidence = "NONE"
@@ -256,7 +397,18 @@ class AntigravityCoordinator:
         else:
             decision = "PASSED"
             confidence = "HIGH"
-            decision_rationale = "Secondary reviews completed with verified signatures and zero blocking P0 objections."
+            decision_rationale = "Secondary reviews completed with verified signatures, matching artifact hashes, and zero blocking P0 objections."
+
+        rule1_attestation = (
+            "VERIFIED (Backed by authorized account observation log)."
+            if account_observation_verified
+            else "UNVERIFIED (No live account observation attached; paper observation only)."
+        )
+        rule8_attestation = (
+            "Cross-agent peer review recorded and cryptographically verified."
+            if decision == "PASSED"
+            else "Cross-agent peer review recorded; cryptographic verification FAILED, BLOCKED, or INCOMPLETE."
+        )
 
         synthesis_md = f"""# Antigravity Synthesis: {task_id}
 **Orchestrator:** Antigravity (Primary Operating Environment)  
@@ -307,8 +459,8 @@ class AntigravityCoordinator:
 - **Decision:** **{decision}**
 - **Confidence Level:** **{confidence}**
 - **Rationale:** {decision_rationale}
-- **Rule 1 Verification (100% Cash / Paper Observation Gate):** VERIFIED (Zero real capital deployed).
-- **Rule 8 Tri-Agent Protocol:** Cross-agent peer review recorded and signed.
+- **Rule 1 Verification (100% Cash / Paper Observation Gate):** {rule1_attestation}
+- **Rule 8 Tri-Agent Protocol:** {rule8_attestation}
 - **Rule 11 Track Isolation:** Enforced fail-closed on {track}.
 """
         # Write synthesis file atomically
@@ -342,3 +494,4 @@ class AntigravityCoordinator:
             "synthesis_envelope": synthesis_envelope,
             "unresolved_objections": unresolved_objections
         }
+
