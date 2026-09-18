@@ -195,7 +195,8 @@ class AccumulationScreener:
         sizing = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(
             rupees_willing_to_lose=rupees_risk_budget,
             stock_price=latest.close,
-            daily_volume=latest.volume
+            daily_volume=latest.volume,
+            band_pct=ticker.circuit_band_pct,
         )
         if sizing["max_shares"] <= 0:
             return False, f"FAILED: Position sizing returned 0 shares ({sizing.get('constrained_by')}: {sizing.get('error')})", None

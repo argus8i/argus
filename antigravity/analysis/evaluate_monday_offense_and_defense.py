@@ -65,7 +65,8 @@ def generate_playbook():
         sizing = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(
             rupees_willing_to_lose=5000.0,
             stock_price=cl,
-            daily_volume=avg_20d  # Using baseline 20-day volume
+            daily_volume=avg_20d,  # Using baseline 20-day volume
+            band_pct=band,
         )
         shares = sizing.get("max_shares", 0)
         deployed_rs = round(shares * cl, 2)

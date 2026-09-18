@@ -571,3 +571,101 @@ class TestMalformedInputProbeSuite:
         finally:
             if os.path.exists(hist_file):
                 os.remove(hist_file)
+
+
+class TestRule5BandAwareSizing:
+    """Rule 5 divisor must follow the scrip's actual circuit band.
+
+    Before this, RULE_5_TEN_DAY_LC_DIVISOR = 0.401 (a 5% figure, 1 - 0.95^10)
+    was applied to every scrip. Four of the eight Track 1 names band at 20%,
+    where the true divisor is 1 - 0.80^10 = 0.8926, so a Rs 5,000 budget bought
+    Rs 12,469 of stock whose ten-session lockout loss is Rs 11,130 - 2.23x the
+    budget. Both Claude and Codex returned BLOCKED (P0); see
+    shared/reviews/antigravity_synthesis.md (TASK_RULE5_BAND_AWARE_DIVISOR).
+    """
+
+    def test_divisor_matches_band(self):
+        from antigravity.models.risk_calculator import ten_day_lc_divisor
+        assert ten_day_lc_divisor(5) == pytest.approx(0.4012630608, abs=1e-9)
+        assert ten_day_lc_divisor(2) == pytest.approx(0.1829271931, abs=1e-9)
+        assert ten_day_lc_divisor(20) == pytest.approx(0.8926258176, abs=1e-9)
+
+    def test_five_percent_band_is_unchanged_from_the_legacy_constant(self):
+        """The correct case must not move: 0.401 was right for 5%."""
+        from antigravity.models.risk_calculator import CircuitRiskCalculator
+        r = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(
+            5000.0, 20.0, 1_000_000, band_pct=5.0
+        )
+        assert r["constrained_by"] == "CAPITAL_RISK_RULE_5"
+        assert r["max_shares"] == 623          # 5000 / 0.4013 // 20
+        assert r["calibrated_worst_case_10d_loss"] <= 5000.0
+
+    def test_two_percent_band_no_longer_undersizes(self):
+        """0.401 under-sized a 2% band scrip by 2.19x."""
+        from antigravity.models.risk_calculator import CircuitRiskCalculator
+        r = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(
+            5000.0, 20.0, 1_000_000, band_pct=2.0
+        )
+        assert r["max_shares"] == 1366
+        assert r["calibrated_worst_case_10d_loss"] <= 5000.0
+
+    def test_twenty_percent_band_is_refused_under_rule_11(self):
+        """AGENTS.md Rule 11 limits Track 1 to fixed bands (2%, 5%). A 20%
+        scrip is not a Track 1 instrument, so it is refused rather than sized
+        with a merely 'corrected' divisor."""
+        from antigravity.models.risk_calculator import CircuitRiskCalculator
+        r = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(
+            5000.0, 20.0, 1_000_000, band_pct=20.0
+        )
+        assert r["max_shares"] == 0
+        assert r["live_shares"] == 0
+        assert r["constrained_by"] == "RULE_11_BAND_INELIGIBLE"
+
+    @pytest.mark.parametrize("bad_band", [
+        None, 0, 100, -5, float("nan"), float("inf"), "5", True,
+    ])
+    def test_missing_or_invalid_band_fails_closed(self, bad_band):
+        """Mirrors Rule 9's INVALID_DAILY_VOLUME. Defaulting to any band would
+        either oversize a wide-band scrip or silently under-size a tight one."""
+        from antigravity.models.risk_calculator import CircuitRiskCalculator
+        r = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(
+            5000.0, 20.0, 1_000_000, band_pct=bad_band
+        )
+        assert r["max_shares"] == 0
+        assert r["constrained_by"] == "INVALID_BAND_PCT"
+
+    def test_band_is_keyword_only_so_old_positional_calls_cannot_inherit_a_default(self):
+        """A 3-positional-argument caller must fail closed loudly, not silently
+        pick up a phantom band."""
+        from antigravity.models.risk_calculator import CircuitRiskCalculator
+        r = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(
+            5000.0, 20.0, 1_000_000
+        )
+        assert r["constrained_by"] == "INVALID_BAND_PCT"
+
+    def test_circuit_band_pct_is_no_longer_a_dead_parameter(self):
+        """calculate_position_size declared circuit_band_pct and never read it,
+        so any caller believing it supplied band-awareness was sized at 0.401."""
+        from antigravity.models.risk_calculator import CircuitRiskCalculator
+        wide = CircuitRiskCalculator.calculate_position_size(
+            stock_price=20.0, rupees_willing_to_lose=5000.0,
+            daily_volume=1_000_000, circuit_band_pct=20.0,
+        )
+        assert wide["max_shares"] == 0
+        assert wide["constrained_by"] == "RULE_11_BAND_INELIGIBLE"
+
+        tight = CircuitRiskCalculator.calculate_position_size(
+            stock_price=20.0, rupees_willing_to_lose=5000.0,
+            daily_volume=1_000_000, circuit_band_pct=2.0,
+        )
+        assert tight["max_shares"] == 1366
+
+    def test_worst_case_loss_never_exceeds_the_stated_budget(self):
+        """The whole point of Rule 5: the modelled tail must stay inside the
+        rupees the trader agreed to lose."""
+        from antigravity.models.risk_calculator import CircuitRiskCalculator
+        for band in (2.0, 5.0):
+            r = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(
+                5000.0, 20.0, 1_000_000, band_pct=band
+            )
+            assert r["calibrated_worst_case_10d_loss"] <= 5000.0, (band, r["calibrated_worst_case_10d_loss"])

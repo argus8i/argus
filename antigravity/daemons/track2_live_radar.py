@@ -485,7 +485,8 @@ class Track2LiveRadar:
         positions_cfg = [
             {"sym": "BDL", "shares": 54, "entry": 1130.15, "initial_sl": 1108.30, "target": 1173.85, "risk": 21.85},
             {"sym": "INOXWIND", "shares": 1282, "entry": 74.43, "initial_sl": 73.65, "target": 76.05, "risk": 0.78},
-            {"sym": "CDSL", "shares": 38, "entry": 1332.90, "initial_sl": 1300.00, "target": 1398.85, "risk": 32.90}
+            {"sym": "CDSL", "shares": 38, "entry": 1332.90, "initial_sl": 1300.00, "target": 1398.85, "risk": 32.90},
+            {"sym": "SUZLON", "shares": 2238, "entry": 43.31, "initial_sl": 42.76, "target": 44.14, "risk": 0.55}
         ]
         price_map = {c["symbol"]: c["current_price"] for c in results if c.get("current_price")}
         max_price_map = {c["symbol"]: (c.get("max_post_high") or c.get("current_price")) for c in results}
@@ -601,7 +602,8 @@ class Track2LiveRadar:
         positions = [
             {"sym": "BDL", "shares": 54, "entry": 1130.15, "initial_sl": 1108.30, "target": 1173.85, "risk": 21.85},
             {"sym": "INOXWIND", "shares": 1282, "entry": 74.43, "initial_sl": 73.65, "target": 76.05, "risk": 0.78},
-            {"sym": "CDSL", "shares": 38, "entry": 1332.90, "initial_sl": 1300.00, "target": 1398.85, "risk": 32.90}
+            {"sym": "CDSL", "shares": 38, "entry": 1332.90, "initial_sl": 1300.00, "target": 1398.85, "risk": 32.90},
+            {"sym": "SUZLON", "shares": 2238, "entry": 43.31, "initial_sl": 42.76, "target": 44.14, "risk": 0.55}
         ]
 
         price_map = {c["symbol"]: c["current_price"] for c in payload["candidates"] if c.get("current_price")}

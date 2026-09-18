@@ -36,6 +36,19 @@ RULE_5_TEN_DAY_LC_DIVISOR: float = 0.401
 # behaviour and the overshoot above is REAL for any 10%/20% band scrip.
 TEN_DAY_LC_SESSIONS: int = 10
 
+# AGENTS.md Rule 11: Track 1 "applies exclusively to micro-caps (Mcap < INR 500
+# Cr) under fixed circuit bands (2%, 5%)". Anything wider is out of scope for
+# this model, not merely differently calibrated, so it is refused rather than
+# sized with a "corrected" divisor.
+RULE_11_TRACK1_PERMITTED_BANDS = frozenset({2.0, 5.0})
+
+# SCOPE, per Tri-Agent consensus (TASK_RULE5_BAND_AWARE_DIVISOR): Rule 5 sizing
+# is an ENTRY-TIME calculation. It does not defend against a band WIDENING
+# mid-hold. Rule 6 covers band TIGHTENING (20->10, 10->5) with an immediate
+# freeze and exit; a widening while held is covered by neither rule, so
+# calculated_worst_case_10d_loss means "worst case under the band in force at
+# entry", not a guarantee maintained for the life of the position.
+
 
 def ten_day_lc_divisor(band_pct: float, sessions: int = TEN_DAY_LC_SESSIONS) -> float:
     """Cumulative fractional loss after `sessions` consecutive lower circuits.
@@ -75,6 +88,8 @@ class CircuitRiskCalculator:
         rupees_willing_to_lose: float,
         stock_price: float,
         daily_volume: int,
+        *,
+        band_pct: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Calculates maximum permitted position size strictly under AGENTS.md Rule 1, Rule 2, Rule 5 & Rule 9.
         
@@ -159,7 +174,60 @@ class CircuitRiskCalculator:
                 "observation_gate_passed": RULE_1_OBSERVATION_GATE_PASSED,
             }
 
-        max_position_rupees = rupees_willing_to_lose / RULE_5_TEN_DAY_LC_DIVISOR
+        # Rule 5: band is mandatory. Fail closed exactly as Rule 9 does for a
+        # missing daily_volume. Defaulting to any band would either oversize a
+        # wide-band scrip or silently under-size a tight one, and a caller must
+        # not be able to omit it by accident: band_pct is keyword-only, so an
+        # old three-positional-argument call cannot inherit a phantom default.
+        if (
+            band_pct is None
+            or isinstance(band_pct, bool)
+            or not isinstance(band_pct, (int, float))
+            or not math.isfinite(band_pct)
+            or not 0.0 < band_pct < 100.0
+        ):
+            return {
+                "rupees_willing_to_lose": rupees_willing_to_lose,
+                "stock_price": stock_price,
+                "max_shares": 0,
+                "paper_shares": 0,
+                "live_shares": 0,
+                "constrained_by": "INVALID_BAND_PCT",
+                "error": (
+                    "band_pct is mandatory under Rule 5 and must be a finite "
+                    "percentage in (0, 100). A caller holding a band record "
+                    "with validation.record_valid == false must pass nothing, "
+                    "so sizing fails closed rather than trusting it."
+                ),
+                "observation_gate_passed": RULE_1_OBSERVATION_GATE_PASSED,
+            }
+
+        # Rule 11: Track 1 applies exclusively to micro-caps under FIXED bands
+        # (2%, 5%). A 20% band scrip is not a Track 1 instrument at all, so the
+        # ten-consecutive-LC model does not merely mis-calibrate for it, it does
+        # not apply. Refuse rather than size it with a "corrected" divisor.
+        if float(band_pct) not in RULE_11_TRACK1_PERMITTED_BANDS:
+            return {
+                "rupees_willing_to_lose": rupees_willing_to_lose,
+                "stock_price": stock_price,
+                "max_shares": 0,
+                "paper_shares": 0,
+                "live_shares": 0,
+                "band_pct": band_pct,
+                "constrained_by": "RULE_11_BAND_INELIGIBLE",
+                "error": (
+                    f"band {band_pct}% is outside Track 1's permitted fixed "
+                    f"bands {sorted(RULE_11_TRACK1_PERMITTED_BANDS)} "
+                    "(AGENTS.md Rule 11). Not a Track 1 instrument."
+                ),
+                "observation_gate_passed": RULE_1_OBSERVATION_GATE_PASSED,
+            }
+
+        # Band-aware divisor. At 5% this is 0.4013, identical to the legacy
+        # constant; at 2% it is 0.1829, correcting a 2.19x under-size.
+        lc_divisor = ten_day_lc_divisor(band_pct)
+
+        max_position_rupees = rupees_willing_to_lose / lc_divisor
         capital_max_shares = int(max_position_rupees // stock_price)
         
         liquidity_max_shares = int(2.0 * 0.15 * daily_volume)
@@ -171,12 +239,14 @@ class CircuitRiskCalculator:
             max_shares = capital_max_shares
 
         actual_rupees = round(max_shares * stock_price, 2)
-        worst_case_loss = round(actual_rupees * RULE_5_TEN_DAY_LC_DIVISOR, 2)
+        worst_case_loss = round(actual_rupees * lc_divisor, 2)
 
         # Rule 1 Enforcement: live shares are permanently 0 during observation phase
         live_shares = max_shares if RULE_1_OBSERVATION_GATE_PASSED else 0
 
         return {
+            "band_pct": band_pct,
+            "lc_divisor": round(lc_divisor, 6),
             "rupees_willing_to_lose": rupees_willing_to_lose,
             "max_position_rupees": round(max_position_rupees, 2),
             "stock_price": stock_price,
@@ -211,7 +281,10 @@ class CircuitRiskCalculator:
             res = cls.calculate_max_safe_position_by_10day_lc(
                 rupees_willing_to_lose=rupees_willing_to_lose,
                 stock_price=stock_price,
-                daily_volume=vol
+                daily_volume=vol,
+                # Previously declared and silently dropped: any caller passing
+                # circuit_band_pct was sized at the flat 0.401 regardless.
+                band_pct=circuit_band_pct,
             )
             # Add compatibility keys
             res["recommended_shares"] = res["max_shares"]
@@ -224,7 +297,8 @@ class CircuitRiskCalculator:
         res = cls.calculate_max_safe_position_by_10day_lc(
             rupees_willing_to_lose=risk_budget,
             stock_price=stock_price,
-            daily_volume=vol
+            daily_volume=vol,
+            band_pct=circuit_band_pct,
         )
         res["recommended_shares"] = res["max_shares"]
         res["capital_deployed"] = res.get("actual_capital_deployed", 0.0)

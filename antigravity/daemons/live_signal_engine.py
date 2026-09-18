@@ -231,7 +231,8 @@ def analyze_live_ticker(
     sizing_info = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(
         rupees_willing_to_lose=rupees_risk_budget,
         stock_price=ltp,
-        daily_volume=day_volume
+        daily_volume=day_volume,
+        band_pct=band_pct,
     )
     tentative_shares = sizing_info.get("max_shares", 0)
 

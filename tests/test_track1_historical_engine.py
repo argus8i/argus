@@ -251,15 +251,29 @@ def test_pre_open_auction_engine():
     )
     assert r_spoof.action == PreOpenAction.ABORT_HIGH_SPOOF_RISK
 
-    # 5. Test clean qualified pre-open breakout
+    # 5. Test clean qualified pre-open breakout.
+    # Band is 5%: AGENTS.md Rule 11 restricts Track 1 to fixed bands (2%, 5%),
+    # so this fixture previously asserted a successful size on a 20% scrip that
+    # is not a Track 1 instrument at all. Sizing now refuses that, correctly.
+    # At a 5% band the UC is 105, so the indicative price must leave the
+    # engine's minimum 3% headroom: 101.0 leaves 3.96%.
     r_clean = PreOpenAuctionEngine.evaluate_auction_snapshot(
-        symbol="CLEAN", scripcode="500005", prev_close=100.0, circuit_band_pct=20.0,
-        indicative_price=102.0, indicative_bids=30000, indicative_offers=20000, avg_20d_volume=50000
+        symbol="CLEAN", scripcode="500005", prev_close=100.0, circuit_band_pct=5.0,
+        indicative_price=101.0, indicative_bids=30000, indicative_offers=20000, avg_20d_volume=50000
     )
     assert r_clean.action == PreOpenAction.SUBMIT_PRE_OPEN_LIMIT
-    assert r_clean.recommended_limit_price >= 102.0
+    assert r_clean.recommended_limit_price >= 101.0
     assert r_clean.recommended_shares > 0
     assert "09:00:01" in r_clean.queue_priority_window
+
+    # 6. A 20% band scrip must size to zero: ineligible under Rule 11, not
+    # merely mis-calibrated. Before the band-aware wiring this sized at the
+    # flat 0.401 divisor, permitting 2.23x the Rule 5 loss budget.
+    r_wide = PreOpenAuctionEngine.evaluate_auction_snapshot(
+        symbol="WIDEBAND", scripcode="500006", prev_close=100.0, circuit_band_pct=20.0,
+        indicative_price=102.0, indicative_bids=30000, indicative_offers=20000, avg_20d_volume=50000
+    )
+    assert r_wide.recommended_shares == 0
 
 
 def test_delivery_absorption_analyzer():

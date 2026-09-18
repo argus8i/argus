@@ -181,12 +181,15 @@ class PreOpenAuctionEngine:
         recommended_price = min(round(iep + 2 * cls.TICK_SIZE, 2), round(uc - 3 * cls.TICK_SIZE, 2))
         recommended_price = max(recommended_price, iep)
 
-        # Position Sizing under Rule 5 (0.401) & Rule 9 (avg_20d baseline)
+        # Position Sizing under Rule 5 (band-aware divisor) & Rule 9 (avg_20d
+        # baseline). The band is passed through: this engine already knew it and
+        # previously sized every scrip at the flat 5% divisor of 0.401.
         effective_vol = avg_20d_volume if avg_20d_volume and avg_20d_volume > 0 else 10000
         sizing = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(
             rupees_willing_to_lose=risk_budget_rupees,
             stock_price=recommended_price,
-            daily_volume=effective_vol
+            daily_volume=effective_vol,
+            band_pct=circuit_band_pct,
         )
         shares = sizing.get("max_shares", 0)
 
