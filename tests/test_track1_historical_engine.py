@@ -354,10 +354,19 @@ def test_multi_stock_radar_evaluation():
     assert res["LOVABLE"]["status"] == "DISQUALIFIED_SUB_10"
     assert res["LOVABLE"]["paper_shares"] == 0
 
-    # 3. Test Rule 5 Risk Sizing calibration: Rs 5,000 / (0.401 * LTP)
-    # For ANLON at Rs 21.00: 5000 / (0.401 * 21) = 593 shares
-    expected_r5 = int(math.floor(5000.0 / (0.401 * 21.0)))
-    assert res["ANLON"]["rule5_shares"] == expected_r5
+    # 3. Rule 5 sizing is band-aware and delegated to CircuitRiskCalculator.
+    # ANLON bands at 20%, which AGENTS.md Rule 11 excludes from Track 1
+    # (fixed bands 2%, 5% only), so it must size to zero. This previously
+    # asserted 5000/(0.401*21) = 593 shares against a local duplicate of the
+    # rule that kept its own hardcoded 5% divisor.
+    assert res["ANLON"]["band_pct"] == 20.0
+    assert res["ANLON"]["rule5_shares"] == 0
+    assert res["ANLON"]["paper_shares"] == 0
+
+    # KINETIC bands at 5%, is eligible, and keeps the classic 0.401 divisor.
+    from antigravity.models.risk_calculator import ten_day_lc_divisor
+    expected_kinetic = int(math.floor(5000.0 / (ten_day_lc_divisor(5.0) * 230.0)))
+    assert res["KINETIC"]["rule5_shares"] == expected_kinetic
 
     # 4. Test Rule 9 Liquidity Cap calibration: 2 * 0.15 * 50,000 = 15,000 shares
     assert res["ANLON"]["rule9_shares"] == int(math.floor(2 * 0.15 * 50000))

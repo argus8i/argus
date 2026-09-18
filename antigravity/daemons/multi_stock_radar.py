@@ -15,7 +15,8 @@ Features:
   - Real-time quantitative calculations:
       * Upper Circuit Headroom %
       * Rule 2 Absolute Rs.10.00 Floor Gate
-      * Rule 5 10-Day LC Drawdown Position Sizing (Risk Divisor = 0.401)
+      * Rule 5 10-Day LC Drawdown Position Sizing (band-aware divisor, delegated
+        to CircuitRiskCalculator; Rule 11 restricts Track 1 to 2%/5% bands)
       * Rule 9 Market Participation Cap (15% volume over 2 sessions)
       * Surveillance Freeze & Band Tightening Alerts (Rule 6 & Rule 10)
   - Non-flickering, color-coded terminal dashboard updating every 1.5 seconds.
@@ -40,6 +41,7 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from antigravity.daemons.feed_validity import check_feed, usable_watchlist
+from antigravity.models.risk_calculator import CircuitRiskCalculator
 
 SHARED_DIR = os.path.join(REPO_ROOT, "shared")
 LOGS_DIR = os.path.join(REPO_ROOT, "antigravity", "logs")
@@ -228,10 +230,22 @@ def evaluate_radar_state(
         # Rule 2: Price Floor Gate (>= Rs. 10.00)
         rule2_pass = bool(ltp and ltp >= 10.00)
 
-        # Rule 5: Position Sizing (Risk Divisor = 0.401 for 10-day LC descent)
+        # Rule 5: Position Sizing. Delegated to CircuitRiskCalculator rather
+        # than recomputed here. This previously carried its own hardcoded 0.401
+        # divisor, so the radar on screen kept showing 20%-band sizes (ANLON
+        # 605 shares) after the canonical model had been corrected to refuse
+        # them: the same rule implemented twice, only one of them fixed.
         rule5_max_shares = 0
         if ltp and ltp > 0:
-            rule5_max_shares = int(math.floor(risk_budget / (0.401 * ltp)))
+            _sizing = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(
+                rupees_willing_to_lose=risk_budget,
+                stock_price=ltp,
+                daily_volume=avg_20d if (avg_20d and avg_20d > 0) else 1,
+                band_pct=band_pct,
+            )
+            rule5_max_shares = _sizing.get("capital_max_shares", 0) or 0
+            if _sizing.get("constrained_by") in ("RULE_11_BAND_INELIGIBLE", "INVALID_BAND_PCT"):
+                rule5_max_shares = 0
 
         # Rule 9: Liquidity Participation Gate (15% max volume over 2 sessions)
         rule9_max_shares = int(math.floor(2 * 0.15 * avg_20d)) if (avg_20d and avg_20d > 0) else 0
@@ -353,7 +367,7 @@ def format_radar_screen(evaluated_data: Dict[str, Any], last_updated: str) -> st
     lines.append(f"{CLR_DIM}{'-'*100}{CLR_RESET}")
     lines.append(f"{CLR_BOLD}EXECUTION GATES (Strict AGENTS.md Precedence):{CLR_RESET}")
     lines.append(f"  {CLR_GREEN}* Rule 1 (Paper Only):{CLR_RESET} Live order submission locked. Sizing logged to CHATGPT/observation_log.csv.")
-    lines.append(f"  {CLR_YELLOW}* Rule 5 (LC Risk):{CLR_RESET} Rs.5,000 budget / 0.401 drawdown divisor (10-day LC descent buffer).")
+    lines.append(f"  {CLR_YELLOW}* Rule 5 (LC Risk):{CLR_RESET} Rs.5,000 budget / band-aware 10-day LC divisor (1-(1-band)^10: 0.183 at 2%, 0.401 at 5%). Rule 11 permits only 2%/5% bands in Track 1; wider bands size to 0.")
     lines.append(f"  {CLR_CYAN}* Rule 9 (Liquidity):{CLR_RESET} Capped at 15% participation of 20-day volume over 2 exit sessions.")
     lines.append(f"  {CLR_RED}* Rule 3 (No Chasing):{CLR_RESET} Orders rejected if Headroom <= 0.2% (Upper Circuit locked).")
     lines.append(f"{CLR_BOLD}{CLR_CYAN}===================================================================================================={CLR_RESET}")
