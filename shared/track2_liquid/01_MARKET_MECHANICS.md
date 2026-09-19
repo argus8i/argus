@@ -63,7 +63,37 @@ $$\text{Quantity} = \min\left(\left\lfloor \frac{\text{Risk Budget}}{\text{Risk 
 
 ---
 
-## 5. Trade Horizons & Exits
-1. **Intraday (MIS):** Square off at 15:15 IST if target or stop is not hit.
-2. **Short-Term Swing (CNC):** Hold for 2 to 4 sessions. Trailing stop anchored to intraday VWAP or daily 9-EMA, targeting +6% to +12% momentum moves.
+## 5. Trade Horizons & Exits (Two-Tranche Model V2.0)
+To eliminate premature trade churn caused by moving 100% of a position to breakeven, V2.0 automatically partitions every qualified entry into two distinct tranches:
+1. **Tranche 1 (50% Shares, rounded up):** Fixed +1.5R to +2.0R Profit-Banking Tranche.
+   - When price reaches $+1.0R$, stop moves to breakeven (`entry_price`).
+   - When price reaches Target 1 ($+1.5R$), Tranche 1 executes and locks in guaranteed gross profit.
+2. **Tranche 2 (50% Shares, rounded down):** Multi-Day CNC Swing Runner.
+   - Once Tranche 1 reaches $+1.0R$ or hits Target 1, Tranche 2 stop is raised to breakeven (`entry_price`). Downside risk on the total trade becomes ₹0.00.
+   - Tranche 2 then trails dynamically on:
+     $$\text{Stop}_{\text{Tranche 2}} = \max(\text{Entry Price}, \text{Previous Day's Low}, \text{Peak Price} - 1.5 \times \text{Daily ATR})$$
+   - Allows runners (e.g. `CDSL`) to capture $+15\%$ to $+30\%$ multi-week trend expansions without choking on intraday pullbacks.
+
+---
+
+## 6. Market Regime & Breadth Filter (`MarketRegimeFilter`)
+Before admitting any long Opening Range Breakout at 09:30 IST, the engine evaluates broader market conditions:
+1. **Index Trend:** Nifty 50 15-minute Opening Range (09:15–09:30 IST):
+   - $\text{Nifty LTP} < \text{Nifty OR Low} \implies$ `DISTRIBUTION_GATED`: All long breakouts are immediately rejected (`HOLD_REJECT_MARKET_DISTRIBUTION`).
+2. **Advance/Decline Breadth:**
+   - $\text{A/D Ratio} < 1.0 \implies$ `DISTRIBUTION_GATED`: Negative market breadth aborts long entries.
+   - $\text{A/D Ratio} \ge 1.20$ and $\text{Nifty} > \text{OR High} \implies$ `BULLISH_EXPANSION`: Standard $2.5\times$ volume confirmation active.
+   - Neutral / inside range $\implies$ `NEUTRAL_SELECTIVE`: Elevated $3.5\times$ volume confirmation required.
+
+---
+
+## 7. Dynamic Universe Discovery & Circular Automation
+1. **Dynamic 09:15 IST Pre-Market Scanner (`Track2UniverseScanner`):**
+   - Ranks the most volatile, active F&O underlyings by:
+     $$\text{Score} = \left(\frac{\text{Pre-Open Volume}}{\text{10D Median Pre-Open Volume}}\right) \times \text{Beta} \times \left(1 + \frac{|\text{Gap \%}|}{10}\right)$$
+   - Emits the top 8 candidates to `shared/track2_liquid/dynamic_universe.json`.
+   - Fail-Closed Fallback: Automatically falls back to canonical Baskets A & B if dynamic pool is $< 4$ scrips.
+2. **Automated 19:00 IST Exchange Circular Poller (`ExchangeCircularPoller`):**
+   - Automatically ingests daily BSE/NSE ASM/GSM and F&O inclusion/exclusion bulletins every evening.
+   - Guarantees zero scrips under surveillance or outside derivatives enter Track 2, enforcing 100% compliance 14 hours before market pre-open.
 

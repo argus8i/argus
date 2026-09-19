@@ -47,6 +47,9 @@ from antigravity.daemons.feed_validity import check_feed, usable_watchlist
 
 from antigravity.models.liquid_momentum_screener import LiquidMomentumEngine, SizingResult
 from antigravity.models.track2_surveillance_monitor import Track2SurveillanceMonitor
+from antigravity.models.market_regime_filter import MarketRegimeFilter, MarketRegimeSnapshot, MarketRegimeState
+from antigravity.models.two_tranche_exit_model import TwoTrancheExitModel, TwoTrancheState, TrancheAllocation, TrancheStatus
+from antigravity.models.track2_universe_scanner import Track2UniverseScanner, DYNAMIC_UNIVERSE_PATH
 
 SHARED_DIR = os.path.join(REPO_ROOT, "shared", "track2_liquid")
 LOGS_DIR = os.path.join(REPO_ROOT, "antigravity", "logs")
@@ -308,10 +311,51 @@ class Track2LiveRadar:
             except Exception:
                 pass
 
+        # Load Dynamic Universe if available, otherwise use canonical TRACK2_UNIVERSE
+        active_universe = TRACK2_UNIVERSE
+        if os.path.exists(DYNAMIC_UNIVERSE_PATH):
+            try:
+                with open(DYNAMIC_UNIVERSE_PATH, "r", encoding="utf-8") as uf:
+                    u_data = json.load(uf)
+                    if u_data.get("candidates"):
+                        active_universe = [
+                            {
+                                "symbol": c["symbol"],
+                                "ticker": c.get("ticker", f"{c['symbol']}.NS"),
+                                "basket": c.get("basket", "DYNAMIC"),
+                                "series": "EQ",
+                                "is_fno": True,
+                                "mcap_cr": c.get("mcap_cr", 25000.0),
+                                "dtv_med20_cr": c.get("dtv_med20_cr", 100.0),
+                                "beta": c.get("beta", 1.5),
+                                "atr14_pct": c.get("atr14_pct", 4.0),
+                                "inst_pct": c.get("inst_pct", 20.0),
+                            }
+                            for c in u_data["candidates"]
+                        ]
+            except Exception:
+                active_universe = TRACK2_UNIVERSE
+
+        # Ingest Market Regime Filter (Nifty 50 15m OR and Breadth)
+        regime_snapshot = None
+        try:
+            n_candles = fetch_15m_candles("^NSEI", range_str="5d")
+            n_day = [c for c in n_candles if c[0].strftime("%Y-%m-%d") == target_date_str]
+            if n_day:
+                n_or = [c for c in n_day if c[0].strftime("%H:%M") == "09:15"]
+                if n_or:
+                    regime_snapshot = MarketRegimeFilter.evaluate_regime(
+                        nifty_ltp=n_day[-1][4],
+                        nifty_or_high=n_or[0][2],
+                        nifty_or_low=n_or[0][3]
+                    )
+        except Exception:
+            regime_snapshot = None
+
         results = []
         now_dt = datetime.now()
 
-        for scrip in TRACK2_UNIVERSE:
+        for scrip in active_universe:
             sym = scrip["symbol"]
             ticker = scrip["ticker"]
             basket = scrip["basket"]
@@ -432,7 +476,8 @@ class Track2LiveRadar:
                     bucket_volume=p_vol,
                     historical_bucket_volume_median=hist_med_vol,
                     atr14_intraday=atr_pts,
-                    min_volume_multiple=2.5
+                    min_volume_multiple=2.5,
+                    regime_snapshot=regime_snapshot
                 )
 
                 if eval_res["volume_ratio"] > best_vol_ratio:
@@ -525,6 +570,24 @@ class Track2LiveRadar:
                 active_sl = p["initial_sl"]
                 state_lbl = "IN_RANGE_HOLD"
 
+            # Two-Tranche Exit Model Evaluation (V2.0)
+            try:
+                t_alloc = TwoTrancheExitModel.allocate_tranches(
+                    entry_price=p["entry"],
+                    stop_price=p["initial_sl"],
+                    total_shares=p["shares"],
+                    target_1_rr=1.5
+                )
+                two_t = TwoTrancheExitModel.update_state(
+                    symbol=sym,
+                    allocation=t_alloc,
+                    ltp=ltp,
+                    peak_price=max_p
+                )
+                two_t_dict = two_t.to_dict()
+            except Exception:
+                two_t_dict = None
+
             active_portfolio.append({
                 "symbol": sym,
                 "shares": p["shares"],
@@ -533,7 +596,8 @@ class Track2LiveRadar:
                 "mtm_pnl": round(mtm, 2),
                 "active_sl": round(active_sl, 2),
                 "target_price": p["target"],
-                "state": state_lbl
+                "state": state_lbl,
+                "two_tranche": two_t_dict
             })
 
         output_payload = {
@@ -542,6 +606,7 @@ class Track2LiveRadar:
             "gate_status": "OBSERVATION_ONLY_RULE_1",
             "risk_budget_rs": self.risk_budget_rs,
             "max_notional_rs": self.max_notional_rs,
+            "market_regime": regime_snapshot.to_dict() if regime_snapshot else None,
             "surveillance_audit": surv_report,
             "active_portfolio": active_portfolio,
             "total_portfolio_mtm": round(total_mtm, 2),
@@ -551,7 +616,7 @@ class Track2LiveRadar:
         # Save to JSON
         os.makedirs(os.path.dirname(RADAR_STATUS_PATH), exist_ok=True)
         with open(RADAR_STATUS_PATH, "w", encoding="utf-8") as f:
-            json.dump(output_payload, f, indent=2)
+            json.dump(output_payload, f, indent=2, default=str)
 
         return output_payload
 
@@ -565,6 +630,16 @@ class Track2LiveRadar:
         print(f"\n{CLR_BG_BLUE}{CLR_WHITE}{CLR_BOLD} TRACK 2: LIQUID HIGH-BETA MOMENTUM TERMINAL RADAR {CLR_RESET}")
         print(f"{CLR_DIM}Date: {date_str} | Generated: {gen_time} | Mode: 100% Cash (Rule 1 Paper Gate){CLR_RESET}")
         print(f"{CLR_DIM}Strategy: 15-Minute ORB (09:15-09:30) | Risk Budget: Rs {payload['risk_budget_rs']:,.2f} | Max Notional: Rs {payload['max_notional_rs']:,.2f}{CLR_RESET}")
+
+        # Market Regime Banner
+        regime_info = payload.get("market_regime")
+        if regime_info:
+            r_st = regime_info.get("state")
+            r_clr = CLR_GREEN if r_st == "BULLISH_EXPANSION" else (CLR_YELLOW if r_st == "NEUTRAL_SELECTIVE" else CLR_RED)
+            print(f"{r_clr}{CLR_BOLD}Market Regime: {r_st} | {regime_info.get('reason')}{CLR_RESET}")
+        else:
+            print(f"{CLR_DIM}Market Regime: Standby / Pre-Market (Evaluating at 09:30 IST){CLR_RESET}")
+
         print("=" * 115)
         print(f"{'BASKET':<8} {'SYMBOL':<12} {'LTP':<10} {'OR LOW':<10} {'OR HIGH':<10} {'MAX HIGH':<10} {'VOL RATIO':<11} {'SIGNAL':<24} {'SIZING'}")
         print("-" * 115)
@@ -583,7 +658,7 @@ class Track2LiveRadar:
             # Color coding
             if sig == "BUY_ORB_CONFIRMED":
                 sig_str = f"{CLR_GREEN}{CLR_BOLD}{sig}{CLR_RESET}"
-            elif sig in ["HOLD_REJECT_OVEREXTENDED", "HOLD_REJECT_FALSE_BREAKOUT"]:
+            elif sig in ["HOLD_REJECT_OVEREXTENDED", "HOLD_REJECT_FALSE_BREAKOUT", "HOLD_REJECT_MARKET_DISTRIBUTION"]:
                 sig_str = f"{CLR_YELLOW}{sig}{CLR_RESET}"
             elif sig == "WAIT_IN_RANGE":
                 sig_str = f"{CLR_CYAN}{sig}{CLR_RESET}"
@@ -599,24 +674,14 @@ class Track2LiveRadar:
 
         print("=" * 115)
         kite_count = sum(1 for c in payload["candidates"] if c.get("feed_source") == "KITE_OMS_OFFICIAL")
-        feed_lbl = f"{CLR_GREEN}Zerodha Kite Direct OMS ({kite_count}/8 scrips){CLR_RESET}" if kite_count > 0 else "Yahoo Finance Backup"
-        print(f"{CLR_DIM}Surveillance Gate: 8/8 Clean F&O Underlyings (Zero ASM/GSM) | * = Live Kite Tick | Primary Feed: {feed_lbl}{CLR_RESET}\n")
+        feed_lbl = f"{CLR_GREEN}Zerodha Kite Direct OMS ({kite_count} scrips){CLR_RESET}" if kite_count > 0 else "Yahoo Finance Backup"
+        print(f"{CLR_DIM}Surveillance Gate: 100% Clean F&O Underlyings (Zero ASM/GSM) | * = Live Kite Tick | Primary Feed: {feed_lbl}{CLR_RESET}\n")
 
-        # In-Flight Portfolio & Trailing Stop Monitor
-        positions = [
-            {"sym": "BDL", "shares": 54, "entry": 1130.15, "initial_sl": 1108.30, "target": 1173.85, "risk": 21.85},
-            {"sym": "INOXWIND", "shares": 1282, "entry": 74.43, "initial_sl": 73.65, "target": 76.05, "risk": 0.78},
-            {"sym": "CDSL", "shares": 38, "entry": 1332.90, "initial_sl": 1300.00, "target": 1398.85, "risk": 32.90},
-            {"sym": "SUZLON", "shares": 2238, "entry": 43.31, "initial_sl": 42.76, "target": 44.14, "risk": 0.55}
-        ]
-
-        price_map = {c["symbol"]: c["current_price"] for c in payload["candidates"] if c.get("current_price")}
-        max_price_map = {c["symbol"]: (c.get("max_post_high") or c.get("current_price")) for c in payload["candidates"]}
-
-        print(f"{CLR_BG_BLUE}{CLR_WHITE}{CLR_BOLD} TRACK 2: ACTIVE IN-FLIGHT PORTFOLIO & RISK MONITOR {CLR_RESET}")
-        print("-" * 115)
-        print(f"{'SYMBOL':<10} {'SHARES':<8} {'ENTRY':<10} {'LTP':<10} {'MTM P&L':<15} {'ACTIVE SL':<18} {'TARGET':<10} {'RISK STATE'}")
-        print("-" * 115)
+        # In-Flight Portfolio & Trailing Stop Monitor (Two-Tranche V2.0)
+        print(f"{CLR_BG_BLUE}{CLR_WHITE}{CLR_BOLD} TRACK 2: ACTIVE IN-FLIGHT PORTFOLIO & TWO-TRANCHE RISK MONITOR {CLR_RESET}")
+        print("-" * 125)
+        print(f"{'SYMBOL':<10} {'SHARES':<8} {'ENTRY':<10} {'LTP':<10} {'MTM P&L':<15} {'T1 (BANK PROFIT)':<24} {'T2 (SWING RUNNER)':<24} {'RISK STATE'}")
+        print("-" * 125)
 
         portfolio = payload.get("active_portfolio", [])
         total_mtm = payload.get("total_portfolio_mtm", 0.0)
@@ -625,29 +690,31 @@ class Track2LiveRadar:
             sym = p["symbol"]
             ltp = p["ltp"]
             mtm = p["mtm_pnl"]
-            active_sl = p["active_sl"]
-            target = p["target_price"]
-            state = p["state"]
+            two_t = p.get("two_tranche")
 
-            if state == "15:15_MIS_SQUARE_OFF_DUE":
-                state_str = f"{CLR_YELLOW}{CLR_BOLD}15:15 MIS SQUARE-OFF DUE{CLR_RESET}"
-            elif state == "TRAILED_TO_BREAKEVEN_ZERO_RISK":
-                state_str = f"{CLR_GREEN}{CLR_BOLD}+1R TRAILED TO BE (0 Risk){CLR_RESET}"
-            elif state == "STOP_LOSS_HIT":
-                state_str = f"{CLR_RED}{CLR_BOLD}STOP LOSS HIT{CLR_RESET}"
-            elif state == "CRITICAL_STOP_WATCH":
-                state_str = f"{CLR_YELLOW}{CLR_BOLD}CRITICAL STOP WATCH{CLR_RESET}"
+            if two_t:
+                t1_desc = f"{two_t['t1_shares']}sh Tgt {two_t['t1_target']:.1f} [{two_t['t1_status'][:6]}]"
+                t2_desc = f"{two_t['t2_shares']}sh SL {two_t['t2_active_sl']:.1f} [{two_t['t2_status'][:6]}]"
+                state_lbl = two_t.get("combined_risk_state", p["state"])
             else:
-                state_str = f"{CLR_CYAN}IN RANGE (HOLD){CLR_RESET}"
+                t1_desc = f"Target: {p['target_price']}"
+                t2_desc = f"SL: {p['active_sl']}"
+                state_lbl = p["state"]
+
+            if "BANKED" in state_lbl or "TRAILED" in state_lbl:
+                state_str = f"{CLR_GREEN}{CLR_BOLD}{state_lbl}{CLR_RESET}"
+            elif "STOP" in state_lbl:
+                state_str = f"{CLR_RED}{CLR_BOLD}{state_lbl}{CLR_RESET}"
+            else:
+                state_str = f"{CLR_CYAN}{state_lbl}{CLR_RESET}"
 
             mtm_clr = CLR_GREEN if mtm >= 0 else CLR_RED
             mtm_str = f"{mtm_clr}{'+' if mtm >= 0 else ''}Rs {mtm:,.2f}{CLR_RESET}"
-            active_sl_str = f"{active_sl:.2f} (BE)" if state == "TRAILED_TO_BREAKEVEN_ZERO_RISK" else f"{active_sl:.2f}"
-            print(f"{sym:<10} {p['shares']:<8} Rs {p['entry_price']:<7.2f} Rs {ltp:<7.2f} {mtm_str:<24} Rs {active_sl_str:<15} Rs {target:<7.2f} {state_str}")
+            print(f"{sym:<10} {p['shares']:<8} Rs {p['entry_price']:<7.2f} Rs {ltp:<7.2f} {mtm_str:<24} {t1_desc:<24} {t2_desc:<24} {state_str}")
 
-        print("-" * 115)
+        print("-" * 125)
         tot_clr = CLR_GREEN if total_mtm >= 0 else CLR_RED
-        print(f"Total Net Portfolio MTM: {tot_clr}{CLR_BOLD}{'+' if total_mtm >= 0 else ''}Rs {total_mtm:,.2f}{CLR_RESET} | Capital State: 100% Cash (Observation Gate 3/60)\n")
+        print(f"Total Net Portfolio MTM: {tot_clr}{CLR_BOLD}{'+' if total_mtm >= 0 else ''}Rs {total_mtm:,.2f}{CLR_RESET} | Capital State: 100% Cash (Observation Gate 4/60)\n")
 
 
 def append_session_summary_to_logs(payload: Dict[str, Any]):

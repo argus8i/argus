@@ -10,8 +10,16 @@ Collaborative Architecture:
 """
 
 import math
+import os
+import sys
 from dataclasses import dataclass
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
+
+# Ensure repository root is on sys.path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+
+from antigravity.models.two_tranche_exit_model import TwoTrancheExitModel, TrancheAllocation
+from antigravity.models.market_regime_filter import MarketRegimeFilter, MarketRegimeSnapshot, MarketRegimeState
 
 
 @dataclass
@@ -42,6 +50,7 @@ class SizingResult:
     risk_reward_ratio: float
     constrained_by: str
     provenance: str = "DERIVED (Rule 5 fixed risk arithmetic)"
+    tranche_allocation: Optional[TrancheAllocation] = None
 
 
 class LiquidMomentumEngine:
@@ -148,12 +157,14 @@ class LiquidMomentumEngine:
         bucket_volume: float,
         historical_bucket_volume_median: float,
         atr14_intraday: float,
-        min_volume_multiple: float = 2.5
+        min_volume_multiple: float = 2.5,
+        regime_snapshot: Optional[MarketRegimeSnapshot] = None
     ) -> Dict[str, any]:
         """
         Evaluates 15-minute Opening Range Breakout (09:15 - 09:30 range).
         Fails closed on missing, NaN, or non-positive metrics.
         Enforces maximum breakout extension ceiling (rejects chases > 0.5 * ATR14 above OR high).
+        Enforces Market Regime Filter (rejects longs on distribution, adjusts dynamic volume multiple).
         """
         for v in [current_price, or_high, or_low, bucket_volume, historical_bucket_volume_median]:
             if v is None or not isinstance(v, (int, float)) or math.isnan(v) or v <= 0:
@@ -167,6 +178,30 @@ class LiquidMomentumEngine:
                 }
 
         volume_ratio = bucket_volume / historical_bucket_volume_median
+
+        # Check Market Regime Gate
+        if regime_snapshot is not None:
+            if regime_snapshot.state == MarketRegimeState.DISTRIBUTION_GATED:
+                return {
+                    "symbol": symbol,
+                    "signal": "HOLD_REJECT_MARKET_DISTRIBUTION",
+                    "reason": f"REJECTED: Broad market in distribution ({regime_snapshot.reason}). All long breakouts gated.",
+                    "volume_ratio": round(volume_ratio, 2),
+                    "or_high": or_high,
+                    "or_low": or_low
+                }
+            if regime_snapshot.state == MarketRegimeState.REGIME_DATA_INVALID:
+                return {
+                    "symbol": symbol,
+                    "signal": "NO_ENTRY_DATA_INVALID",
+                    "reason": f"FAIL-CLOSED: Market regime data invalid ({regime_snapshot.reason}).",
+                    "volume_ratio": round(volume_ratio, 2),
+                    "or_high": or_high,
+                    "or_low": or_low
+                }
+            if regime_snapshot.min_volume_multiple > min_volume_multiple:
+                min_volume_multiple = regime_snapshot.min_volume_multiple
+
         is_breakout = current_price > or_high
         is_volume_confirmed = volume_ratio >= min_volume_multiple
 
@@ -294,6 +329,16 @@ class LiquidMomentumEngine:
         # Dynamic Realized Risk:Reward (A3 Defense)
         realized_rr = round(reward_per_share / (entry_price - effective_exit_price), 3) if (entry_price - effective_exit_price) > 0 else 0.0
 
+        # Two-Tranche Allocation
+        tranche_alloc = None
+        if qty > 0:
+            tranche_alloc = TwoTrancheExitModel.allocate_tranches(
+                entry_price=entry_price,
+                stop_price=effective_exit_price,
+                total_shares=qty,
+                target_1_rr=1.5
+            )
+
         return SizingResult(
             shares=qty,
             notional_value=round(final_notional, 2),
@@ -303,7 +348,8 @@ class LiquidMomentumEngine:
             order_type=order_type,
             limit_exit_price=limit_exit_price,
             risk_reward_ratio=realized_rr,
-            constrained_by=constraint
+            constrained_by=constraint,
+            tranche_allocation=tranche_alloc
         )
 
 
