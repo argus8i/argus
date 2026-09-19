@@ -183,11 +183,12 @@ def evaluate_radar_state(
         risk_budget = cand["risk_budget"]
 
         bse_info = bse_data.get(sym, {})
+        bse_valid = bse_info.get("validation", {}).get("record_valid", True) if bse_info else False
         raw_bse_ltp = bse_info.get("ltp")
         prev_close = bse_info.get("prev_close")
         uc = bse_info.get("upper_circuit")
         lc = bse_info.get("lower_circuit")
-        band_pct = bse_info.get("band_pct")
+        band_pct = bse_info.get("band_pct") if bse_valid else None
         bse_vol = bse_info.get("volume_shares") or 0
         surv = bse_info.get("surveillance", "UNKNOWN")
 
@@ -240,7 +241,7 @@ def evaluate_radar_state(
             _sizing = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(
                 rupees_willing_to_lose=risk_budget,
                 stock_price=ltp,
-                daily_volume=avg_20d if (avg_20d and avg_20d > 0) else 1,
+                daily_volume=avg_20d if (avg_20d and avg_20d > 0) else 0,
                 band_pct=band_pct,
             )
             rule5_max_shares = _sizing.get("capital_max_shares", 0) or 0

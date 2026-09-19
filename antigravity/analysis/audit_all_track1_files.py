@@ -66,24 +66,29 @@ def run_audit():
         assert math.isclose(RULE_5_TEN_DAY_LC_DIVISOR, 0.401, abs_tol=1e-3)
         
         # Test edge cases: Sub-Rs 10, None, NaN, 0
-        r_sub10 = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(5000, 9.99, 50000)
+        r_sub10 = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(5000, 9.99, 50000, band_pct=5.0)
         assert r_sub10["max_shares"] == 0
         assert r_sub10["constrained_by"] == "RULE_2_DISQUALIFIED_SUB_10"
         
-        r_nan = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(float("nan"), 20.0, 50000)
+        r_nan = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(float("nan"), 20.0, 50000, band_pct=5.0)
         assert r_nan["max_shares"] == 0
         
-        r_zero_vol = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(5000, 20.0, 0)
+        r_zero_vol = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(5000, 20.0, 0, band_pct=5.0)
         assert r_zero_vol["max_shares"] == 0
         
-        # Normal sizing: Rs 5,000 budget at Rs 20 stock, 100k volume
-        # Capital max: (5000 / 0.401) // 20 = 12468 // 20 = 623 shares
+        # Test missing band fails closed under Rule 5
+        r_no_band = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(5000, 20.0, 100000)
+        assert r_no_band["max_shares"] == 0
+        assert r_no_band["constrained_by"] == "INVALID_BAND_PCT"
+
+        # Normal sizing: Rs 5,000 budget at Rs 20 stock, 100k volume, 5% band
+        # Capital max: (5000 / 0.40126) // 20 = 12460 // 20 = 623 shares
         # Liquidity max: 2 * 0.15 * 100000 = 30000 shares
-        r_norm = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(5000, 20.0, 100000)
+        r_norm = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(5000, 20.0, 100000, band_pct=5.0)
         assert r_norm["max_shares"] == 623
         assert r_norm["constrained_by"] == "CAPITAL_RISK_RULE_5"
         
-        print("  [OK] risk_calculator.py: 0.401 divisor and sizing constraints clean.")
+        print("  [OK] risk_calculator.py: 0.401 divisor, band-awareness, and sizing constraints clean.")
     except Exception as e:
         findings.append(f"risk_calculator.py failed: {e}\n{traceback.format_exc()}")
 
@@ -194,11 +199,11 @@ def run_audit():
     try:
         from antigravity.models.pre_open_auction_engine import PreOpenAuctionEngine, PreOpenAction
         res_auc = PreOpenAuctionEngine.evaluate_auction_snapshot(
-            symbol="TEST", scripcode="500123", prev_close=50.0, circuit_band_pct=20.0,
-            indicative_price=51.0, indicative_bids=30000, indicative_offers=20000, avg_20d_volume=40000
+            symbol="TEST", scripcode="500123", prev_close=50.0, circuit_band_pct=5.0,
+            indicative_price=50.50, indicative_bids=30000, indicative_offers=20000, avg_20d_volume=40000
         )
         assert res_auc.action == PreOpenAction.SUBMIT_PRE_OPEN_LIMIT
-        assert res_auc.recommended_limit_price >= 51.0
+        assert res_auc.recommended_limit_price >= 50.50
         print("  [OK] pre_open_auction_engine.py: Pre-open equilibrium calculation and sniping logic clean.")
     except Exception as e:
         findings.append(f"pre_open_auction_engine.py failed: {e}\n{traceback.format_exc()}")

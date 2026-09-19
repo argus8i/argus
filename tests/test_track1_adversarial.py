@@ -52,11 +52,22 @@ class TestRiskCalculatorDefects:
             rupees_willing_to_lose=2000.0,
             stock_price=25.0,
             daily_volume=500000,
+            circuit_band_pct=5.0,
         )
         assert "max_shares" in res
         assert res["live_shares"] == 0  # Rule 1 observation gate
         assert res["paper_shares"] > 0
         assert res["observation_gate_passed"] is False
+
+    def test_calculate_position_size_fails_closed_without_band(self):
+        """Rule 5 & Rule 11: omitting circuit_band_pct must fail closed with INVALID_BAND_PCT."""
+        res = CircuitRiskCalculator.calculate_position_size(
+            rupees_willing_to_lose=2000.0,
+            stock_price=25.0,
+            daily_volume=500000,
+        )
+        assert res["max_shares"] == 0
+        assert res["constrained_by"] == "INVALID_BAND_PCT"
 
     def test_risk_calculator_fails_closed_on_invalid_inputs(self):
         """Non-positive price, budget, or volume must fail closed."""

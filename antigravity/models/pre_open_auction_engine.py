@@ -182,9 +182,8 @@ class PreOpenAuctionEngine:
         recommended_price = max(recommended_price, iep)
 
         # Position Sizing under Rule 5 (band-aware divisor) & Rule 9 (avg_20d
-        # baseline). The band is passed through: this engine already knew it and
-        # previously sized every scrip at the flat 5% divisor of 0.401.
-        effective_vol = avg_20d_volume if avg_20d_volume and avg_20d_volume > 0 else 10000
+        # baseline). Fails closed on missing or non-positive baseline volume.
+        effective_vol = avg_20d_volume if (avg_20d_volume and avg_20d_volume > 0) else 0
         sizing = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(
             rupees_willing_to_lose=risk_budget_rupees,
             stock_price=recommended_price,
@@ -192,6 +191,29 @@ class PreOpenAuctionEngine:
             band_pct=circuit_band_pct,
         )
         shares = sizing.get("max_shares", 0)
+
+        if shares <= 0:
+            constrained = sizing.get("constrained_by", "DISQUALIFIED")
+            err = sizing.get("error", "Position sizing returned 0 shares under Rule 5/Rule 9/Rule 11.")
+            action = PreOpenAction.DATA_INVALID if "INVALID" in constrained else PreOpenAction.WAIT_FOR_CONTINUOUS
+            return PreOpenAuctionResult(
+                symbol=symbol,
+                scripcode=scripcode,
+                prev_close=prev_close,
+                upper_circuit=uc,
+                lower_circuit=lc,
+                band_pct=circuit_band_pct,
+                indicative_price=iep,
+                indicative_bids=bids,
+                indicative_offers=offers,
+                imbalance_ratio=imbalance_ratio,
+                headroom_pct=headroom_pct,
+                action=action,
+                recommended_limit_price=None,
+                recommended_shares=0,
+                queue_priority_window="NONE",
+                rationale=f"Pre-Open Disqualified: Sizing returned 0 shares ({constrained}: {err})"
+            )
 
         return PreOpenAuctionResult(
             symbol=symbol,

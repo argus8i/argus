@@ -271,7 +271,7 @@ class CircuitRiskCalculator:
         max_pct_of_daily_volume: float = 1.0,
         rupees_willing_to_lose: Optional[float] = None,
         daily_volume: Optional[int] = None,
-        circuit_band_pct: Optional[float] = 5.0,
+        circuit_band_pct: Optional[float] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """Calculates position size. Supports both legacy capital-pct and Rule 5/9 risk-budget signatures."""
@@ -292,8 +292,13 @@ class CircuitRiskCalculator:
             res["portfolio_allocation_pct"] = round((res["capital_deployed"] / max(total_capital, 1.0)) * 100, 2)
             return res
 
-        # Fallback to total_capital budget
-        risk_budget = total_capital * (max_capital_allocation_pct / 100.0) * (RULE_5_TEN_DAY_LC_DIVISOR)
+        # Fallback to total_capital budget: divisor matches validated band
+        divisor = (
+            ten_day_lc_divisor(circuit_band_pct)
+            if (circuit_band_pct is not None and circuit_band_pct in RULE_11_TRACK1_PERMITTED_BANDS)
+            else RULE_5_TEN_DAY_LC_DIVISOR
+        )
+        risk_budget = total_capital * (max_capital_allocation_pct / 100.0) * divisor
         res = cls.calculate_max_safe_position_by_10day_lc(
             rupees_willing_to_lose=risk_budget,
             stock_price=stock_price,
@@ -364,11 +369,12 @@ class CircuitRiskCalculator:
 if __name__ == "__main__":
     print("--- CIRCUIT RISK CALCULATOR DEMONSTRATION ---")
 
-    # 1. Rule 5 Calibration: Willing to lose Rs 5,000 on a trade
+    # 1. Rule 5 Calibration: Willing to lose Rs 5,000 on a trade (5% band)
     rule5_sizing = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(
         rupees_willing_to_lose=5000.0,
         stock_price=25.00,
         daily_volume=100000,
+        band_pct=5.0,
     )
     print("Rule 5 (10-Day LC Worst-Case Sizing for Rs. 5,000 Risk):")
     for k, v in rule5_sizing.items():
@@ -379,6 +385,7 @@ if __name__ == "__main__":
         total_capital=100000,
         stock_price=1.32,
         avg_daily_volume=20000000,
+        circuit_band_pct=5.0,
     )
     print("\nRule 2 Sub-Rs 10 Check for CCDL:")
     print(f"  Result: {sub10_check['constrained_by']} | Error: {sub10_check.get('error')}")
@@ -395,11 +402,12 @@ if __name__ == "__main__":
     print(f"  Capital after {trap['consecutive_lc_days']} LC days: Rs. {trap['end_capital']}")
     print(f"  Total Loss: -Rs. {trap['total_loss_inr']} ({trap['loss_pct']}%)")
 
-    # 4. Combined Rule 5 & Rule 9 Check: CHANDRIMA (Rs 20,000 risk, but only 6,355 daily volume)
+    # 4. Combined Rule 5 & Rule 9 Check: CHANDRIMA (Rs 20,000 risk, 2% band, 6,355 daily volume)
     chandrima_size = CircuitRiskCalculator.calculate_max_safe_position_by_10day_lc(
         rupees_willing_to_lose=20000.0,
         stock_price=12.23,
         daily_volume=6355,
+        band_pct=2.0,
     )
     print(f"\nRule 5 + Rule 9 Combined Sizing (CHANDRIMA):")
     print(f"  Capital limit: {chandrima_size['capital_max_shares']:,} sh | Liquidity limit (2d @ 15%): {chandrima_size['liquidity_max_shares']:,} sh")

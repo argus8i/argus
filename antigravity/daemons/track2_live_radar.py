@@ -497,8 +497,12 @@ class Track2LiveRadar:
 
         for p in positions_cfg:
             sym = p["sym"]
-            ltp = price_map.get(sym, p["entry"])
-            max_p = max_price_map.get(sym, ltp)
+            ltp = price_map.get(sym)
+            if ltp is None:
+                ltp = p["entry"]
+            max_p = max_price_map.get(sym)
+            if max_p is None:
+                max_p = ltp
             mtm = (ltp - p["entry"]) * p["shares"]
             total_mtm += mtm
             peak_gain_per_sh = max_p - p["entry"]

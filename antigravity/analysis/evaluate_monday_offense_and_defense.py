@@ -70,7 +70,8 @@ def generate_playbook():
         )
         shares = sizing.get("max_shares", 0)
         deployed_rs = round(shares * cl, 2)
-        worst_loss_rs = round(deployed_rs * 0.401, 2)
+        worst_loss_rs = sizing.get("calibrated_worst_case_10d_loss", 0.0)
+        lc_divisor = sizing.get("lc_divisor")
         
         # 2. OFFENSE MODULE 1: Pre-Open Auction Sniping Plan
         # Calculate simulated indicative auction response at equilibrium
@@ -109,6 +110,8 @@ def generate_playbook():
             "shares": shares,
             "deployed_rs": deployed_rs,
             "worst_loss_rs": worst_loss_rs,
+            "lc_divisor": lc_divisor,
+            "band_pct": band,
             "auction": auction_eval,
             "delivery": deliv_eval
         })
@@ -139,13 +142,16 @@ def generate_playbook():
         sh = e["shares"]
         dep = e["deployed_rs"]
         wl = e["worst_loss_rs"]
+        div = e.get("lc_divisor")
+        b_pct = e.get("band_pct")
         auc = e["auction"]
         deliv = e["delivery"]
         
+        div_str = f"{div:.4f} divisor" if div else "ineligible band"
         auc_plan = f"Limit: ₹{auc.recommended_limit_price:.2f} ({auc.queue_priority_window})" if auc.recommended_limit_price else auc.action.value
         deliv_plan = f"{deliv.verdict.value} ({deliv.delivery_pct:.0f}% deliv, {deliv.vol_expansion_ratio:.1f}x vol)"
         
-        lines.append(f"| **{cd}** | {sy} | `{gp}` | ₹{cl:.2f} | **{sh} shares** (₹{dep:,}) | **₹{wl:,}** (0.401 divisor) | **{auc_plan}** | **{deliv_plan}** |")
+        lines.append(f"| **{cd}** | {sy} | `{gp}` | ₹{cl:.2f} | **{sh} shares** (₹{dep:,}) | **₹{wl:,}** ({div_str}) | **{auc_plan}** | **{deliv_plan}** |")
         
     lines.extend([
         "",

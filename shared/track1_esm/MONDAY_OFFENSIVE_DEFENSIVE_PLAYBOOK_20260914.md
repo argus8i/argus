@@ -10,11 +10,11 @@
 
 | Scrip Code | Symbol | Group | Friday Close | Sizing (Rule 5 & 9) | Max Loss Airbag | Offense 1: Pre-Open Auction Sniping | Offense 2: Delivery Absorption Footprint |
 |---|---|---|---|---|---|---|---|
-| **544305** | One Mobikwik Systems Ltd. | `B` | ₹209.55 | **59 shares** (₹12,363.45) | **₹4,957.74** (0.401 divisor) | **Limit: ₹212.71 (09:00:01 - 09:04:59 IST)** | **NORMAL_TRADING (70% deliv, 21.0x vol)** |
-| **533343** | Lovable Lingerie Ltd. | `B` | ₹72.16 | **172 shares** (₹12,411.52) | **₹4,977.02** (0.401 divisor) | **Limit: ₹73.26 (09:00:01 - 09:04:59 IST)** | **NORMAL_TRADING (70% deliv, 20.2x vol)** |
-| **544497** | Anlon Healthcare Ltd. | `B` | ₹19.52 | **638 shares** (₹12,453.76) | **₹4,993.96** (0.401 divisor) | **Limit: ₹19.83 (09:00:01 - 09:04:59 IST)** | **NORMAL_TRADING (70% deliv, 15.5x vol)** |
-| **533056** | Vedavaag Systems Ltd. | `B` | ₹23.36 | **533 shares** (₹12,450.88) | **₹4,992.8** (0.401 divisor) | **Limit: ₹23.73 (09:00:01 - 09:04:59 IST)** | **NORMAL_TRADING (70% deliv, 13.3x vol)** |
-| **500240** | Kinetic Engineering Ltd. | `XT` | ₹229.35 | **54 shares** (₹12,384.9) | **₹4,966.34** (0.401 divisor) | **Limit: ₹232.81 (09:00:01 - 09:04:59 IST)** | **STATUTORY_T2T_100 (100% deliv, 9.9x vol)** |
+| **544305** | One Mobikwik Systems Ltd. | `B` | ₹209.55 | **0 shares** (₹0.0) | **₹0.0** (ineligible band) | **WAIT_FOR_CONTINUOUS** | **NORMAL_TRADING (70% deliv, 21.0x vol)** |
+| **533343** | Lovable Lingerie Ltd. | `B` | ₹72.16 | **0 shares** (₹0.0) | **₹0.0** (ineligible band) | **WAIT_FOR_CONTINUOUS** | **NORMAL_TRADING (70% deliv, 20.2x vol)** |
+| **544497** | Anlon Healthcare Ltd. | `B` | ₹19.52 | **0 shares** (₹0.0) | **₹0.0** (ineligible band) | **WAIT_FOR_CONTINUOUS** | **NORMAL_TRADING (70% deliv, 15.5x vol)** |
+| **533056** | Vedavaag Systems Ltd. | `B` | ₹23.36 | **0 shares** (₹0.0) | **₹0.0** (ineligible band) | **WAIT_FOR_CONTINUOUS** | **NORMAL_TRADING (70% deliv, 13.3x vol)** |
+| **500240** | Kinetic Engineering Ltd. | `XT` | ₹229.35 | **0 shares** (₹0.0) | **₹0.0** (ineligible band) | **WAIT_FOR_CONTINUOUS** | **STATUTORY_T2T_100 (100% deliv, 9.9x vol)** |
 
 ---
 
