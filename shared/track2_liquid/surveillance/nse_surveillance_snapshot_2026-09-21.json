@@ -1,0 +1,70 @@
+{
+  "asm_long_term": [
+    "STK_ASM_LT1"
+  ],
+  "asm_short_term": [
+    "STK_ASM_ST1",
+    "STK_ASM_ST2"
+  ],
+  "effective_session_date": "2026-09-21",
+  "fetched_at": "2026-09-21T08:45:00+05:30",
+  "fno_underlyings": [
+    "ANGELONE",
+    "BDL",
+    "CDSL",
+    "COCHINSHIP",
+    "DIXON",
+    "INOXWIND",
+    "IREDA",
+    "NATIONALUM",
+    "POLICYBZR",
+    "RVNL",
+    "SUZLON",
+    "TATACHEM"
+  ],
+  "gsm": [
+    "STK_GSM1",
+    "STK_GSM2"
+  ],
+  "http_status": 200,
+  "parse_status": "SUCCESS",
+  "parser_version": "2.0.0",
+  "publication_date": "2026-09-21",
+  "raw_path": "raw_nse_fno_2026-09-21_6cb459e8.json",
+  "raw_sha256": "6cb459e8aa6deeee588036fd9b0d9687f3f1ff5321d0c743f2ab5268cb930f13",
+  "sha256": "4da770b797fabf13d9045d49ac96b193bb9502c045f51a67731c1ca108fc0703",
+  "snapshot_id": "NSE_SURV_20260921_INGESTED",
+  "source_url": "https://www.nseindia.com/api/underlying-information",
+  "sources": {
+    "asm": {
+      "byte_length": 130,
+      "content_type": "application/json",
+      "fetched_at": "2026-09-21T08:45:00+05:30",
+      "http_status": 200,
+      "parser_version": "2.0.0",
+      "raw_relative_path": "raw_nse_asm_2026-09-21_8d01a059.json",
+      "sha256": "8d01a0598761b2b84b9988f484459f4eb8898e5d1cef3e464ad111688309da1a",
+      "source_url": "https://www.nseindia.com/api/reportASM"
+    },
+    "fno": {
+      "byte_length": 302,
+      "content_type": "application/json",
+      "fetched_at": "2026-09-21T08:45:00+05:30",
+      "http_status": 200,
+      "parser_version": "2.0.0",
+      "raw_relative_path": "raw_nse_fno_2026-09-21_6cb459e8.json",
+      "sha256": "6cb459e8aa6deeee588036fd9b0d9687f3f1ff5321d0c743f2ab5268cb930f13",
+      "source_url": "https://www.nseindia.com/api/underlying-information"
+    },
+    "gsm": {
+      "byte_length": 48,
+      "content_type": "application/json",
+      "fetched_at": "2026-09-21T08:45:00+05:30",
+      "http_status": 200,
+      "parser_version": "2.0.0",
+      "raw_relative_path": "raw_nse_gsm_2026-09-21_bd2f0682.json",
+      "sha256": "bd2f0682b204fb9f3960a06e749256e77416eeb69dce3cdf5cba765c4b5ed160",
+      "source_url": "https://www.nseindia.com/api/reportGSM"
+    }
+  }
+}

@@ -4,24 +4,51 @@ Part of Project Swing Trades (Antigravity + Claude Code + OpenAI Codex).
 
 Quantitative Purpose:
 - Eliminates premature trade churn caused by moving the entire position to breakeven at +1R.
-- Tranche 1 (50% qty): Banks guaranteed profit at +1.5R/+2.0R to de-risk the trade.
-- Tranche 2 (50% qty): Multi-day CNC swing runner that trails on Previous Day Low (PDL) or Daily ATR.
+- Tranche 1 (50% qty): Emits research exit intents; profit requires fill evidence.
+- Tranche 2 (50% qty): Research runner intent; no trailing/fill assumption in Phase 1.
 - Fail-Closed: Strict validation against negative shares, inverted stops, or NaN metrics.
 """
 
 from dataclasses import dataclass, asdict
 from enum import Enum
 import math
+import numbers
 from typing import Optional, Dict, Any, Tuple
 
 
 class TrancheStatus(Enum):
     PENDING_ENTRY = "PENDING_ENTRY"
+    PENDING_TARGET_EXIT = "PENDING_TARGET_EXIT"
+    PENDING_STOP_EXIT = "PENDING_STOP_EXIT"
+    PENDING_EOD_SQUAREOFF = "PENDING_EOD_SQUAREOFF"
     ACTIVE_INITIAL_STOP = "ACTIVE_INITIAL_STOP"
     TRAILED_BREAKEVEN = "TRAILED_BREAKEVEN"
     TARGET_FILLED = "TARGET_FILLED"
     STOPPED_OUT = "STOPPED_OUT"
     SWING_TRAILING = "SWING_TRAILING"
+    PARTIAL = "PARTIAL"
+    REJECTED = "REJECTED"
+    CANCEL_PENDING = "CANCEL_PENDING"
+    UNFILLED_TRIGGERED = "UNFILLED_TRIGGERED"
+    CLOSED_MIS_SQUAREOFF = "CLOSED_MIS_SQUAREOFF"
+
+
+TERMINAL_TRANCHE_STATES = {
+    TrancheStatus.TARGET_FILLED,
+    TrancheStatus.STOPPED_OUT,
+    TrancheStatus.CLOSED_MIS_SQUAREOFF,
+    TrancheStatus.REJECTED
+}
+
+
+PENDING_TRANCHE_STATES = {
+    TrancheStatus.PENDING_TARGET_EXIT, TrancheStatus.PENDING_STOP_EXIT,
+    TrancheStatus.PENDING_EOD_SQUAREOFF, TrancheStatus.UNFILLED_TRIGGERED,
+    TrancheStatus.CANCEL_PENDING,
+}
+RESEARCH_STATES = PENDING_TRANCHE_STATES | {
+    TrancheStatus.ACTIVE_INITIAL_STOP, TrancheStatus.PENDING_ENTRY,
+}
 
 
 @dataclass
@@ -64,6 +91,11 @@ class TwoTrancheState:
     combined_mtm_pnl: float
     total_realized_pnl: float
     combined_risk_state: str
+    realized_source: str = "NONE_PENDING_FILL_LEDGER"
+    qualification_eligible: bool = False
+    research_only: bool = True
+    requested_exit_order_type: str = "SL_LIMIT"
+    research_limit_offset_pct: float = 0.5
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -88,13 +120,18 @@ class TwoTrancheExitModel:
         Partitions total shares into Tranche 1 (profit bank) and Tranche 2 (swing runner).
         Fails closed on invalid inputs.
         """
-        for val in [entry_price, stop_price]:
-            if val is None or not isinstance(val, (int, float)) or math.isnan(val) or val <= 0:
+        for val in [entry_price, stop_price, target_1_rr]:
+            if (isinstance(val, bool) or not isinstance(val, numbers.Real)
+                    or not math.isfinite(float(val)) or float(val) <= 0):
                 raise ValueError("FAIL-CLOSED: Invalid entry or stop price.")
+        entry_price, stop_price, target_1_rr = map(float, (entry_price, stop_price, target_1_rr))
+        entry_price, stop_price = round(entry_price, 2), round(stop_price, 2)
         if stop_price >= entry_price:
             raise ValueError("FAIL-CLOSED: Stop price must be strictly below entry price.")
-        if total_shares <= 0:
+        if (isinstance(total_shares, bool) or not isinstance(total_shares, numbers.Integral)
+                or int(total_shares) <= 0):
             raise ValueError("FAIL-CLOSED: Total shares must be strictly positive.")
+        total_shares = int(total_shares)
 
         risk_per_sh = round(entry_price - stop_price, 3)
         t1_target = round(entry_price + (target_1_rr * risk_per_sh), 2)
@@ -124,175 +161,97 @@ class TwoTrancheExitModel:
 
     @staticmethod
     def update_state(
-        symbol: str,
-        allocation: TrancheAllocation,
-        ltp: float,
-        peak_price: float,
-        pdl: Optional[float] = None,
-        daily_atr: Optional[float] = None,
-        is_eod_squareoff: bool = False
+        symbol: str, allocation: TrancheAllocation, ltp: float, peak_price: float,
+        pdl: Optional[float] = None, daily_atr: Optional[float] = None,
+        is_eod_squareoff: bool = False, current_state: Optional[TwoTrancheState] = None,
+        order_type: Optional[str] = None, tick_low: Optional[float] = None,
+        limit_offset_pct: float = 0.5, slippage_pts: float = 0.0
     ) -> TwoTrancheState:
+        """Research intents only. No quote observation is execution evidence.
+
+        No trailing from unordered OHLC extremes; no exchange-ready order prices.
+        Fill-ledger integration and durable persistence are required before qualification.
         """
-        Updates the real-time position state, trailing stop levels, and P&L for both tranches.
-        """
-        entry = allocation.entry_price
-        initial_sl = allocation.initial_stop
-        risk_per_sh = allocation.risk_per_share
+        if not isinstance(symbol, str) or not symbol.strip():
+            raise ValueError("INVALID_SYMBOL")
+        values = [ltp, peak_price] + [v for v in (pdl, daily_atr, tick_low) if v is not None]
+        if any(isinstance(v, bool) or not isinstance(v, numbers.Real)
+               or not math.isfinite(float(v)) or float(v) <= 0 for v in values):
+            raise ValueError("INVALID_MARKET_INPUT")
+        normalized_order_type = (current_state.requested_exit_order_type
+                                 if current_state is not None and order_type is None
+                                 else "SL_LIMIT" if order_type is None else order_type)
+        if (type(is_eod_squareoff) is not bool
+                or normalized_order_type not in ("SL_LIMIT", "SL_M")
+                or isinstance(limit_offset_pct, bool) or not isinstance(limit_offset_pct, numbers.Real)
+                or not math.isfinite(float(limit_offset_pct)) or not 0 <= float(limit_offset_pct) < 100
+                or isinstance(slippage_pts, bool) or not isinstance(slippage_pts, numbers.Real)
+                or not math.isfinite(float(slippage_pts)) or float(slippage_pts) != 0):
+            raise ValueError("INVALID_EXECUTION_INPUT")
+        # Validate allocation against its source inputs, including mutated dataclasses.
+        expected = TwoTrancheExitModel.allocate_tranches(
+            allocation.entry_price, allocation.initial_stop,
+            allocation.total_shares, allocation.tranche1_rr)
+        if allocation != expected:
+            raise ValueError("INVALID_ALLOCATION")
+        entry, stop = allocation.entry_price, allocation.initial_stop
+        if current_state is not None:
+            if (current_state.symbol != symbol or current_state.entry_price != entry
+                    or current_state.t1_shares != allocation.tranche1_shares
+                    or current_state.t2_shares != allocation.tranche2_shares
+                    or current_state.t1_target != allocation.tranche1_target
+                    or current_state.t1_active_sl != stop or current_state.t2_active_sl != stop
+                    or current_state.t1_status not in RESEARCH_STATES
+                    or current_state.t2_status not in RESEARCH_STATES
+                    or current_state.t1_realized_pnl != 0
+                    or current_state.t2_realized_pnl != 0
+                    or current_state.total_realized_pnl != 0
+                    or current_state.requested_exit_order_type != normalized_order_type
+                    or current_state.research_limit_offset_pct != float(limit_offset_pct)):
+                raise ValueError("UNVERIFIED_OR_MISMATCHED_PRIOR_STATE")
         peak = max(peak_price, ltp)
-
-        # -------------------------------------------------------------
-        # 1. TRANCHE 1 EVALUATION (Fixed Target Banking)
-        # -------------------------------------------------------------
-        t1_shares = allocation.tranche1_shares
-        t1_target = allocation.tranche1_target
-
-        if t1_shares == 0:
-            t1_status = TrancheStatus.STOPPED_OUT
-            t1_sl = entry
-            t1_realized = 0.0
-            t1_unrealized = 0.0
-        elif peak >= t1_target:
-            # Target hit and locked
-            t1_status = TrancheStatus.TARGET_FILLED
-            t1_sl = t1_target
-            t1_realized = round(t1_shares * (t1_target - entry), 2)
-            t1_unrealized = 0.0
-        elif ltp <= initial_sl:
-            t1_status = TrancheStatus.STOPPED_OUT
-            t1_sl = initial_sl
-            t1_realized = round(t1_shares * (initial_sl - entry), 2)
-            t1_unrealized = 0.0
-        elif peak >= (entry + (1.0 * risk_per_sh)):
-            # Gained >= +1.0R -> stop moved to breakeven
-            if ltp <= entry:
-                t1_status = TrancheStatus.STOPPED_OUT
-                t1_sl = entry
-                t1_realized = 0.0
-                t1_unrealized = 0.0
-            else:
-                t1_status = TrancheStatus.TRAILED_BREAKEVEN
-                t1_sl = entry
-                t1_realized = 0.0
-                t1_unrealized = round(t1_shares * (ltp - entry), 2)
-        else:
-            t1_status = TrancheStatus.ACTIVE_INITIAL_STOP
-            t1_sl = initial_sl
-            t1_realized = 0.0
-            t1_unrealized = round(t1_shares * (ltp - entry), 2)
-
-        # -------------------------------------------------------------
-        # 2. TRANCHE 2 EVALUATION (Multi-Day CNC Swing Runner)
-        # -------------------------------------------------------------
-        t2_shares = allocation.tranche2_shares
-        if t2_shares == 0:
-            t2_status = TrancheStatus.STOPPED_OUT
-            t2_sl = entry
-            t2_realized = 0.0
-            t2_unrealized = 0.0
-        else:
-            # Baseline rule: If T1 locked profit or touched +1.0R, T2 stop is at least Breakeven
-            t1_derisked = (t1_status == TrancheStatus.TARGET_FILLED) or (peak >= (entry + (1.0 * risk_per_sh)))
-
-            if t1_derisked:
-                # Dynamic swing trailing baseline: max(entry, PDL, close - 1.5*ATR)
-                candidate_stops = [entry]
-                if pdl is not None and pdl > 0:
-                    candidate_stops.append(pdl)
-                if daily_atr is not None and daily_atr > 0:
-                    candidate_stops.append(round(peak - (1.5 * daily_atr), 2))
-                
-                t2_sl = max(candidate_stops)
-
-                if ltp <= t2_sl:
-                    t2_status = TrancheStatus.STOPPED_OUT
-                    t2_realized = round(t2_shares * (t2_sl - entry), 2)
-                    t2_unrealized = 0.0
-                else:
-                    t2_status = TrancheStatus.SWING_TRAILING
-                    t2_realized = 0.0
-                    t2_unrealized = round(t2_shares * (ltp - entry), 2)
-            else:
-                # Still in initial risk phase
-                t2_sl = initial_sl
-                if ltp <= initial_sl:
-                    t2_status = TrancheStatus.STOPPED_OUT
-                    t2_realized = round(t2_shares * (initial_sl - entry), 2)
-                    t2_unrealized = 0.0
-                else:
-                    t2_status = TrancheStatus.ACTIVE_INITIAL_STOP
-                    t2_realized = 0.0
-                    t2_unrealized = round(t2_shares * (ltp - entry), 2)
-
-        total_realized = round(t1_realized + t2_realized, 2)
-        combined_mtm = round(t1_unrealized + t2_unrealized, 2)
-
-        # Determine composite label
-        if t1_status == TrancheStatus.TARGET_FILLED and t2_status == TrancheStatus.SWING_TRAILING:
-            composite_state = "T1_BANKED_T2_RUNNING_ZERO_RISK"
-        elif t1_status == TrancheStatus.TARGET_FILLED and t2_status == TrancheStatus.STOPPED_OUT:
-            composite_state = "FULL_TRADE_CLOSED_PROFIT"
-        elif t1_status == TrancheStatus.STOPPED_OUT and t2_status == TrancheStatus.STOPPED_OUT:
-            composite_state = "FULL_TRADE_STOPPED"
-        elif t1_status == TrancheStatus.TRAILED_BREAKEVEN or t2_status == TrancheStatus.SWING_TRAILING:
-            composite_state = "TRAILED_BREAKEVEN_ZERO_DOWNSIDE"
-        else:
-            composite_state = "INITIAL_RISK_ACTIVE"
-
+        low = min(ltp, tick_low) if tick_low is not None else ltp
+        stop_hit = low <= stop
+        target_hit = peak >= allocation.tranche1_target
+        ambiguous = current_state is None and stop_hit and target_hit
+        def next_status(previous, shares, has_target=False, eod=False):
+            if stop_hit:
+                return TrancheStatus.PENDING_STOP_EXIT
+            if previous in PENDING_TRANCHE_STATES:
+                return previous
+            if not shares:
+                return TrancheStatus.PENDING_ENTRY
+            if eod:
+                return TrancheStatus.PENDING_EOD_SQUAREOFF
+            if has_target and target_hit:
+                return TrancheStatus.PENDING_TARGET_EXIT
+            return TrancheStatus.ACTIVE_INITIAL_STOP
+        t1 = next_status(current_state.t1_status if current_state else None,
+                         allocation.tranche1_shares, True, is_eod_squareoff)
+        t2 = next_status(current_state.t2_status if current_state else None,
+                         allocation.tranche2_shares)
+        mtm1 = round(allocation.tranche1_shares * (ltp - entry), 2)
+        mtm2 = round(allocation.tranche2_shares * (ltp - entry), 2)
         return TwoTrancheState(
-            symbol=symbol,
-            entry_price=entry,
-            ltp=ltp,
-            peak_price=peak,
-            t1_shares=t1_shares,
-            t1_status=t1_status,
-            t1_active_sl=t1_sl,
-            t1_target=t1_target,
-            t1_realized_pnl=t1_realized,
-            t1_unrealized_pnl=t1_unrealized,
-            t2_shares=t2_shares,
-            t2_status=t2_status,
-            t2_active_sl=t2_sl,
-            t2_realized_pnl=t2_realized,
-            t2_unrealized_pnl=t2_unrealized,
-            combined_mtm_pnl=combined_mtm,
-            total_realized_pnl=total_realized,
-            combined_risk_state=composite_state
-        )
+            symbol=symbol, entry_price=entry, ltp=ltp, peak_price=peak,
+            t1_shares=allocation.tranche1_shares, t1_status=t1, t1_active_sl=stop,
+            t1_target=allocation.tranche1_target, t1_realized_pnl=0.0,
+            t1_unrealized_pnl=mtm1, t2_shares=allocation.tranche2_shares,
+            t2_status=t2, t2_active_sl=stop, t2_realized_pnl=0.0,
+            t2_unrealized_pnl=mtm2, combined_mtm_pnl=round(mtm1 + mtm2, 2),
+            total_realized_pnl=0.0,
+            combined_risk_state=("AMBIGUOUS_ORDER" if ambiguous else
+                                 "OCO_CONFLICT_PENDING_STOP_PRIORITY"
+                                 if current_state is not None
+                                 and current_state.t1_status == TrancheStatus.PENDING_TARGET_EXIT
+                                 and stop_hit else "RESEARCH_PENDING_FILL_LEDGER"),
+            requested_exit_order_type=normalized_order_type,
+            research_limit_offset_pct=float(limit_offset_pct))
 
 
 if __name__ == "__main__":
-    print("=== TESTING TWO-TRANCHE EXIT MODEL ===")
-
-    # Test Case 1: CDSL Allocation (38 shares @ 1332.90, stop 1300.00)
-    alloc = TwoTrancheExitModel.allocate_tranches(entry_price=1332.90, stop_price=1300.00, total_shares=38, target_1_rr=1.5)
-    print(f"CDSL Allocation: T1 = {alloc.tranche1_shares} shs (Tgt {alloc.tranche1_target}), T2 = {alloc.tranche2_shares} shs (Swing Runner)")
-    assert alloc.tranche1_shares == 19
-    assert alloc.tranche2_shares == 19
-    assert alloc.tranche1_target == 1382.25
-
-    # Test Case 2: In-flight progression to +1R (LTP 1370.00)
-    s1 = TwoTrancheExitModel.update_state("CDSL", alloc, ltp=1370.00, peak_price=1370.00)
-    print(f"State @ 1370 (+1.1R): T1={s1.t1_status.value} (SL {s1.t1_active_sl}), T2={s1.t2_status.value} (SL {s1.t2_active_sl}) | State: {s1.combined_risk_state}")
-    assert s1.t1_status == TrancheStatus.TRAILED_BREAKEVEN
-    assert s1.t1_active_sl == 1332.90
-    assert s1.t2_active_sl == 1332.90
-
-    # Test Case 3: Target 1 Hit (LTP 1390.00) with PDL support at 1350.00
-    s2 = TwoTrancheExitModel.update_state("CDSL", alloc, ltp=1390.00, peak_price=1390.00, pdl=1350.00)
-    print(f"State @ 1390 (T1 Target Exceeded): T1 Realized = Rs {s2.t1_realized_pnl} | T2 SL = Rs {s2.t2_active_sl} | Composite: {s2.combined_risk_state}")
-    assert s2.t1_status == TrancheStatus.TARGET_FILLED
-    assert s2.t1_realized_pnl == round(19 * (1382.25 - 1332.90), 2)
-    assert s2.t2_active_sl == 1350.00  # Trailed to PDL
-    assert s2.combined_risk_state == "T1_BANKED_T2_RUNNING_ZERO_RISK"
-
-    # Test Case 4: Odd shares (3 shares)
-    odd_alloc = TwoTrancheExitModel.allocate_tranches(entry_price=100.0, stop_price=90.0, total_shares=3)
-    assert odd_alloc.tranche1_shares == 2
-    assert odd_alloc.tranche2_shares == 1
-
-    # Test Case 5: Single share (1 share)
-    single_alloc = TwoTrancheExitModel.allocate_tranches(entry_price=1000.0, stop_price=950.0, total_shares=1)
-    assert single_alloc.tranche1_shares == 1
-    assert single_alloc.tranche2_shares == 0
-
-    print("ALL TWO-TRANCHE EXIT MODEL SELF-TESTS PASSED 100%!")
+    allocation = TwoTrancheExitModel.allocate_tranches(100.0, 90.0, 10)
+    state = TwoTrancheExitModel.update_state("TEST", allocation, 120.0, 120.0)
+    assert state.t1_status == TrancheStatus.PENDING_TARGET_EXIT
+    assert state.total_realized_pnl == 0.0
+    print("Research-intent smoke test passed; no fill evidence or qualification.")

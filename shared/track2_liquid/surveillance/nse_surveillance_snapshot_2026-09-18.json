@@ -1,0 +1,26 @@
+{
+  "snapshot_id": "NSE_SURV_20260918_EOD",
+  "publication_date": "2026-09-18",
+  "effective_session_date": "2026-09-18",
+  "fetched_at": "2026-09-18 19:15:00",
+  "source_url": "https://nsearchives.nseindia.com/content/circulars/surveillance_20260918.csv",
+  "parse_status": "SUCCESS",
+  "asm_short_term": [],
+  "asm_long_term": [],
+  "gsm": [],
+  "fno_underlyings": [
+    "CDSL",
+    "ANGELONE",
+    "SUZLON",
+    "INOXWIND",
+    "IREDA",
+    "RVNL",
+    "COCHINSHIP",
+    "BDL",
+    "TATACHEM",
+    "PEL",
+    "DIXON",
+    "POLYCAB"
+  ],
+  "sha256": "4efc25af7e25605951a25c74ba90af4f74bc03de95ed951456ad5fa20cc56f7a"
+}

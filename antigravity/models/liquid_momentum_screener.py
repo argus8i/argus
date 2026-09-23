@@ -10,6 +10,7 @@ Collaborative Architecture:
 """
 
 import math
+import numbers
 import os
 import sys
 from dataclasses import dataclass
@@ -20,6 +21,12 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 from antigravity.models.two_tranche_exit_model import TwoTrancheExitModel, TrancheAllocation
 from antigravity.models.market_regime_filter import MarketRegimeFilter, MarketRegimeSnapshot, MarketRegimeState
+
+
+def _finite_real(value: Any) -> bool:
+    """Accept Python/numpy real scalars, but never bool, strings, NaN, or infinity."""
+    return (not isinstance(value, bool) and isinstance(value, numbers.Real)
+            and math.isfinite(float(value)))
 
 
 @dataclass
@@ -49,8 +56,10 @@ class SizingResult:
     limit_exit_price: Optional[float]
     risk_reward_ratio: float
     constrained_by: str
-    provenance: str = "DERIVED (Rule 5 fixed risk arithmetic)"
+    provenance: str = "DERIVED (Track 2 planned risk, not a realized loss ceiling)"
     tranche_allocation: Optional[TrancheAllocation] = None
+    execution_type_defaulted: bool = False
+    qualification_eligible: bool = False
 
 
 class LiquidMomentumEngine:
@@ -77,9 +86,7 @@ class LiquidMomentumEngine:
         Enforces strict fail-closed data validation (NaN/None rejection and F&O dynamic band check).
         """
         def _is_valid_num(val: Optional[float], min_val: float = 0.0, strict_positive: bool = True) -> bool:
-            if val is None or not isinstance(val, (int, float)):
-                return False
-            if math.isnan(val) or math.isinf(val):
+            if not _finite_real(val):
                 return False
             return val > min_val if strict_positive else val >= min_val
 
@@ -105,8 +112,11 @@ class LiquidMomentumEngine:
                 return False
 
             # 3. Enforce F&O Dynamic Flexing Band rule (A6 Defense)
-            # Track 2 requires dynamic flexing circuit bands. Fixed-band stocks (e.g. band_pct == 10 or 20 without F&O) are rejected.
-            has_fno = getattr(c, "is_fno_underlying", False) or c.band_pct == 0.0
+            # Track 2 requires strict verified F&O underlying status AND dynamic flexing circuit band (0.0).
+            # A stock with is_fno_underlying=False or non-boolean, or band_pct != 0.0, is strictly rejected.
+            band = getattr(c, "band_pct", None)
+            has_fno = ((getattr(c, "is_fno_underlying", False) is True)
+                       and _finite_real(band) and float(band) == 0.0)
             if not has_fno:
                 return False
 
@@ -145,7 +155,9 @@ class LiquidMomentumEngine:
             "survivors_count": len(survivors),
             "relaxed": relaxed,
             "below_target": len(survivors) < target_pool,
-            "reason": relaxation_reason
+            "reason": relaxation_reason,
+            "research_only": True,
+            "qualification_eligible": False
         }
 
     @staticmethod
@@ -166,8 +178,11 @@ class LiquidMomentumEngine:
         Enforces maximum breakout extension ceiling (rejects chases > 0.5 * ATR14 above OR high).
         Enforces Market Regime Filter (rejects longs on distribution, adjusts dynamic volume multiple).
         """
-        for v in [current_price, or_high, or_low, bucket_volume, historical_bucket_volume_median]:
-            if v is None or not isinstance(v, (int, float)) or math.isnan(v) or v <= 0:
+        all_inputs = [current_price, or_high, or_low, bucket_volume,
+                      historical_bucket_volume_median, atr14_intraday, min_volume_multiple]
+        if (not isinstance(symbol, str) or not symbol.strip()
+                or any(not _finite_real(v) or float(v) <= 0 for v in all_inputs)
+                or float(or_high) <= float(or_low)):
                 return {
                     "symbol": symbol,
                     "signal": "NO_ENTRY_DATA_INVALID",
@@ -179,8 +194,15 @@ class LiquidMomentumEngine:
 
         volume_ratio = bucket_volume / historical_bucket_volume_median
 
-        # Check Market Regime Gate
-        if regime_snapshot is not None:
+        # A missing point-in-time regime is not permission to emit a buy.
+        if regime_snapshot is None:
+            return {
+                "symbol": symbol, "signal": "NO_ENTRY_DATA_INVALID",
+                "reason": "FAIL-CLOSED: Point-in-time market regime unavailable.",
+                "volume_ratio": round(volume_ratio, 2), "or_high": or_high,
+                "or_low": or_low, "qualification_eligible": False
+            }
+        else:
             if regime_snapshot.state == MarketRegimeState.DISTRIBUTION_GATED:
                 return {
                     "symbol": symbol,
@@ -207,7 +229,7 @@ class LiquidMomentumEngine:
 
         # Extension ceiling guard (A7 Defense):
         # Reject breakouts extended beyond 0.5 * ATR14 intraday points above OR high
-        atr_pts = atr14_intraday if (atr14_intraday and not math.isnan(atr14_intraday) and atr14_intraday > 0) else (0.01 * or_high)
+        atr_pts = float(atr14_intraday)
         max_allowed_entry = or_high + (0.5 * atr_pts)
 
         if is_breakout and current_price > max_allowed_entry:
@@ -221,8 +243,8 @@ class LiquidMomentumEngine:
             }
 
         if is_breakout and is_volume_confirmed:
-            entry_signal = "BUY_ORB_CONFIRMED"
-            reason = f"QUALIFIED ORB: Price Rs {current_price:.2f} > OR High Rs {or_high:.2f} with {volume_ratio:.2f}x volume confirmation (>= {min_volume_multiple}x)"
+            entry_signal = "RESEARCH_ORB_HYPOTHESIS"
+            reason = f"RESEARCH ORB: Price Rs {current_price:.2f} > OR High Rs {or_high:.2f} with {volume_ratio:.2f}x volume confirmation (>= {min_volume_multiple}x); not a fill or qualifying entry."
         elif is_breakout and not is_volume_confirmed:
             entry_signal = "HOLD_REJECT_FALSE_BREAKOUT"
             reason = f"REJECTED: Price broke OR High but volume ratio ({volume_ratio:.2f}x) failed threshold ({min_volume_multiple}x). High false breakout risk."
@@ -239,7 +261,80 @@ class LiquidMomentumEngine:
             "reason": reason,
             "volume_ratio": round(volume_ratio, 2),
             "or_high": or_high,
-            "or_low": or_low
+            "or_low": or_low,
+            "research_only": True,
+            "qualification_eligible": False
+        }
+
+    # Codex Correction (2): Assumed research parameters, not approved desk limits
+    ASSUMED_MAX_AGGREGATE_PORTFOLIO_RISK_RS: float = 6000.0
+    ASSUMED_MAX_PER_SECTOR_POSITIONS: int = 2
+
+    @classmethod
+    def check_portfolio_risk_capacity(
+        cls,
+        proposed_risk_rs: float,
+        existing_open_risk_rs: float = 0.0,
+        pending_reservations_risk_rs: float = 0.0,
+        estimated_costs_and_slippage_rs: float = 0.0,
+        aggregate_cap_rs: Optional[float] = None,
+        proposed_sector: Optional[str] = None,
+        existing_sector_counts: Optional[Dict[str, int]] = None,
+        max_per_sector: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Assesses portfolio risk capacity against assumed research constraints.
+        Computes existing + proposed + pending risk + estimated costs/slippage.
+        Explicitly notes this is an assumed research parameter, not a guaranteed ceiling.
+        """
+        aggregate_cap_rs = (cls.ASSUMED_MAX_AGGREGATE_PORTFOLIO_RISK_RS
+                            if aggregate_cap_rs is None else aggregate_cap_rs)
+        max_per_sector = (cls.ASSUMED_MAX_PER_SECTOR_POSITIONS
+                          if max_per_sector is None else max_per_sector)
+        risk_inputs = (proposed_risk_rs, existing_open_risk_rs,
+                       pending_reservations_risk_rs, estimated_costs_and_slippage_rs,
+                       aggregate_cap_rs)
+        if (any(not _finite_real(v) or float(v) < 0
+                for v in risk_inputs) or float(aggregate_cap_rs) <= 0
+                or not isinstance(max_per_sector, numbers.Integral)
+                or isinstance(max_per_sector, bool) or int(max_per_sector) <= 0
+                or not isinstance(existing_sector_counts, dict)
+                or not isinstance(proposed_sector, str) or not proposed_sector.strip()
+                or any(not isinstance(k, str) or not k.strip()
+                       or not isinstance(v, numbers.Integral) or isinstance(v, bool) or int(v) < 0
+                       for k, v in existing_sector_counts.items())):
+            return {"allowed": False, "reason": "INVALID_OR_MISSING_PORTFOLIO_INPUT",
+                    "is_assumed_research_parameter": True}
+        unrounded_projected_risk = sum(float(v) for v in risk_inputs[:4])
+        total_projected_risk = round(unrounded_projected_risk, 2)
+        risk_allowed = unrounded_projected_risk <= float(aggregate_cap_rs)
+
+        normalized_sector = proposed_sector.strip().casefold()
+        sector_counts = {key.strip().casefold(): int(value)
+                         for key, value in existing_sector_counts.items()}
+        curr_sector_count = sector_counts.get(normalized_sector, 0)
+        sector_allowed = curr_sector_count < int(max_per_sector)
+
+        allowed = risk_allowed and sector_allowed
+        reason = "PASS_PORTFOLIO_CAPACITY" if allowed else (
+            f"CAPACITY_EXCEEDED: Projected total risk Rs {total_projected_risk:.2f} > cap Rs {aggregate_cap_rs:.2f}"
+            if not risk_allowed else
+            f"SECTOR_CONCENTRATION_EXCEEDED: Sector '{proposed_sector}' already has {curr_sector_count} >= {max_per_sector} positions."
+        )
+
+        return {
+            "allowed": allowed,
+            "reason": reason,
+            "total_projected_risk_rs": total_projected_risk,
+            "existing_open_risk_rs": existing_open_risk_rs,
+            "proposed_risk_rs": proposed_risk_rs,
+            "pending_reservations_risk_rs": pending_reservations_risk_rs,
+            "estimated_costs_and_slippage_rs": estimated_costs_and_slippage_rs,
+            "aggregate_cap_rs": aggregate_cap_rs,
+            "is_assumed_research_parameter": True,
+            "sector": proposed_sector,
+            "current_sector_positions": curr_sector_count,
+            "max_per_sector": max_per_sector
         }
 
     @staticmethod
@@ -251,22 +346,34 @@ class LiquidMomentumEngine:
         exchange: str = "NSE",
         risk_budget_rs: float = 1500.0,
         max_notional_rs: float = 100000.0,
-        limit_offset_pct: float = 0.5
+        limit_offset_pct: float = 0.5,
+        order_execution_type: Optional[str] = None
     ) -> SizingResult:
         """
         Calculates position size strictly for a fixed rupee risk budget (e.g. Rs 1,500).
         Fails closed on degenerate stops (or_low >= entry_price).
         Dynamically computes realized risk:reward ratio.
+        Decouples exchange routing from execution order type (SL-Limit vs SL-M).
         """
         # Validate inputs
         for val in [entry_price, or_low, atr14, dtv_med20_cr, risk_budget_rs, max_notional_rs]:
-            if val is None or not isinstance(val, (int, float)) or math.isnan(val) or val <= 0:
+            if not _finite_real(val) or float(val) <= 0:
                 return SizingResult(
                     shares=0, notional_value=0.0, actual_risk_rs=0.0,
                     stop_price=0.0, target_price=0.0, order_type="REJECTED_INVALID_INPUT",
                     limit_exit_price=None, risk_reward_ratio=0.0,
                     constrained_by="INVALID_OR_NAN_INPUT"
                 )
+
+        if (not _finite_real(limit_offset_pct)
+                or not 0 <= limit_offset_pct < 100
+                or exchange not in ("NSE", "BSE")
+                or order_execution_type not in (None, "SL_LIMIT", "SL_M")):
+            return SizingResult(
+                shares=0, notional_value=0.0, actual_risk_rs=0.0,
+                stop_price=0.0, target_price=0.0, order_type="REJECTED_INVALID_INPUT",
+                limit_exit_price=None, risk_reward_ratio=0.0,
+                constrained_by="INVALID_EXECUTION_CONTRACT")
 
         # Fail-closed on degenerate stops (A4/A5 Defense)
         if entry_price <= or_low:
@@ -283,16 +390,28 @@ class LiquidMomentumEngine:
             )
 
         stop_price = round(max(or_low, entry_price - (1.5 * atr14)), 2)
+        if stop_price >= entry_price:
+            return SizingResult(
+                shares=0, notional_value=0.0, actual_risk_rs=0.0,
+                stop_price=0.0, target_price=0.0,
+                order_type="REJECTED_DEGENERATE_ROUNDED_STOP",
+                limit_exit_price=None, risk_reward_ratio=0.0,
+                constrained_by="ROUNDED_STOP_NOT_BELOW_ENTRY")
 
-        # Exchange execution dynamics
-        if exchange.upper() == "NSE":
-            order_type = "SL_M_NSE"
-            limit_exit_price = None
-            effective_exit_price = stop_price
+        # Execution order dynamics: Decouple exchange routing from order type
+        if order_execution_type:
+            exec_type = order_execution_type.upper()
         else:
-            order_type = "SL_LIMIT_BSE"
+            exec_type = "SL_LIMIT"
+
+        if exec_type == "SL_LIMIT":
+            order_type = f"SL_LIMIT_{exchange.upper()}"
             limit_exit_price = round(stop_price * (1.0 - (limit_offset_pct / 100.0)), 2)
             effective_exit_price = limit_exit_price
+        else:
+            order_type = f"SL_M_{exchange.upper()}"
+            limit_exit_price = None
+            effective_exit_price = stop_price
 
         risk_per_share = round(entry_price - effective_exit_price, 3)
         if risk_per_share <= 0:
@@ -319,6 +438,13 @@ class LiquidMomentumEngine:
             qty = max_shares_dtv
             constraint = "DTV_TURNOVER_CAP"
 
+        if qty <= 0:
+            return SizingResult(
+                shares=0, notional_value=0.0, actual_risk_rs=0.0,
+                stop_price=stop_price, target_price=0.0,
+                order_type="REJECTED_ZERO_SHARE_CAP", limit_exit_price=limit_exit_price,
+                risk_reward_ratio=0.0, constrained_by="ZERO_SHARE_AFTER_CAPS")
+
         final_notional = qty * entry_price
         actual_risk = round(qty * risk_per_share, 2)
 
@@ -334,7 +460,7 @@ class LiquidMomentumEngine:
         if qty > 0:
             tranche_alloc = TwoTrancheExitModel.allocate_tranches(
                 entry_price=entry_price,
-                stop_price=effective_exit_price,
+                stop_price=stop_price,
                 total_shares=qty,
                 target_1_rr=1.5
             )
@@ -349,7 +475,8 @@ class LiquidMomentumEngine:
             limit_exit_price=limit_exit_price,
             risk_reward_ratio=realized_rr,
             constrained_by=constraint,
-            tranche_allocation=tranche_alloc
+            tranche_allocation=tranche_alloc,
+            execution_type_defaulted=order_execution_type is None
         )
 
 
@@ -380,7 +507,7 @@ if __name__ == "__main__":
         atr14_intraday=0.85
     )
     print(f"Test 2A (Valid ORB Breakout): Signal = {orb_res['signal']} | Ratio = {orb_res['volume_ratio']}x")
-    assert orb_res["signal"] == "BUY_ORB_CONFIRMED", "ORB signal failed"
+    assert orb_res["signal"] == "NO_ENTRY_DATA_INVALID", "Missing-regime gate failed"
 
     # Test 2B: Overextended Breakout Guard (> 0.5 * ATR above OR High)
     orb_over = LiquidMomentumEngine.evaluate_15m_orb_breakout(

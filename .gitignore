@@ -3,6 +3,10 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+.pytest-*/
+.pytest_tmp*/
+pytest_tmp/
+tests_tmp/
 
 # Runtime state, queues, locks
 *.db
@@ -16,6 +20,7 @@ antigravity/messages/
 # Credentials / secrets
 agent_keys.json
 antigravity/config/telegram_config.json
+antigravity/config/dhan_config.json
 *.token
 .env
 
@@ -27,3 +32,7 @@ antigravity/config/telegram_config.json
 shared/live_depth.json
 shared/track2_liquid/live_depth_track2.json
 antigravity/logs/live_depth_ticks.csv
+
+# Local scratch and OS metadata
+scratch/
+desktop.ini

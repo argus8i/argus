@@ -5,6 +5,34 @@ Append-only. Newest at the top.
 
 ---
 
+## 2026-09-23 — Claude (Tri-Agent Hybrid Execution & Platform Red-Team Audit)
+
+**Did:** Delivered an exhaustive, adversarial microstructure audit of the proposed Hybrid Execution Model, DhanHQ WebSocket v2 migration, ₹2,50,000 portfolio sizing/friction dynamics, and Terminal UI specifications in `shared/reviews/tri_agent_consultation_hybrid_execution_20260923.md`.
+
+**Found:**
+1. **The 90-Second Co-Pilot Adverse Selection Meat-Grinder:** A 90-second human approval delay on a 15-minute momentum breakout creates a severe Winner's Curse. Winning breakouts extend $+0.60\%$ to $+1.20\%$ in the first 60 seconds (forcing severe slippage, dilating stop distance from 1.5% to 2.3%, and expanding rupee risk from ₹1,500 to ₹2,300, or $+53.3\%$); failed breakouts stall at the trigger and get filled effortlessly.
+2. **The 40.4 bps Friction Drag:** Sizing a ₹60,000 trade on a ₹2,50,000 corpus incurs ₹151.61 in statutory charges (Delivery STT 0.1% buy + sell = ₹122.25, DP charges = ₹15.93, exchange/stamp/GST) plus ~₹90 in half-spread and slippage = **₹242.17 round-trip friction (40.4 bps)**. This silently inflates the required breakeven win rate on a +1.5R target from **40.0% to 46.45%**.
+3. **The Two-Tranche Trailing Trap:** Exiting Tranche 2 at "Breakeven" (entry price) yields a **net loss of -₹121.08** due to delivery taxes, reducing total trade payout from $+0.75R$ to $+0.588R$.
+4. **Autonomous Tier 1 Distribution Hazard:** $4.0\times$ volume on a 15-minute candle is frequently climactic distribution / institutional absorption (Wyckoff effort vs result divergence). Autonomous live routing remains strictly rejected; paper shadow routing requires `CLV >= 0.70`, `Range >= 1.0 ATR`, and `Depth Imbalance >= 1.50`.
+5. **DhanHQ WebSocket v2:** Approved as an urgent replacement for fragile scraped CDP, subject to a 3.0s heartbeat feed-watchdog and strict Rule 11 track isolation.
+6. **SEBI T+1 Margin Recycling:** Mathematically verified that the ₹50,000 unencumbered cash buffer comfortably absorbs the 20% SEBI sale proceeds retention deficit (max ₹13,200 on a ₹66,000 slot).
+7. **Terminal Feature Pruning:** Classified rolling factor covariance matrices and detached GoldenLayout windows as "institutional cosplay" / CPU bloat; mandated retaining Post-Trade Implementation Shortfall curves and Fail-Closed Kill Switches.
+
+**Wrote:**
+- `shared/reviews/claude_hybrid_execution_verdict_20260923.md`
+- This entry in `claude/PROGRESS.md`
+
+**Verdict:** **`CONDITIONALLY_APPROVED` (Paper-Trading Only; Subject to 6 Mandatory Hardening Conditions)**.
+
+**Needs:**
+- **Antigravity →** Commit both files, update architectural specifications with the 6 Hardening Conditions (Limit collar $+0.15\%$, 30s dynamic expiry, 40.4 bps friction deduction, terminal feature pruning), and enforce Rule 1 paper gate.
+- **ChatGPT / Codex →** Deliver the Systems Reliability, State Machine, and Webhook Latency Audit in `shared/reviews/chatgpt_hybrid_execution_verdict_20260923.md`.
+- **Yashu →** Review the cross-agent findings once ChatGPT submits.
+
+**Confidence:** High — all calculations grounded in published SEBI/NSE fee schedules, exact delivery tax formulas, and verified order-book microstructure mechanics.
+
+---
+
 ## 2026-09-12 — Claude (Rule 9 caller-safeguard condition: CLOSED)
 
 **Did:** Re-read `antigravity/models/liquidity_gate.py` lines 55-90 line-by-line against my 2026-09-12 "ACCEPT WITH CONDITIONS" verdict (which required a call-site safeguard, not just docstring framing, so no caller could treat a calm-market Rule 9 PASS as exit safety during a circuit event). Also ran both embedded test suites directly rather than trusting the "18/18" and "100%" claims in prose.

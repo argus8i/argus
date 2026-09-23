@@ -7,11 +7,12 @@ Quantitative Purpose:
 - Applies strict quantitative filters: F&O dynamic bands, Mcap Rs 4k-75k Cr, DTV >= Rs 30 Cr, Beta >= 1.3.
 - Ranks candidates by Relative Pre-Market Momentum Score:
     Score = (Pre-Open Vol / 10D Median Pre-Open Vol) * Beta * (1 + |Gap%| / 10.0)
-- Fail-Closed: Automatically falls back to canonical Baskets A & B if dynamic scan fails or returns < 4 scrips.
+- Fail-Closed: Never substitutes canonical names when the dynamic scan is missing or invalid.
 """
 
 import json
 import math
+import numbers
 import os
 import sys
 from dataclasses import dataclass, asdict
@@ -197,6 +198,7 @@ class ScannedCandidate:
     gap_pct: float
     momentum_score: float
     qualified: bool
+    research_eligible: bool = False
     rejection_reason: Optional[str] = None
 
 
@@ -205,14 +207,15 @@ class Track2UniverseScanner:
     Ranks the most liquid, high-beta F&O underlyings dynamically at 09:15 IST.
     """
 
-    def __init__(self, top_n: int = 8):
+    def __init__(self, top_n: int = 8, surveillance_monitor: Optional[Track2SurveillanceMonitor] = None):
         self.top_n = top_n
-        self.surveillance_monitor = Track2SurveillanceMonitor()
+        self.surveillance_monitor = surveillance_monitor or Track2SurveillanceMonitor()
 
     def rank_candidates(
         self,
         universe: Optional[List[Dict[str, Any]]] = None,
-        pre_open_data: Optional[Dict[str, Dict[str, Any]]] = None
+        pre_open_data: Optional[Dict[str, Dict[str, Any]]] = None,
+        session_date: Optional[str] = None
     ) -> List[ScannedCandidate]:
         """
         Ranks candidate scrips by pre-market volume expansion * Beta * (1 + |Gap%|/10).
@@ -221,17 +224,36 @@ class Track2UniverseScanner:
         raw_pool = universe if universe is not None else EXPANDED_FNO_UNIVERSE
         scored_list: List[ScannedCandidate] = []
 
-        # Run surveillance check on candidate universe
-        date_str = datetime.now().strftime("%Y-%m-%d")
-        checked_time = f"{date_str} 08:50:00"
+        # Run surveillance check on candidate universe using explicit candidate surveillance metadata
+        date_str = session_date or datetime.now().strftime("%Y-%m-%d")
+
+        # If surveillance fields are missing from raw candidates, attempt official circular resolution
+        if any(c.get("checked_at") is None for c in raw_pool):
+            try:
+                from antigravity.daemons.exchange_circular_poller import ExchangeCircularPoller
+                poller = ExchangeCircularPoller(history_path=self.surveillance_monitor.history_file)
+                p_rep = poller.poll_and_update(date_str)
+                if p_rep.get("provenance", {}).get("verified"):
+                    q_set = set(p_rep.get("qualified_symbols", []))
+                    eff_date = p_rep.get("provenance", {}).get("effective_session_date", date_str)
+                    for c in raw_pool:
+                        if c.get("checked_at") is None and c["symbol"] in q_set:
+                            c["is_fno"] = True
+                            c["asm_stage"] = 0
+                            c["gsm_stage"] = 0
+                            c["band_pct"] = 0.0
+                            c["checked_at"] = f"{eff_date} 08:45:00"
+            except Exception:
+                pass
+
         basket_items = [
             {
                 "symbol": c["symbol"],
-                "is_fno_underlying": c.get("is_fno", True),
-                "asm_stage": c.get("asm_stage", 0),
-                "gsm_stage": c.get("gsm_stage", 0),
-                "band_pct": c.get("band_pct", 0.0),
-                "checked_at": checked_time
+                "is_fno_underlying": c.get("is_fno", False),
+                "asm_stage": c.get("asm_stage", None),
+                "gsm_stage": c.get("gsm_stage", None),
+                "band_pct": c.get("band_pct", None),
+                "checked_at": c.get("checked_at", None)
             }
             for c in raw_pool
         ]
@@ -247,7 +269,18 @@ class Track2UniverseScanner:
             beta = c.get("beta", 1.0)
             atr = c.get("atr14_pct", 3.0)
             inst = c.get("inst_pct", 0.0)
-            is_fno = c.get("is_fno", True)
+            is_fno = c.get("is_fno") is True
+
+            numeric_values = (mcap, dtv, beta, atr, inst)
+            if any(isinstance(v, bool) or not isinstance(v, numbers.Real)
+                   or not math.isfinite(float(v)) for v in numeric_values):
+                scored_list.append(ScannedCandidate(
+                    symbol=sym, ticker=ticker, basket=basket, mcap_cr=0.0,
+                    dtv_med20_cr=0.0, beta=0.0, atr14_pct=0.0, inst_pct=0.0,
+                    pre_open_volume=0, median_pre_open_volume=0, gap_pct=0.0,
+                    momentum_score=0.0, qualified=False,
+                    rejection_reason="DISQUALIFIED_INVALID_NUMERIC_DATA"))
+                continue
 
             # Gate 1: Surveillance filter
             if sym not in surv_clean_symbols:
@@ -308,6 +341,17 @@ class Track2UniverseScanner:
             med_vol = p_data.get("median_pre_open_volume", 50000)
             gap = p_data.get("gap_pct", 0.0)
 
+            if (any(isinstance(v, bool) or not isinstance(v, numbers.Real)
+                    or not math.isfinite(float(v)) for v in (pre_vol, med_vol, gap))
+                    or float(pre_vol) < 0 or float(med_vol) <= 0):
+                scored_list.append(ScannedCandidate(
+                    symbol=sym, ticker=ticker, basket=basket, mcap_cr=float(mcap),
+                    dtv_med20_cr=float(dtv), beta=float(beta), atr14_pct=float(atr),
+                    inst_pct=float(inst), pre_open_volume=0, median_pre_open_volume=0,
+                    gap_pct=0.0, momentum_score=0.0, qualified=False,
+                    rejection_reason="DISQUALIFIED_INVALID_PREOPEN_DATA"))
+                continue
+
             # Calculate momentum score
             if pre_vol > 0 and med_vol > 0:
                 vol_expansion = pre_vol / float(med_vol)
@@ -320,11 +364,12 @@ class Track2UniverseScanner:
                 symbol=sym, ticker=ticker, basket=basket, mcap_cr=mcap,
                 dtv_med20_cr=dtv, beta=beta, atr14_pct=atr, inst_pct=inst,
                 pre_open_volume=pre_vol, median_pre_open_volume=med_vol,
-                gap_pct=gap, momentum_score=score, qualified=True
+                gap_pct=gap, momentum_score=score, qualified=False,
+                research_eligible=True
             ))
 
         # Sort qualified scrips by momentum score descending
-        qualified_scrips = [c for c in scored_list if c.qualified]
+        qualified_scrips = [c for c in scored_list if c.research_eligible]
         qualified_scrips.sort(key=lambda x: x.momentum_score, reverse=True)
 
         return qualified_scrips
@@ -333,42 +378,30 @@ class Track2UniverseScanner:
         self,
         output_path: str = DYNAMIC_UNIVERSE_PATH,
         universe: Optional[List[Dict[str, Any]]] = None,
-        pre_open_data: Optional[Dict[str, Dict[str, Any]]] = None
+        pre_open_data: Optional[Dict[str, Dict[str, Any]]] = None,
+        session_date: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Scans universe, applies fallback if pool is thin, and saves to dynamic_universe.json.
         """
-        qualified = self.rank_candidates(universe=universe, pre_open_data=pre_open_data)
+        session_date = session_date or datetime.now().strftime("%Y-%m-%d")
+        qualified = self.rank_candidates(
+            universe=universe, pre_open_data=pre_open_data, session_date=session_date)
         top_candidates = qualified[:self.top_n]
         is_fallback = False
 
-        if len(top_candidates) < 4:
-            # Trigger fail-closed canonical fallback
-            is_fallback = True
-            top_candidates = [
-                ScannedCandidate(
-                    symbol=c["symbol"],
-                    ticker=c["ticker"],
-                    basket=c["basket"],
-                    mcap_cr=c["mcap_cr"],
-                    dtv_med20_cr=c["dtv_med20_cr"],
-                    beta=c["beta"],
-                    atr14_pct=c["atr14_pct"],
-                    inst_pct=c["inst_pct"],
-                    pre_open_volume=0,
-                    median_pre_open_volume=50000,
-                    gap_pct=0.0,
-                    momentum_score=round(c["beta"] * (c["atr14_pct"] / 3.0), 3),
-                    qualified=True
-                )
-                for c in CANONICAL_FALLBACK_CANDIDATES
-            ]
-
+        # Codex Finding 2: Zero or fewer qualifying candidates is a valid market regime outcome.
+        # Fail-closed: Do NOT silently synthesize or inject unvetted canonical fallback names.
         payload = {
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "session_date": session_date,
             "is_canonical_fallback": is_fallback,
-            "total_qualified": len(top_candidates),
-            "candidates": [asdict(c) for c in top_candidates]
+            "total_qualified": 0,
+            "research_only": True,
+            "qualification_eligible": False,
+            "qualification_reason": "PHASE1_HOLD_UNVERIFIED_UNIVERSE_PROVENANCE",
+            "research_candidates": [dict(asdict(c), qualified=False) for c in top_candidates],
+            "candidates": []
         }
 
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -379,22 +412,4 @@ class Track2UniverseScanner:
 
 
 if __name__ == "__main__":
-    print("=== TESTING TRACK 2 DYNAMIC UNIVERSE SCANNER ===")
-    scanner = Track2UniverseScanner(top_n=8)
-
-    # Simulated pre-open data
-    mock_pre_open = {
-        "CDSL": {"pre_open_volume": 120000, "median_pre_open_volume": 40000, "gap_pct": 1.2},
-        "IREDA": {"pre_open_volume": 350000, "median_pre_open_volume": 100000, "gap_pct": 2.5},
-        "SUZLON": {"pre_open_volume": 800000, "median_pre_open_volume": 500000, "gap_pct": -0.8},
-        "INOXWIND": {"pre_open_volume": 90000, "median_pre_open_volume": 45000, "gap_pct": 0.5},
-    }
-
-    result = scanner.scan_and_save(pre_open_data=mock_pre_open)
-    print(f"Generated at: {result['generated_at']} | Fallback: {result['is_canonical_fallback']} | Count: {result['total_qualified']}")
-    for c in result["candidates"]:
-        print(f"  {c['symbol']:<12} Basket: {c['basket']:<8} Score: {c['momentum_score']:<7} Beta: {c['beta']} ATR: {c['atr14_pct']}%")
-
-    assert result["total_qualified"] >= 4
-    assert os.path.exists(DYNAMIC_UNIVERSE_PATH)
-    print("ALL UNIVERSE SCANNER SELF-TESTS PASSED 100%!")
+    print("Canonical writes are disabled from module self-tests. Run pytest instead.")

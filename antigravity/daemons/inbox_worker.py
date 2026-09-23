@@ -28,6 +28,8 @@ from typing import Any, Dict, List, Optional, Tuple, Callable
 
 # Workspace Root
 WORKSPACE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if WORKSPACE_DIR not in sys.path:
+    sys.path.insert(0, WORKSPACE_DIR)
 
 # Messages Directory Tree
 MESSAGES_ROOT = os.path.join(WORKSPACE_DIR, "antigravity", "messages")
@@ -470,8 +472,7 @@ def validate_message_schema(msg: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
 
 def invoke_antigravity_model(prompt: str, timeout_sec: int = 120) -> Dict[str, Any]:
     """
-    Invokes the live Antigravity reasoning model via agy CLI without permission-bypass flags.
-    Enforces terminal sandbox restrictions and disables slash command expansions.
+    Invokes Antigravity with user-authorized access after a verified checkpoint.
     """
     if MODEL_DISPATCH_HOOK:
         return MODEL_DISPATCH_HOOK(prompt, timeout_sec)
@@ -487,13 +488,14 @@ def invoke_antigravity_model(prompt: str, timeout_sec: int = 120) -> Dict[str, A
 
     t0 = time.time()
     try:
+        from antigravity.daemons.agent_access import prepare_dispatch, TASK_BOUNDARIES
         proc = subprocess.run(
             [
                 agy_bin,
-                "--sandbox",
+                *prepare_dispatch("ANTIGRAVITY"),
                 "--disable-slash-commands",
                 "--model", "gemini-3.8-flash-low",
-                "-p", prompt
+                "-p", TASK_BOUNDARIES + prompt
             ],
             cwd=WORKSPACE_DIR,
             capture_output=True,
@@ -504,13 +506,30 @@ def invoke_antigravity_model(prompt: str, timeout_sec: int = 120) -> Dict[str, A
         )
         elapsed = time.time() - t0
         out = proc.stdout.strip() or proc.stderr.strip()
-        success = (proc.returncode == 0)
+        normalized_out = out.lower()
+        permission_denial_signatures = (
+            "jetski: no output produced",
+            'tool required the "command" permission',
+            'tool required the "read_file" permission',
+            "headless mode cannot prompt",
+            "so it was auto-denied",
+        )
+        denial = next((sig for sig in permission_denial_signatures if sig in normalized_out), None)
+        success = (proc.returncode == 0) and denial is None and bool(out.strip())
+        if denial:
+            error = f"ANTIGRAVITY_PERMISSION_DENIED: detected '{denial}'"
+        elif not out.strip():
+            error = "ANTIGRAVITY_EMPTY_OUTPUT"
+        elif proc.returncode != 0:
+            error = f"Antigravity CLI exited with {proc.returncode}: {proc.stderr.strip()}"
+        else:
+            error = None
         return {
             "success": success,
             "output": out,
             "returncode": proc.returncode,
             "elapsed_sec": round(elapsed, 2),
-            "error": None if success else f"Antigravity CLI exited with {proc.returncode}: {proc.stderr.strip()}"
+            "error": error
         }
     except subprocess.TimeoutExpired:
         elapsed = time.time() - t0

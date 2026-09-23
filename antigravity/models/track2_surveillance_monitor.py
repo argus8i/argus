@@ -30,8 +30,9 @@ class Track2SurveillanceState:
     is_dynamic_flexing: bool  # True if NSE/FAOP/62241 dynamic band rules apply
     date_str: str
     checked_at: Optional[str] # Timestamp of audit verification
-    status: str               # "QUALIFIED", "DISQUALIFIED_ASM", "DISQUALIFIED_GSM", "DISQUALIFIED_NON_FNO", "DISQUALIFIED_FIXED_BAND", "DISQUALIFIED_UNKNOWN", "DISQUALIFIED_STALE"
+    status: str               # "QUALIFIED", "DISQUALIFIED_ASM", "DISQUALIFIED_GSM", "DISQUALIFIED_NON_FNO", "DISQUALIFIED_FIXED_BAND", "DISQUALIFIED_UNKNOWN", "DISQUALIFIED_STALE", "DISQUALIFIED_MWPL_BAN"
     reason: str
+    is_in_fo_ban: bool = False
 
 
 class Track2SurveillanceMonitor:
@@ -67,7 +68,8 @@ class Track2SurveillanceMonitor:
         gsm_stage: Optional[int],
         band_pct: float,
         date_str: str,
-        checked_at: Optional[str] = None
+        checked_at: Optional[str] = None,
+        is_in_fo_ban: bool = False,
     ) -> Track2SurveillanceState:
         """
         Evaluates a single Track 2 scrip against surveillance and liquidity criteria.
@@ -207,7 +209,23 @@ class Track2SurveillanceMonitor:
             self._record_state(state)
             return state
 
-        if parsed_date_str != date_str:
+        # Codex Correction (3): Freshness must respect exchange effective-session calendars (e.g. Friday for Monday)
+        is_date_valid = False
+        if parsed_date_str == date_str:
+            is_date_valid = True
+        else:
+            try:
+                p_dt = datetime.strptime(parsed_date_str, "%Y-%m-%d").date()
+                s_dt = datetime.strptime(date_str, "%Y-%m-%d").date()
+                # Monday session (weekday 0): Friday (weekday 4), Sat (5), or Sun (6) notice is valid
+                if s_dt.weekday() == 0:
+                    delta_days = (s_dt - p_dt).days
+                    if 1 <= delta_days <= 3 and p_dt.weekday() in (4, 5, 6):
+                        is_date_valid = True
+            except Exception:
+                is_date_valid = False
+
+        if not is_date_valid:
             state = Track2SurveillanceState(
                 symbol=symbol,
                 is_fno_underlying=is_fno_underlying,
@@ -218,7 +236,7 @@ class Track2SurveillanceMonitor:
                 date_str=date_str,
                 checked_at=checked_at,
                 status="DISQUALIFIED_STALE",
-                reason=f"{symbol} surveillance check is stale (checked_at date '{parsed_date_str}' does not match today '{date_str}'). Fail-closed."
+                reason=f"{symbol} surveillance check is stale (checked_at date '{parsed_date_str}' does not govern session '{date_str}' under exchange calendar). Fail-closed."
             )
             self._record_state(state)
             return state
@@ -236,6 +254,24 @@ class Track2SurveillanceMonitor:
                 checked_at=checked_at,
                 status="DISQUALIFIED_NON_FNO",
                 reason=f"{symbol} is NOT an active F&O underlying. Fails Track 2 continuous dynamic liquidity requirement."
+            )
+            self._record_state(state)
+            return state
+
+        # 2b. F&O MWPL Ban Period Verification (95% MWPL threshold)
+        if is_in_fo_ban:
+            state = Track2SurveillanceState(
+                symbol=symbol,
+                is_fno_underlying=True,
+                asm_stage=asm_stage,
+                gsm_stage=gsm_stage,
+                band_pct=band_pct,
+                is_dynamic_flexing=False,
+                date_str=date_str,
+                checked_at=checked_at,
+                status="DISQUALIFIED_MWPL_BAN",
+                reason=f"{symbol} is under NSE F&O Ban (MWPL >= 95%). Liquidity is impaired and basis spreads distorted. Fail-closed.",
+                is_in_fo_ban=True,
             )
             self._record_state(state)
             return state

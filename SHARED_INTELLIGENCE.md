@@ -1,5 +1,10 @@
 # Shared Intelligence: Indian Circuit Microstructure & Operator Patterns
 
+> Legacy Track 1 research, not an approved shared execution specification.
+> Claims below require independent verification and must not override AGENTS.md
+> or enter Track 2. Current role allocation is in AGENTS.md Rule 8; current
+> Track 2 qualification hold is in shared/track2_liquid/03_TRADE_LOG.md.
+
 This knowledge base contains verified observations, mathematical realities, and microstructure mechanics derived from live BSE/NSE market data. All agents (**Antigravity**, **Claude**, **ChatGPT**) must consult and contribute to this file.
 
 ---
@@ -64,4 +69,3 @@ Based on empirical charts from `CROPSTER`, `CHANDRIMA`, and `CCDL`:
   1. We exit during **Peak Buyer Euphoria** when resting buy orders are at their maximum (crores of shares on bid).
   2. A market/limit sell order placed into a multi-crore buyer queue has very high fill probability ($P(\text{Fill}) \approx 100\%$) because buyers are waiting to absorb available shares.
   3. We completely avoid the unpredictable distribution phase where the operator suddenly pulls the bids and drops the stock into a zero-bid Lower Circuit lock.
-

@@ -82,21 +82,20 @@ def test_failure_signature_check_is_case_insensitive():
     assert validate_reviewer_output("CLAUDE", "FAILED TO AUTHENTICATE with the API", 0) is not None
 
 
-def test_reviewers_are_dispatched_read_only():
-    """Reviewers must not be able to edit the workspace; the adapter writes."""
+def test_reviewers_require_checkpoint_before_authorized_dispatch():
+    """User authorized full project access on 20-Sep; every real route backs up."""
     import inspect
     from antigravity.daemons import tri_agent_bus as bus
 
     claude_src = inspect.getsource(bus.ask_claude_detailed)
-    assert '"--allowedTools", "Read,Grep,Glob"' in claude_src
-    assert "Write,Edit,NotebookEdit,Bash" in claude_src
+    assert 'prepare_dispatch("CLAUDE")' in claude_src
 
     # Codex cannot use --sandbox read-only: it hangs on this Windows host.
     # Its boundary is adapter-side path validation, so assert only that no
     # permission-bypass flag is present.
     codex_src = inspect.getsource(bus.ask_codex_detailed)
-    assert "danger-full-access" not in codex_src
-    assert "--dangerously-bypass-approvals-and-sandbox" not in codex_src
+    assert 'prepare_dispatch("CODEX")' in codex_src
+    assert 'prepare_dispatch("ANTIGRAVITY")' in inspect.getsource(bus.ask_antigravity_detailed)
 
     # No permission-bypass flags anywhere in the dispatch layer.
     full = inspect.getsource(bus)
@@ -136,6 +135,17 @@ def test_real_codex_quota_message_is_rejected_at_exit_zero():
 def test_capacity_and_quota_phrasings_all_rejected(text):
     """Match the noun phrase rather than one guessed sentence."""
     assert validate_reviewer_output("CODEX", text, 0) is not None
+
+
+@pytest.mark.parametrize("text", [
+    'jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied.',
+    'jetski: no output produced — a tool required the "read_file" permission that headless mode cannot prompt for, so it was auto-denied.',
+])
+def test_antigravity_headless_permission_denial_is_rejected_at_exit_zero(text):
+    """A tool denial is a failed task even when agy.exe exits successfully."""
+    err = validate_reviewer_output("ANTIGRAVITY", text, 0)
+    assert err is not None
+    assert "ANTIGRAVITY_DISPATCH_FAILED" in err
 
 
 def test_nonzero_exit_reports_what_the_cli_said():

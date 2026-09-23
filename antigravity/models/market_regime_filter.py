@@ -67,9 +67,9 @@ class MarketRegimeFilter:
         Evaluates Nifty 50 price action relative to its 15-minute opening range
         combined with broad market advance/decline ratio.
         """
-        # Validate inputs fail-closed
+        # Validate price inputs fail-closed against None, booleans, NaN, Inf, and non-positive numbers
         for val in [nifty_ltp, nifty_or_high, nifty_or_low]:
-            if val is None or not isinstance(val, (int, float)) or math.isnan(val) or val <= 0:
+            if val is None or isinstance(val, bool) or not isinstance(val, (int, float)) or math.isnan(val) or math.isinf(val) or val <= 0:
                 return MarketRegimeSnapshot(
                     state=MarketRegimeState.REGIME_DATA_INVALID,
                     nifty_ltp=0.0,
@@ -78,7 +78,7 @@ class MarketRegimeFilter:
                     ad_ratio=None,
                     advances=advances,
                     declines=declines,
-                    reason="FAIL-CLOSED: Missing or invalid Nifty 50 price metrics.",
+                    reason="FAIL-CLOSED: Missing, non-finite, boolean, or non-positive Nifty 50 price metrics.",
                     allow_standard_orb=False,
                     min_volume_multiple=float("inf")
                 )
@@ -97,9 +97,36 @@ class MarketRegimeFilter:
                 min_volume_multiple=float("inf")
             )
 
-        # Compute Advance/Decline ratio if counts provided
+        # Compute Advance/Decline ratio if counts provided, validating types strictly
         ad_ratio = None
-        if advances is not None and declines is not None and advances >= 0 and declines >= 0:
+        if advances is not None or declines is not None:
+            if advances is None or declines is None:
+                return MarketRegimeSnapshot(
+                    state=MarketRegimeState.REGIME_DATA_INVALID,
+                    nifty_ltp=nifty_ltp,
+                    nifty_or_high=nifty_or_high,
+                    nifty_or_low=nifty_or_low,
+                    ad_ratio=None,
+                    advances=advances,
+                    declines=declines,
+                    reason="FAIL-CLOSED: Partial breadth data (both advances and declines must be provided together).",
+                    allow_standard_orb=False,
+                    min_volume_multiple=float("inf")
+                )
+            for cnt in [advances, declines]:
+                if cnt is None or isinstance(cnt, bool) or not isinstance(cnt, (int, float)) or math.isnan(cnt) or math.isinf(cnt) or cnt < 0:
+                    return MarketRegimeSnapshot(
+                        state=MarketRegimeState.REGIME_DATA_INVALID,
+                        nifty_ltp=nifty_ltp,
+                        nifty_or_high=nifty_or_high,
+                        nifty_or_low=nifty_or_low,
+                        ad_ratio=None,
+                        advances=advances,
+                        declines=declines,
+                        reason="FAIL-CLOSED: Malformed advance/decline breadth metrics (must be non-negative finite numeric).",
+                        allow_standard_orb=False,
+                        min_volume_multiple=float("inf")
+                    )
             if declines == 0:
                 ad_ratio = float("inf") if advances > 0 else 1.0
             else:
@@ -135,24 +162,39 @@ class MarketRegimeFilter:
                 min_volume_multiple=float("inf")
             )
 
-        # 3. Check Bullish Expansion (Index above OR High AND Breadth >= min_ad_ratio)
+        # 3. Check Bullish Expansion (Index above OR High AND Breadth explicitly verified >= min_ad_ratio)
         is_nifty_breakout = nifty_ltp > nifty_or_high
-        is_breadth_strong = (ad_ratio is None) or (ad_ratio >= min_ad_ratio)
 
-        if is_nifty_breakout and is_breadth_strong:
-            breadth_str = f"A/D {ad_ratio:.2f}" if ad_ratio is not None else "Breadth unmeasured"
-            return MarketRegimeSnapshot(
-                state=MarketRegimeState.BULLISH_EXPANSION,
-                nifty_ltp=nifty_ltp,
-                nifty_or_high=nifty_or_high,
-                nifty_or_low=nifty_or_low,
-                ad_ratio=ad_ratio,
-                advances=advances,
-                declines=declines,
-                reason=f"BULLISH EXPANSION: Nifty 50 ({nifty_ltp:.1f}) > OR High ({nifty_or_high:.1f}) with strong breadth ({breadth_str}). Standard ORB active.",
-                allow_standard_orb=True,
-                min_volume_multiple=2.5
-            )
+        # Codex Finding 5: Do NOT fail open when breadth is missing.
+        # Breadth must be verified >= min_ad_ratio to allow BULLISH_EXPANSION.
+        if is_nifty_breakout:
+            if ad_ratio is not None and ad_ratio >= min_ad_ratio:
+                return MarketRegimeSnapshot(
+                    state=MarketRegimeState.BULLISH_EXPANSION,
+                    nifty_ltp=nifty_ltp,
+                    nifty_or_high=nifty_or_high,
+                    nifty_or_low=nifty_or_low,
+                    ad_ratio=ad_ratio,
+                    advances=advances,
+                    declines=declines,
+                    reason=f"BULLISH EXPANSION: Nifty 50 ({nifty_ltp:.1f}) > OR High ({nifty_or_high:.1f}) with strong breadth (A/D {ad_ratio:.2f}). Standard ORB active.",
+                    allow_standard_orb=True,
+                    min_volume_multiple=2.5
+                )
+            elif ad_ratio is None:
+                # Nifty breakout but unmeasured breadth: Selective only, standard ORB NOT allowed
+                return MarketRegimeSnapshot(
+                    state=MarketRegimeState.NEUTRAL_SELECTIVE,
+                    nifty_ltp=nifty_ltp,
+                    nifty_or_high=nifty_or_high,
+                    nifty_or_low=nifty_or_low,
+                    ad_ratio=None,
+                    advances=advances,
+                    declines=declines,
+                    reason=f"SELECTIVE_UNCONFIRMED_BREADTH: Nifty 50 ({nifty_ltp:.1f}) > OR High ({nifty_or_high:.1f}) but broad breadth is missing. Standard ORB disabled; requires 3.5x volume.",
+                    allow_standard_orb=False,
+                    min_volume_multiple=3.5
+                )
 
         # 4. Neutral / Selective Regime (Inside range, or breakout with lukewarm breadth)
         reason_desc = []

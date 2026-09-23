@@ -97,3 +97,13 @@ Before admitting any long Opening Range Breakout at 09:30 IST, the engine evalua
    - Automatically ingests daily BSE/NSE ASM/GSM and F&O inclusion/exclusion bulletins every evening.
    - Guarantees zero scrips under surveillance or outside derivatives enter Track 2, enforcing 100% compliance 14 hours before market pre-open.
 
+---
+
+## 8. Performance Target Realignment (Post-Audit Finding F20)
+- **Elimination of Arbitrary Monthly Return Targets:**
+  - Previous references to targets like "+20%/month" are mathematically contradictory with a strict ₹1,500 rupee risk budget on a ₹5,00,000 corpus (achieving 20%/month = +₹1,00,000 net profit would require an unrealistic 66.7R per month from 1–2 setups per day).
+- **Empirical Net Expectancy Target ($E > 0$):**
+  - The strategy objective is strictly calibrated to **positive net expectancy ($E > 0$) after 43.0 bps round-trip friction across 60 prospective live trading sessions**:
+    $$E = (P_{\text{win}} \times \bar{R}_{\text{win}}) - (P_{\text{loss}} \times \bar{R}_{\text{loss}}) - \text{Friction}_{\text{round-trip}} > 0$$
+  - Real capital deployment remains unconditionally prohibited until 60 prospective live sessions and at least 20 realistically fillable paper executions are completed and independently verified with $E > 0$.
+

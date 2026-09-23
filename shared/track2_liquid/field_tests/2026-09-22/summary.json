@@ -1,0 +1,20 @@
+{
+  "actual_order_sent": false,
+  "candidate_count": 0,
+  "captured_cycles": 4612,
+  "confirmed_fills": 0,
+  "counts_session_gate": false,
+  "counts_trade_gate": false,
+  "generated_at": "2026-09-22T22:48:37.559689+05:30",
+  "issues": [
+    "ValueError: Nifty completed candle is stale",
+    "ValueError: ValueError: surveillance source identity/time mismatch",
+    "ValueError: candle request is stale or future-dated",
+    "ValueError: current Kite candle artifact is stale",
+    "ValueError: current Kite candles belong to another session"
+  ],
+  "mode": "FIELD_TEST",
+  "realized_pnl": null,
+  "review_status": "PENDING_TRI_AGENT_REVIEW",
+  "state": "FIELD_TEST_CLOSED"
+}

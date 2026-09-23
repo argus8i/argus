@@ -1,0 +1,11 @@
+{
+  "mode": "AUTONOMOUS",
+  "environment": "PAPER_SIMULATION",
+  "expiry_seconds": 30.0,
+  "max_slippage_bps": 15.0,
+  "risk_budget_rs": 1500.0,
+  "max_open_positions": 3,
+  "tier1_vol_mult_threshold": 4.0,
+  "enforce_rule1_lock": true,
+  "updated_at": "2026-09-23T13:01:12.219358+00:00"
+}

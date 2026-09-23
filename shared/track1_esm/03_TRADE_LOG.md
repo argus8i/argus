@@ -14,8 +14,7 @@ These real capital trades occurred prior to AGENTS.md Rule 1 adoption and establ
 |---|---|---|---|---|---|---|---|
 | `HIST-01` | **CCDL** (539091) | 09-Sep-2026 @ ₹1.32 | 10-Sep-2026 @ ₹1.38 | 30,000 | **+₹1,800.00** | **+4.55%** | Pre-emptive exit into UC buyer queue on Day 2. On 11-Sep, stock locked at Lower Circuit with 0 bids and 2.05 Cr offers. Pre-emptive exit saved capital from unbroken LC descent. |
 | `HIST-02` | **CROPSTER** (523105) | 24-Aug-2026 @ ₹4.77 | 27-Aug-2026 @ ₹4.09 | 12,560 | **−₹8,500.00** | **−14.18%** | Caught in zero-bid LC freeze on 25-Aug. Exit order queued at 09:00:01 on Day 3 (27-Aug) and filled within 1 hour during the 1.57 Cr share volume absorption wave. Proved queue drain is achievable under volume expansion. (Entry date corrected from 22-Aug Saturday to Monday 24-Aug). |
-| `HIST-03A` | **CHANDRIMA** (540829) | 26-Aug-2026 @ ₹12.23 | 27-Aug-2026 @ ₹12.24 | 4,500 | **+₹45.00** | **+0.08%** | Breakeven intraday exit captured on initial broker screenshot. Position was 70.8% of daily volume (violating Rule 9). Stock subsequently escalated to ESM Stage 2 (PCAS, 2% band). |
-| `HIST-03B` | **CHANDRIMA** (540829) | 26-Aug-2026 @ ₹12.23 | 27-Aug-2026 @ ₹12.84 | 4,500 | **+₹2,750.00** | **+4.99%** | Full swing exit reported by user (gross proceeds ₹57,780 vs cost ₹55,035). Documented alongside HIST-03A to resolve screenshot vs tradebook discrepancy without creating synthetic fills. |
+| `HIST-03` | **CHANDRIMA** (540829) | 26-Aug-2026 @ ₹12.23 | 27-Aug-2026 @ ₹12.22 | 4,500 | **−₹45.00** | **−0.08%** | Intraday exit verified from 27-Aug 13:25 broker screenshot (−₹45.00 net loss). Position was 70.8% of daily volume (violating Rule 9). Corrected per Claude Red-Team Audit (Finding F14); invalid HIST-03B (above ₹12.24 UC) purged. |
 
 ---
 

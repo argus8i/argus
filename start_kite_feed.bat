@@ -30,9 +30,12 @@ if not exist "%CHROME_EXE%" (
     )
 )
 
-echo [1/3] Launching Google Chrome with DevTools Remote Debugging on Port 9333...
-echo       Profile Directory: %PROFILE_DIR%
-start "" "%CHROME_EXE%" --remote-debugging-port=9333 --user-data-dir="%PROFILE_DIR%" --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding %DEVTOOLS_FLAG% --no-first-run --no-default-browser-check "https://kite.zerodha.com"
+echo [SECURITY VIOLATION PREVENTED]
+echo CDP Remote Debugging Port 9333 is disabled per Claude Red-Team Audit (Findings F2, F3).
+echo Running unauthenticated Chrome debug ports alongside autonomous AI agents exposes active broker credentials.
+echo Use official headless API feeds (e.g. start_track2_dhan_feed.bat) instead.
+pause
+exit /b 1
 
 echo.
 echo [2/3] Waiting 3 seconds for Chrome to initialize...

@@ -722,10 +722,11 @@ def compute_rule7_volume_expansion(
 
 
 async def cdp_bridge():
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting Track 1 Kite Web CDP Bridge...")
-    print(f"  Target: Google Chrome on {CDP_HTTP_URL}")
-    print(f"  Universe: {len(TRACK1_INSTRUMENTS)} Track 1 Circuit Micro-Caps & Aliases")
-    print(f"  Output: {LIVE_DEPTH_PATH}")
+    raise RuntimeError(
+        "Kite Web CDP Bridge is permanently disabled per Claude Red-Team Audit (Findings F2, F3). "
+        "Extracting session tokens over unauthenticated Chrome remote debugging ports violates project security policy. "
+        "Use official headless API feeds with external credentials."
+    )
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     msg_id = 1000
@@ -949,6 +950,8 @@ async def cdp_bridge():
                             for sym, m in TRACK1_INSTRUMENTS.items()
                         }
                         val["volume_expansion_audit"] = vol_audit
+                        val["enctoken"] = auth_state.get("enctoken")
+                        val["user_id"] = auth_state.get("user_id")
 
                         # Write structured JSON atomically
                         tmp_path = LIVE_DEPTH_PATH + ".tmp"

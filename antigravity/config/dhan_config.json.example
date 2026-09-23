@@ -1,0 +1,10 @@
+{
+  "_comment": "DhanHQ API Configuration for Track 2 Headless High-Speed Market Data Feed",
+  "_security_notice": "NEVER commit real credentials. Real capital is strictly locked (Rule 1). Paper trading only.",
+  "client_id": "YOUR_DHAN_CLIENT_ID",
+  "access_token": "YOUR_DHAN_ACCESS_TOKEN",
+  "feed_mode": "FULL",
+  "stream_all_fno": false,
+  "candle_interval": 15,
+  "paper_trading_only": true
+}

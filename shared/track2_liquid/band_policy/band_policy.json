@@ -1,0 +1,20 @@
+{
+  "applies_to": "ACTIVE_FNO_UNDERLYINGS",
+  "circulars": [
+    {
+      "id": "NSE/FAOP/62241",
+      "path": "FAOP62241.pdf",
+      "sha256": "51d691bd03a5621cc003b45783b9d38df8e35da5e22519b5b8a4f7288ce86d34",
+      "url": "https://nsearchives.nseindia.com/content/circulars/FAOP62241.pdf"
+    },
+    {
+      "id": "NSE/FAOP/63405",
+      "path": "FAOP63405.pdf",
+      "sha256": "225cdb6944320edaab36aad74136b7b79029ee9d25b7c2c1f6415a17b5d4a448",
+      "url": "https://nsearchives.nseindia.com/content/circulars/FAOP63405.pdf"
+    }
+  ],
+  "effective_from": "2024-08-19",
+  "market": "NSE_CASH",
+  "policy_id": "NSE_DYNAMIC_OPERATING_RANGE_V2"
+}

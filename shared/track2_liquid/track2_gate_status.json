@@ -1,0 +1,15 @@
+{
+  "gate_passed": false,
+  "integrity_errors": [],
+  "orphan_directories": [],
+  "pending_attempts": 0,
+  "prospective_sessions": 0,
+  "realistically_fillable_entries": 0,
+  "required_entries": 20,
+  "required_sessions": 60,
+  "sessions": [],
+  "track_id": "TRACK2",
+  "trusted": true,
+  "unexpected_root_entries": [],
+  "void_attempts": 0
+}

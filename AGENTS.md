@@ -1,5 +1,17 @@
 # Project Swing Trades: Autonomous Agent Ground Rules
 
+## Security & Access Authorization — 23 September 2026 (Red-Team Hardened)
+
+Yashu authorizes Claude, Codex and Antigravity to read, edit, build and test the
+project under standard execution sandboxing. All permission-bypass flags
+(`--dangerously-bypass-approvals-and-sandbox`, `--dangerously-skip-permissions`)
+are permanently revoked per Claude Red-Team Audit (Findings F1-F4). Antigravity
+remains the primary orchestrator. Browser remote-debugging ports (9333, 9444) and
+active browser credential scraping are strictly prohibited. Rule 1 (paper only),
+Rule 8 (core-model peer review), and Rule 11 still apply. Do not delete the
+repository, .git, checkpoints, or unrelated user work. Do not use destructive
+Git resets/clean operations. Report actual edits and tests.
+
 These rules apply unconditionally to all AI agents (**Antigravity**, **Claude**, **ChatGPT**) collaborating in `c:\Users\yashw\swing trades`.
 
 ---
@@ -41,8 +53,9 @@ These rules apply unconditionally to all AI agents (**Antigravity**, **Claude**,
 ## 8. Tri-Agent Consensus Protocol
 - **Constraint:** Cross-agent peer review is mandatory before modifying core models or executing paper trades:
   - **Claude:** Microstructure, adverse-selection testing, and red-teaming.
-  - **ChatGPT:** Filings, corporate actions, and surveillance tracking.
+  - **ChatGPT / Codex:** Senior Systems, Execution-Reality & Reliability Engineer: integration, data contracts, execution-state correctness, adversarial tests, reproducible verification, and regulatory provenance. May implement explicitly assigned changes; must not independently approve its own core-model changes.
   - **Antigravity:** Quantitative modeling, execution automation, and Bhavcopy pipelines.
+  - Antigravity remains primary orchestrator and integration owner. Claude leads quantitative red-teaming. Specialization is responsibility, not a prohibition on finding defects outside one's specialty. Review-only dispatches remain read-only tasks; implementation assignments must specify file ownership to prevent concurrent overwrites. Report evidence and unresolved dissent, not approval by majority vote.
 
 ## 9. Liquidity & Market Participation Sizing Gate (Claude Specification)
 - **Constraint:** Position size must never exceed **15% maximum participation** of realistic daily volume over a 2-session clearable horizon.
@@ -75,4 +88,3 @@ These rules apply unconditionally to all AI agents (**Antigravity**, **Claude**,
   - Strictly prohibited from applying Track 1 circuit-freeze paranoia, ESM surveillance restrictions, or 10-day LC sizing to liquid F&O underlyings.
   - Strictly prohibited from applying Track 2 continuous stop-loss assumptions to Track 1 micro-caps.
   - Dedicated storage: `shared/track2_liquid/` and `CHATGPT/monday_orb_paper_template.csv`.
-

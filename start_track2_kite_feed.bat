@@ -1,4 +1,5 @@
 @echo off
+cd /d "%~dp0"
 title Track 2 Kite Web Live Depth Capture Bridge (Port 9444)
 color 0B
 echo ====================================================================
@@ -23,9 +24,12 @@ if not exist "%CHROME_EXE%" (
     )
 )
 
-echo [1/3] Launching Dedicated Track 2 Chrome on Port 9444...
-echo       Profile Directory: %PROFILE_DIR%
-start "" "%CHROME_EXE%" --remote-debugging-port=9444 --user-data-dir="%PROFILE_DIR%" --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --no-first-run --no-default-browser-check "https://kite.zerodha.com"
+echo [SECURITY VIOLATION PREVENTED]
+echo CDP Remote Debugging Port 9444 is disabled per Claude Red-Team Audit (Findings F2, F3).
+echo Running unauthenticated Chrome debug ports alongside autonomous AI agents exposes active broker credentials.
+echo Use official headless API feeds (e.g. start_track2_dhan_feed.bat) instead.
+pause
+exit /b 1
 
 echo.
 echo [2/3] Waiting 3 seconds for Chrome (Port 9444) to initialize...
@@ -33,7 +37,8 @@ ping -n 4 127.0.0.1 >nul
 
 echo.
 echo [3/3] Starting Track 2 Python Bridge Daemon...
-echo       Streaming 5-depth order books to shared/track2_liquid/live_depth_track2.json
+echo       Streaming quotes/depth to shared/track2_liquid/live_depth_track2.json
+echo       Streaming 15-minute bars to shared/track2_liquid/live_candles_track2.json
 echo.
 call "%~dp0.venv\Scripts\python.exe" "%~dp0antigravity\daemons\track2_kite_bridge.py"
 

@@ -88,9 +88,11 @@ CLAUDE_BIN = get_claude_bin()
 CODEX_BIN = get_codex_bin()
 AGY_BIN = get_antigravity_bin()
 WORKSPACE = r"c:\Users\yashw\swing trades"
+from antigravity.daemons.agent_access import prepare_dispatch, TASK_BOUNDARIES
 LOGS_DIR = os.path.join(WORKSPACE, "antigravity", "logs")
 DIALOGUE_MD = os.path.join(LOGS_DIR, "tri_agent_dialogue.md")
 DIALOGUE_JSONL = os.path.join(LOGS_DIR, "tri_agent_dialogue.jsonl")
+DISPATCH_EVENTS_JSONL = os.path.join(LOGS_DIR, "tri_agent_dispatch_events.jsonl")
 
 
 def get_logs_dir() -> str:
@@ -104,7 +106,52 @@ def get_logs_dir() -> str:
     return os.environ.get("TRI_AGENT_LOGS_DIR") or LOGS_DIR
 
 
-def log_interaction(recipient: str, prompt: str, response: str, elapsed_sec: float, exit_code: int = 0):
+def log_dispatch_event(
+    dispatch_id: str,
+    recipient: str,
+    prompt: str,
+    status: str,
+    *,
+    elapsed_sec: float = 0.0,
+    exit_code: Optional[int] = None,
+) -> None:
+    """Append a compact lifecycle event consumed by the local monitor."""
+    if status not in {"DISPATCHED", "COMPLETED", "FAILED", "TIMED_OUT"}:
+        raise ValueError(f"Unsupported dispatch status: {status}")
+    record = {
+        "dispatch_id": dispatch_id,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S IST"),
+        "recipient": recipient,
+        "status": status,
+        "elapsed_seconds": round(elapsed_sec, 2),
+        "exit_code": exit_code,
+        "prompt_preview": " ".join(prompt.split())[:240],
+    }
+    logs_dir = get_logs_dir()
+    os.makedirs(logs_dir, exist_ok=True)
+    path = os.path.join(logs_dir, "tri_agent_dispatch_events.jsonl")
+    try:
+        with open(path, "a", encoding="utf-8") as event_log:
+            event_log.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        print(f"Warning: Failed to write dispatch event: {exc}")
+
+
+def begin_dispatch(recipient: str, prompt: str) -> str:
+    """Create a visible dispatch before invoking a potentially slow reviewer."""
+    dispatch_id = f"dispatch_{int(time.time())}_{uuid.uuid4().hex[:10]}"
+    log_dispatch_event(dispatch_id, recipient, prompt, "DISPATCHED")
+    return dispatch_id
+
+
+def log_interaction(
+    recipient: str,
+    prompt: str,
+    response: str,
+    elapsed_sec: float,
+    exit_code: int = 0,
+    dispatch_id: Optional[str] = None,
+):
     """Permanently logs all inter-agent communications for Yashu to inspect in real time."""
     logs_dir = get_logs_dir()
     os.makedirs(logs_dir, exist_ok=True)
@@ -154,6 +201,17 @@ def log_interaction(recipient: str, prompt: str, response: str, elapsed_sec: flo
     except Exception as e:
         print(f"Warning: Failed to write to {dialogue_md}: {e}")
 
+    if dispatch_id:
+        status = "COMPLETED" if exit_code == 0 else ("TIMED_OUT" if exit_code == 124 else "FAILED")
+        log_dispatch_event(
+            dispatch_id,
+            recipient,
+            prompt,
+            status,
+            elapsed_sec=elapsed_sec,
+            exit_code=exit_code,
+        )
+
 
 # Reviewer CLIs report some hard failures on stdout while exiting 0. Claude Code
 # prints "Failed to authenticate: OAuth session expired..." and exits 0; treating
@@ -177,6 +235,13 @@ REVIEWER_FAILURE_SIGNATURES = (
     "stream error",
     "overloaded",
     "503 service",
+    # Antigravity's headless runner may exit 0 after a tool permission denial.
+    # A signed envelope authenticates the sender, not successful execution.
+    "jetski: no output produced",
+    "tool required the \"command\" permission",
+    "tool required the \"read_file\" permission",
+    "headless mode cannot prompt",
+    "so it was auto-denied",
 )
 
 # Anything shorter than this is not a review, whatever the exit code said.
@@ -219,17 +284,16 @@ def validate_reviewer_output(
 
 def ask_claude_detailed(prompt: str, timeout_sec: int = 300, min_chars: int = MIN_REVIEW_CHARS) -> Dict[str, Any]:
     """Invokes Claude Code non-interactively in the workspace with structured returncode tracking."""
+    recipient = "Claude Code"
+    dispatch_id = begin_dispatch(recipient, prompt)
     if not os.path.exists(CLAUDE_BIN):
         err = f"ERROR: Claude binary not found at {CLAUDE_BIN}"
-        log_interaction("Claude Code", prompt, err, 0.0, 1)
+        log_interaction(recipient, prompt, err, 0.0, 1, dispatch_id)
         return {"success": False, "output": err, "returncode": 1, "elapsed": 0.0, "error": err}
     t0 = time.time()
     try:
         proc = subprocess.run(
-            [CLAUDE_BIN, "-p", prompt,
-             # Reviewers are read-only. The adapter writes the submission file.
-             "--allowedTools", "Read,Grep,Glob",
-             "--disallowedTools", "Write,Edit,NotebookEdit,Bash"],
+            [CLAUDE_BIN, *prepare_dispatch("CLAUDE"), "-p", TASK_BOUNDARIES + prompt],
             cwd=WORKSPACE,
             capture_output=True,
             text=True,
@@ -240,7 +304,7 @@ def ask_claude_detailed(prompt: str, timeout_sec: int = 300, min_chars: int = MI
         )
         elapsed = time.time() - t0
         res = proc.stdout.strip() or proc.stderr.strip()
-        log_interaction("Claude Code", prompt, res, elapsed, proc.returncode)
+        log_interaction(recipient, prompt, res, elapsed, proc.returncode, dispatch_id)
         failure = validate_reviewer_output("CLAUDE", res, proc.returncode, min_chars)
         return {
             "success": failure is None,
@@ -252,12 +316,12 @@ def ask_claude_detailed(prompt: str, timeout_sec: int = 300, min_chars: int = MI
     except subprocess.TimeoutExpired:
         elapsed = time.time() - t0
         err = f"ERROR: Claude timed out after {timeout_sec}s"
-        log_interaction("Claude Code", prompt, err, elapsed, 124)
+        log_interaction(recipient, prompt, err, elapsed, 124, dispatch_id)
         return {"success": False, "output": err, "returncode": 124, "elapsed": elapsed, "error": err}
     except Exception as e:
         elapsed = time.time() - t0
         err = f"ERROR invoking Claude: {e}"
-        log_interaction("Claude Code", prompt, err, elapsed, 1)
+        log_interaction(recipient, prompt, err, elapsed, 1, dispatch_id)
         return {"success": False, "output": err, "returncode": 1, "elapsed": elapsed, "error": err}
 
 
@@ -283,9 +347,11 @@ codex
 tokens used
 " stdout scraping.
     """
+    recipient = "OpenAI Codex"
+    dispatch_id = begin_dispatch(recipient, prompt)
     if not os.path.exists(CODEX_BIN):
         err = f"ERROR: Codex binary not found at {CODEX_BIN}"
-        log_interaction("OpenAI Codex", prompt, err, 0.0, 1)
+        log_interaction(recipient, prompt, err, 0.0, 1, dispatch_id)
         return {"success": False, "output": err, "returncode": 1, "elapsed": 0.0, "error": err}
 
     t0 = time.time()
@@ -297,10 +363,9 @@ tokens used
         with open(console_path, "w", encoding="utf-8") as console:
             proc = subprocess.run(
                 [CODEX_BIN, "exec", "--skip-git-repo-check", "--ephemeral",
-                 # Reviewers are read-only; the adapter writes the submission file.
-                 "--sandbox", "read-only",
+                 *prepare_dispatch("CODEX"),
                  "--output-last-message", last_message_path, "-"],
-                input=prompt,
+                input=TASK_BOUNDARIES + prompt,
                 cwd=WORKSPACE,
                 stdout=console,
                 stderr=subprocess.STDOUT,
@@ -320,7 +385,7 @@ tokens used
             with open(console_path, encoding="utf-8", errors="replace") as f:
                 final_res = f.read().strip()
 
-        log_interaction("OpenAI Codex", prompt, final_res, elapsed, proc.returncode)
+        log_interaction(recipient, prompt, final_res, elapsed, proc.returncode, dispatch_id)
         failure = validate_reviewer_output("CODEX", final_res, proc.returncode, min_chars)
         return {
             "success": failure is None,
@@ -332,12 +397,12 @@ tokens used
     except subprocess.TimeoutExpired:
         elapsed = time.time() - t0
         err = f"ERROR: Codex timed out after {timeout_sec}s"
-        log_interaction("OpenAI Codex", prompt, err, elapsed, 124)
+        log_interaction(recipient, prompt, err, elapsed, 124, dispatch_id)
         return {"success": False, "output": err, "returncode": 124, "elapsed": elapsed, "error": err}
     except Exception as e:
         elapsed = time.time() - t0
         err = f"ERROR invoking Codex: {e}"
-        log_interaction("OpenAI Codex", prompt, err, elapsed, 1)
+        log_interaction(recipient, prompt, err, elapsed, 1, dispatch_id)
         return {"success": False, "output": err, "returncode": 1, "elapsed": elapsed, "error": err}
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
@@ -361,11 +426,14 @@ def ask_antigravity_detailed(
     """
     import antigravity.daemons.inbox_worker as iw
 
+    recipient = "Antigravity Model"
+    dispatch_id = begin_dispatch(recipient, prompt)
+
     if iw.MODEL_DISPATCH_HOOK:
         res = iw.MODEL_DISPATCH_HOOK(prompt, timeout_sec) or {}
         out = res.get("output", "")
         rc = res.get("returncode", 0)
-        log_interaction("Antigravity Model", prompt, out, res.get("elapsed_sec", 0.0), rc)
+        log_interaction(recipient, prompt, out, res.get("elapsed_sec", 0.0), rc, dispatch_id)
         # Validate hook output too. The hook is how tests inject responses, and
         # an unvalidated hook is exactly how simulated text reached canonical
         # review files once already.
@@ -376,7 +444,7 @@ def ask_antigravity_detailed(
 
     if not os.path.exists(AGY_BIN):
         err = f"ERROR: Antigravity binary not found at {AGY_BIN}"
-        log_interaction("Antigravity Model", prompt, err, 0.0, 1)
+        log_interaction(recipient, prompt, err, 0.0, 1, dispatch_id)
         return {"success": False, "output": err, "returncode": 1, "elapsed": 0.0, "error": err}
 
     t0 = time.time()
@@ -388,10 +456,10 @@ def ask_antigravity_detailed(
             proc = subprocess.run(
                 [
                     AGY_BIN,
-                    "--sandbox",
+                    *prepare_dispatch("ANTIGRAVITY"),
                     "--disable-slash-commands",
                     "--model", "gemini-3.8-flash-low",
-                    "-p", prompt
+                    "-p", TASK_BOUNDARIES + prompt
                 ],
                 cwd=WORKSPACE,
                 stdout=console,
@@ -406,7 +474,7 @@ def ask_antigravity_detailed(
         with open(console_path, encoding="utf-8", errors="replace") as f:
             out = f.read().strip()
 
-        log_interaction("Antigravity Model", prompt, out, elapsed, proc.returncode)
+        log_interaction(recipient, prompt, out, elapsed, proc.returncode, dispatch_id)
         failure = validate_reviewer_output("ANTIGRAVITY", out, proc.returncode, min_chars)
         return {
             "success": failure is None,
@@ -418,12 +486,12 @@ def ask_antigravity_detailed(
     except subprocess.TimeoutExpired:
         elapsed = time.time() - t0
         err = f"ERROR: Antigravity timed out after {timeout_sec}s"
-        log_interaction("Antigravity Model", prompt, err, elapsed, 124)
+        log_interaction(recipient, prompt, err, elapsed, 124, dispatch_id)
         return {"success": False, "output": err, "returncode": 124, "elapsed": elapsed, "error": err}
     except Exception as e:
         elapsed = time.time() - t0
         err = f"ERROR invoking Antigravity: {e}"
-        log_interaction("Antigravity Model", prompt, err, elapsed, 1)
+        log_interaction(recipient, prompt, err, elapsed, 1, dispatch_id)
         return {"success": False, "output": err, "returncode": 1, "elapsed": elapsed, "error": err}
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)

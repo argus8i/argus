@@ -44,6 +44,7 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, REPO_ROOT)
 
 from antigravity.daemons.feed_validity import check_feed, usable_watchlist
+from antigravity.daemons.exchange_circular_poller import ExchangeCircularPoller
 
 from antigravity.models.liquid_momentum_screener import LiquidMomentumEngine, SizingResult
 from antigravity.models.track2_surveillance_monitor import Track2SurveillanceMonitor
@@ -182,7 +183,11 @@ KITE_INSTRUMENT_TOKENS = {
     "SUZLON": 3076609,
     "IREDA": 5186817,
     "CDSL": 5420545,
-    "COCHINSHIP": 5506049
+    "COCHINSHIP": 5506049,
+    "TATACHEM": 871681,
+    "NATIONALUM": 1629185,
+    "POLICYBZR": 1703937,
+    "DIXON": 5552641
 }
 
 
@@ -257,27 +262,26 @@ class Track2LiveRadar:
     Autonomous Live Radar & Paper Execution Engine for Track 2.
     """
 
-    def __init__(self, risk_budget_rs: float = 1500.0, max_notional_rs: float = 100000.0):
+    def __init__(self, risk_budget_rs: float = 1500.0, max_notional_rs: float = 100000.0,
+                 surveillance_monitor: Optional[Track2SurveillanceMonitor] = None,
+                 surveillance_snapshot_path: Optional[str] = None,
+                 surveillance_log_path: Optional[str] = None):
         self.risk_budget_rs = risk_budget_rs
         self.max_notional_rs = max_notional_rs
-        self.surveillance_monitor = Track2SurveillanceMonitor()
+        self.surveillance_monitor = surveillance_monitor or Track2SurveillanceMonitor()
+        self.surveillance_snapshot_path = surveillance_snapshot_path
+        self.surveillance_log_path = surveillance_log_path
 
     def audit_daily_surveillance(self, target_date_str: str) -> Dict[str, Any]:
         """
         Runs daily pre-open surveillance checks for all Track 2 candidates.
+        Ingests immutable, SHA-256 verified exchange circular snapshots.
+        Fails closed on unverified, missing, or stale circulars.
         """
-        basket_items = []
-        checked_time = f"{target_date_str} 08:50:00"
-        for scrip in TRACK2_UNIVERSE:
-            basket_items.append({
-                "symbol": scrip["symbol"],
-                "is_fno_underlying": scrip["is_fno"],
-                "asm_stage": 0,  # 0 indicates verified clean of ASM
-                "gsm_stage": 0,  # 0 indicates verified clean of GSM
-                "band_pct": 0.0, # 0.0 indicates dynamic flexing band (NSE/FAOP/62241)
-                "checked_at": checked_time
-            })
-        return self.surveillance_monitor.run_daily_basket_audit(basket_items, target_date_str)
+        poller = ExchangeCircularPoller(
+            history_path=self.surveillance_monitor.history_file,
+            log_path=self.surveillance_log_path or os.path.join(LOGS_DIR, "circular_poller.log"))
+        return poller.poll_and_update(target_date_str, snapshot_path=self.surveillance_snapshot_path)
 
     def scan_session(self, target_date_str: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -298,43 +302,57 @@ class Track2LiveRadar:
             try:
                 with open(kite_t2_path, "r", encoding="utf-8") as kf:
                     k_data = json.load(kf)
-                    # enctoken is session auth, not market data, so it stays
-                    # readable even when the snapshot is stale.
-                    enctoken = k_data.get("enctoken")
                     t2_ok, t2_reason = check_feed(k_data)
                     if not t2_ok:
                         print(f"[FEED] Track 2 Kite snapshot unusable ({t2_reason}); "
                               f"ignoring its ticks this cycle.")
-                    for item in usable_watchlist(k_data):
-                        if item.get("symbol") and item.get("ltp"):
-                            kite_ticks[item["symbol"]] = item
+                    else:
+                        enctoken = k_data.get("enctoken")
+                        for item in usable_watchlist(k_data):
+                            if item.get("symbol") and item.get("ltp"):
+                                kite_ticks[item["symbol"]] = item
             except Exception:
                 pass
 
-        # Load Dynamic Universe if available, otherwise use canonical TRACK2_UNIVERSE
-        active_universe = TRACK2_UNIVERSE
+        # Fallback to Track 1 live_depth.json for valid session enctoken if not in t2
+        if not enctoken:
+            kite_t1_path = os.path.join(REPO_ROOT, "shared", "live_depth.json")
+            if os.path.exists(kite_t1_path):
+                try:
+                    with open(kite_t1_path, "r", encoding="utf-8") as kf1:
+                        k1_data = json.load(kf1)
+                        enctoken = k1_data.get("enctoken")
+                except Exception:
+                    pass
+
+        # An absent/empty/invalid current universe is not permission to substitute
+        # hardcoded candidates. Qualification remains frozen independently below.
+        active_universe = []
         if os.path.exists(DYNAMIC_UNIVERSE_PATH):
             try:
                 with open(DYNAMIC_UNIVERSE_PATH, "r", encoding="utf-8") as uf:
                     u_data = json.load(uf)
-                    if u_data.get("candidates"):
+                    research_pool = u_data.get("research_candidates")
+                    if (u_data.get("session_date") == target_date_str
+                            and u_data.get("research_only") is True
+                            and isinstance(research_pool, list)):
                         active_universe = [
                             {
                                 "symbol": c["symbol"],
                                 "ticker": c.get("ticker", f"{c['symbol']}.NS"),
                                 "basket": c.get("basket", "DYNAMIC"),
                                 "series": "EQ",
-                                "is_fno": True,
-                                "mcap_cr": c.get("mcap_cr", 25000.0),
-                                "dtv_med20_cr": c.get("dtv_med20_cr", 100.0),
-                                "beta": c.get("beta", 1.5),
-                                "atr14_pct": c.get("atr14_pct", 4.0),
-                                "inst_pct": c.get("inst_pct", 20.0),
+                                "is_fno": c.get("is_fno") is True,
+                                "mcap_cr": c.get("mcap_cr"),
+                                "dtv_med20_cr": c.get("dtv_med20_cr"),
+                                "beta": c.get("beta"),
+                                "atr14_pct": c.get("atr14_pct"),
+                                "inst_pct": c.get("inst_pct"),
                             }
-                            for c in u_data["candidates"]
+                            for c in research_pool
                         ]
             except Exception:
-                active_universe = TRACK2_UNIVERSE
+                active_universe = []
 
         # Ingest Market Regime Filter (Nifty 50 15m OR and Breadth)
         regime_snapshot = None
@@ -483,8 +501,8 @@ class Track2LiveRadar:
                 if eval_res["volume_ratio"] > best_vol_ratio:
                     best_vol_ratio = eval_res["volume_ratio"]
 
-                if eval_res["signal"] == "BUY_ORB_CONFIRMED":
-                    active_signal = "BUY_ORB_CONFIRMED"
+                if eval_res["signal"] == "RESEARCH_ORB_HYPOTHESIS":
+                    active_signal = "RESEARCH_ORB_HYPOTHESIS"
                     active_reason = eval_res["reason"]
                     trigger_candle = pc
                     break
@@ -492,15 +510,16 @@ class Track2LiveRadar:
                     active_signal = eval_res["signal"]
                     active_reason = eval_res["reason"]
 
-            if active_signal == "BUY_ORB_CONFIRMED" and trigger_candle:
+            if active_signal == "RESEARCH_ORB_HYPOTHESIS" and trigger_candle:
                 # Calculate conservative SL-Limit baseline sizing
                 entry_p = round(or_high + 0.05, 2)
                 sizing = LiquidMomentumEngine.calculate_position_size(
                     entry_price=entry_p,
                     or_low=or_low,
                     atr14=atr_pts,
-                    dtv_med20_cr=scrip["dtv_med20_cr"],
-                    exchange="BSE",  # Uses conservative SL-Limit baseline with 0.5% offset
+                    dtv_med20_cr=scrip.get("dtv_med20_cr"),
+                    exchange="NSE",
+                    order_execution_type="SL_LIMIT",  # Conservative SL-Limit baseline with 0.5% offset
                     risk_budget_rs=self.risk_budget_rs,
                     max_notional_rs=self.max_notional_rs,
                     limit_offset_pct=0.5
@@ -527,12 +546,9 @@ class Track2LiveRadar:
             })
 
         # Compute active in-flight portfolio status
-        positions_cfg = [
-            {"sym": "BDL", "shares": 54, "entry": 1130.15, "initial_sl": 1108.30, "target": 1173.85, "risk": 21.85},
-            {"sym": "INOXWIND", "shares": 1282, "entry": 74.43, "initial_sl": 73.65, "target": 76.05, "risk": 0.78},
-            {"sym": "CDSL", "shares": 38, "entry": 1332.90, "initial_sl": 1300.00, "target": 1398.85, "risk": 32.90},
-            {"sym": "SUZLON", "shares": 2238, "entry": 43.31, "initial_sl": 42.76, "target": 44.14, "risk": 0.55}
-        ]
+        # Historical examples are not active positions. Phase 2 must supply a
+        # durable, validated fill ledger before this portfolio path is enabled.
+        positions_cfg = []
         price_map = {c["symbol"]: c["current_price"] for c in results if c.get("current_price")}
         max_price_map = {c["symbol"]: (c.get("max_post_high") or c.get("current_price")) for c in results}
 
@@ -544,7 +560,19 @@ class Track2LiveRadar:
             sym = p["sym"]
             ltp = price_map.get(sym)
             if ltp is None:
-                ltp = p["entry"]
+                # Codex Finding 6: Missing market data must not fabricate 0.0 MTM by substituting entry
+                active_portfolio.append({
+                    "symbol": sym,
+                    "shares": p["shares"],
+                    "entry_price": p["entry"],
+                    "ltp": None,
+                    "mtm_pnl": None,
+                    "active_stop": p["initial_sl"],
+                    "status": "VALUATION_UNAVAILABLE_MISSING_LTP",
+                    "two_tranche": None
+                })
+                continue
+
             max_p = max_price_map.get(sym)
             if max_p is None:
                 max_p = ltp
@@ -553,13 +581,19 @@ class Track2LiveRadar:
             peak_gain_per_sh = max_p - p["entry"]
             curr_gain_per_sh = ltp - p["entry"]
 
-            # 15:15 IST boundary and trailing stop evaluation
-            if now_hm >= "15:15":
+            # Codex Correction (6): CAS vs non-CAS RMS cutoffs (Zerodha 18-Sep bulletin)
+            # CAS stocks: RMS square-off begins 15:12 (internal flattening deadline 15:10)
+            # Non-CAS stocks: RMS square-off begins 15:25 (internal flattening deadline 15:20)
+            is_cas = p.get("is_cas") is not False
+            broker_cutoff = "15:12" if is_cas else "15:25"
+            internal_flat = "15:10" if is_cas else "15:20"
+
+            if now_hm >= internal_flat:
                 active_sl = ltp
-                state_lbl = "15:15_MIS_SQUARE_OFF_DUE"
+                state_lbl = f"MIS_SQUARE_OFF_DUE_CUTOFF_{broker_cutoff}"
             elif peak_gain_per_sh >= p["risk"]:
                 active_sl = p["entry"]
-                state_lbl = "TRAILED_TO_BREAKEVEN_ZERO_RISK"
+                state_lbl = "TRAILED_TO_BREAKEVEN_PROTECTED"
             elif ltp <= p["initial_sl"]:
                 active_sl = p["initial_sl"]
                 state_lbl = "STOP_LOSS_HIT"
@@ -582,11 +616,13 @@ class Track2LiveRadar:
                     symbol=sym,
                     allocation=t_alloc,
                     ltp=ltp,
-                    peak_price=max_p
+                    peak_price=max_p,
+                    is_eod_squareoff=(now_hm >= internal_flat)
                 )
                 two_t_dict = two_t.to_dict()
-            except Exception:
-                two_t_dict = None
+            except (TypeError, ValueError) as exc:
+                two_t_dict = {"error": type(exc).__name__, "reason": str(exc),
+                              "qualification_eligible": False}
 
             active_portfolio.append({
                 "symbol": sym,
@@ -600,7 +636,16 @@ class Track2LiveRadar:
                 "two_tranche": two_t_dict
             })
 
+        for candidate in results:
+            candidate["research_only"] = True
+            candidate["qualified"] = False
+            candidate["qualification_eligible"] = False
+            candidate["qualification_reason"] = "PHASE1_HOLD_POINT_IN_TIME_AND_FILL_LEDGER_REQUIRED"
         output_payload = {
+            "research_only": True,
+            "qualification_eligible": False,
+            "verified_sessions": 0,
+            "verified_fillable_entries": 0,
             "session_date": target_date_str,
             "generated_at": now_dt.strftime("%Y-%m-%d %H:%M:%S"),
             "gate_status": "OBSERVATION_ONLY_RULE_1",
@@ -656,7 +701,7 @@ class Track2LiveRadar:
             sig = c["signal"]
 
             # Color coding
-            if sig == "BUY_ORB_CONFIRMED":
+            if sig == "RESEARCH_ORB_HYPOTHESIS":
                 sig_str = f"{CLR_GREEN}{CLR_BOLD}{sig}{CLR_RESET}"
             elif sig in ["HOLD_REJECT_OVEREXTENDED", "HOLD_REJECT_FALSE_BREAKOUT", "HOLD_REJECT_MARKET_DISTRIBUTION"]:
                 sig_str = f"{CLR_YELLOW}{sig}{CLR_RESET}"
@@ -675,7 +720,10 @@ class Track2LiveRadar:
         print("=" * 115)
         kite_count = sum(1 for c in payload["candidates"] if c.get("feed_source") == "KITE_OMS_OFFICIAL")
         feed_lbl = f"{CLR_GREEN}Zerodha Kite Direct OMS ({kite_count} scrips){CLR_RESET}" if kite_count > 0 else "Yahoo Finance Backup"
-        print(f"{CLR_DIM}Surveillance Gate: 100% Clean F&O Underlyings (Zero ASM/GSM) | * = Live Kite Tick | Primary Feed: {feed_lbl}{CLR_RESET}\n")
+        surveillance = payload.get("surveillance_audit") or {}
+        surveillance_label = (f"{surveillance.get('qualified_count', 0)} qualified / "
+                              f"{surveillance.get('total_evaluated', 0)} evaluated")
+        print(f"{CLR_DIM}Surveillance Gate: {surveillance_label} | * = Live Kite Tick | Primary Feed: {feed_lbl}{CLR_RESET}\n")
 
         # In-Flight Portfolio & Trailing Stop Monitor (Two-Tranche V2.0)
         print(f"{CLR_BG_BLUE}{CLR_WHITE}{CLR_BOLD} TRACK 2: ACTIVE IN-FLIGHT PORTFOLIO & TWO-TRANCHE RISK MONITOR {CLR_RESET}")
@@ -692,7 +740,7 @@ class Track2LiveRadar:
             mtm = p["mtm_pnl"]
             two_t = p.get("two_tranche")
 
-            if two_t:
+            if two_t and "error" not in two_t:
                 t1_desc = f"{two_t['t1_shares']}sh Tgt {two_t['t1_target']:.1f} [{two_t['t1_status'][:6]}]"
                 t2_desc = f"{two_t['t2_shares']}sh SL {two_t['t2_active_sl']:.1f} [{two_t['t2_status'][:6]}]"
                 state_lbl = two_t.get("combined_risk_state", p["state"])
@@ -714,7 +762,7 @@ class Track2LiveRadar:
 
         print("-" * 125)
         tot_clr = CLR_GREEN if total_mtm >= 0 else CLR_RED
-        print(f"Total Net Portfolio MTM: {tot_clr}{CLR_BOLD}{'+' if total_mtm >= 0 else ''}Rs {total_mtm:,.2f}{CLR_RESET} | Capital State: 100% Cash (Observation Gate 4/60)\n")
+        print(f"Total Net Portfolio MTM: {tot_clr}{CLR_BOLD}{'+' if total_mtm >= 0 else ''}Rs {total_mtm:,.2f}{CLR_RESET} | Capital State: 100% Cash (Verified Gate 0/60, 0/20)\n")
 
 
 def append_session_summary_to_logs(payload: Dict[str, Any]):
@@ -722,10 +770,15 @@ def append_session_summary_to_logs(payload: Dict[str, Any]):
     Appends today's session summary and prospective signals to shared/track2_liquid/03_TRADE_LOG.md
     and CHATGPT/track2_orb_paper_log.csv. Deduplicates to avoid appending identical lines every poll.
     """
+    if payload.get("qualification_eligible") is not True:
+        return False
     date_str = payload["session_date"]
     session_id = f"{date_str.replace('-', '')}_TRACK2_ORB"
     candidates = payload["candidates"]
-    trades_triggered = [c for c in candidates if c.get("signal") == "BUY_ORB_CONFIRMED"]
+    trades_triggered = [
+        c for c in candidates
+        if c.get("qualified") is True and c.get("signal") == "ENTRY_APPROVED"
+    ]
 
     os.makedirs(os.path.dirname(CSV_LOG_PATH), exist_ok=True)
     existing_rows = []
@@ -765,7 +818,7 @@ def append_session_summary_to_logs(payload: Dict[str, Any]):
         sig = c["signal"]
         prev_sig = logged_signals.get(sym)
 
-        # Log if first time or if signal changed (e.g. became BUY_ORB_CONFIRMED or OVEREXTENDED)
+        # Log if first time or if the research observation state changed.
         if prev_sig is None or prev_sig != sig:
             sz = c.get("sizing") or {}
             new_rows_to_append.append([
@@ -777,7 +830,7 @@ def append_session_summary_to_logs(payload: Dict[str, Any]):
                 sig, sz.get("shares", 0), sz.get("notional_value", 0.0),
                 sz.get("stop_price", ""), sz.get("target_price", ""),
                 sz.get("risk_reward_ratio", ""),
-                "TRIGGERED" if sig == "BUY_ORB_CONFIRMED" else "OBSERVED",
+                "TRIGGERED" if c.get("qualified") is True and sig == "ENTRY_APPROVED" else "OBSERVED",
                 c.get("reason", "")
             ])
 
@@ -793,6 +846,7 @@ def append_session_summary_to_logs(payload: Dict[str, Any]):
                 ])
             for r in new_rows_to_append:
                 writer.writerow(r)
+    return bool(new_rows_to_append)
 
 
 if __name__ == "__main__":
@@ -810,8 +864,9 @@ if __name__ == "__main__":
         payload = radar.scan_session(target_date_str=args.date)
         radar.render_terminal_dashboard(payload)
         if args.record_log:
-            append_session_summary_to_logs(payload)
-            print(f"[OK] Session recorded into {CSV_LOG_PATH} and {TRADE_LOG_MD_PATH}")
+            recorded = append_session_summary_to_logs(payload)
+            print(f"[{'OK' if recorded else 'HOLD'}] "
+                  f"{'Session recorded' if recorded else 'Qualification frozen; no Rule 1 record written'}")
     else:
         print(f"Starting Track 2 Live Radar daemon (interval: {args.interval}s)...")
         while True:

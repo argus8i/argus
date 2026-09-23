@@ -1,0 +1,1822 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ARGUS 8i // NIGHTWATCH CONTROL ROOM | Project Swing Trades</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            mono: ['"JetBrains Mono"', 'monospace'],
+            sans: ['Inter', 'sans-serif'],
+          },
+          colors: {
+            panel: {
+              bg: '#0c0f17',
+              card: '#131822',
+              cardHeader: '#171e2b',
+              border: '#222b3d',
+              borderLight: '#2c374d',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <link id="dynamic-favicon" rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%2310b981'/></svg>">
+  <style>
+    body {
+      background-color: #090c13;
+      color: #e2e8f0;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-feature-settings: "tnum" 1, "cv02" 1, "cv03" 1, "cv04" 1;
+      transition: background-color 0.2s ease;
+    }
+    .mono { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
+    .tabular { font-variant-numeric: tabular-nums; }
+    .scrollbar-thin::-webkit-scrollbar { width: 5px; height: 5px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: #0c0f17; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: #222b3d; border-radius: 2px; }
+    .scrollbar-thin::-webkit-scrollbar-thumb:hover { background: #2f3b54; }
+
+    /* W23: Colorblind Accessibility Palette (Cobalt Blue vs Vermilion Orange) */
+    .colorblind-mode .text-emerald-400 { color: #38bdf8 !important; }
+    .colorblind-mode .text-emerald-300 { color: #7dd3fc !important; }
+    .colorblind-mode .text-rose-400 { color: #fb923c !important; }
+    .colorblind-mode .text-rose-300 { color: #fdba74 !important; }
+    .colorblind-mode .bg-emerald-950\/60 { background-color: rgba(7, 89, 133, 0.6) !important; }
+    .colorblind-mode .bg-rose-950\/60 { background-color: rgba(154, 52, 18, 0.6) !important; }
+    .colorblind-mode .border-emerald-800 { border-color: rgba(14, 116, 144, 0.8) !important; }
+    .colorblind-mode .border-rose-800 { border-color: rgba(194, 65, 12, 0.8) !important; }
+    .colorblind-mode .bg-emerald-500 { background-color: #0284c7 !important; }
+
+    /* W25: OLED Pitch Black Theme */
+    .theme-oled { background-color: #000000 !important; }
+    .theme-oled body { background-color: #000000 !important; }
+    .theme-oled .bg-panel-bg { background-color: #040404 !important; }
+    .theme-oled .bg-panel-card { background-color: #090909 !important; border-color: #1a1a1a !important; }
+    .theme-oled .bg-slate-900 { background-color: #070707 !important; }
+    .theme-oled header { background-color: #080808 !important; border-color: #181818 !important; }
+
+    /* W27: Sticky Table Headers */
+    .sticky-header th {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background-color: rgba(15, 23, 42, 0.96);
+      backdrop-filter: blur(4px);
+    }
+
+    /* W20: Candidate Row Selection Highlight */
+    .row-highlight {
+      outline: 2px solid #38bdf8 !important;
+      background-color: rgba(56, 189, 248, 0.12) !important;
+    }
+  </style>
+</head>
+<body class="min-h-screen p-3 md:p-5 text-slate-200">
+
+  <!-- Main Terminal Container -->
+  <div class="max-w-[1720px] mx-auto space-y-4">
+
+    <!-- Top Header: Institutional Identity & Key Controls -->
+    <header class="bg-panel-card border border-panel-border rounded p-3.5 flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+      <div class="flex items-center gap-3">
+        <div class="h-10 w-1.5 bg-emerald-500 rounded-sm"></div>
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="text-base font-bold tracking-tight text-white mono">ARGUS 8i</span>
+            <span class="text-[11px] px-1.5 py-0.2 rounded bg-indigo-950/80 text-indigo-300 border border-indigo-700/80 mono font-semibold">NIGHTWATCH</span>
+            <span class="text-[11px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 border border-slate-700 mono font-semibold">BEACON (TRACK 2)</span>
+            <span class="text-[11px] px-1.5 py-0.2 rounded bg-slate-900 text-slate-400 border border-panel-border mono">EQUITY CASH (CNC)</span>
+            <span class="text-[11px] px-1.5 py-0.2 rounded bg-amber-950/60 text-amber-300 border border-amber-800/80 mono font-semibold">RULE 1: PAPER ONLY</span>
+            <span id="mode-badge" class="text-[11px] px-2 py-0.5 rounded bg-blue-950/80 text-blue-300 border border-blue-700/80 mono font-semibold cursor-pointer" onclick="toggleExecutionMode()" title="Click to cycle execution mode (CO_PILOT / AUTONOMOUS / HYBRID)">MODE: HYBRID ▾</span>
+          </div>
+          <div class="flex flex-wrap items-center gap-1.5 mt-1 text-[10px] text-slate-400 mono">
+            <span class="text-slate-300 font-semibold">MODULES:</span>
+            <span class="px-1.5 py-0.2 rounded bg-slate-900 border border-slate-700 text-cyan-300">SENTINEL</span>
+            <span class="px-1.5 py-0.2 rounded bg-slate-900 border border-slate-700 text-emerald-300">VECTOR</span>
+            <span class="px-1.5 py-0.2 rounded bg-slate-900 border border-slate-700 text-amber-300">BASTION</span>
+            <span class="px-1.5 py-0.2 rounded bg-slate-900 border border-slate-700 text-blue-300">SPLITLOCK</span>
+            <span class="px-1.5 py-0.2 rounded bg-slate-900 border border-slate-700 text-purple-300">HELM</span>
+            <span class="px-1.5 py-0.2 rounded bg-slate-900 border border-slate-700 text-rose-300">CALIBER</span>
+            <span class="text-slate-600">//</span>
+            <span class="text-slate-400">PROJECT SWING TRADES</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2 text-xs mono">
+        <div class="px-2.5 py-1 rounded bg-slate-900 border border-panel-border" title="W21: Track 2 Capital Base Allocation">
+          <span class="text-slate-500">CAPITAL:</span>
+          <span class="text-slate-200 font-semibold ml-1">₹2,50,000</span>
+        </div>
+        <div class="px-2.5 py-1 rounded bg-slate-900 border border-panel-border" title="W21: 1R Rupee Risk Budget per trade">
+          <span class="text-slate-500">RISK/TRADE:</span>
+          <span class="text-slate-200 font-semibold ml-1">₹1,500 (1R)</span>
+        </div>
+        <div class="px-2.5 py-1 rounded bg-slate-900 border border-panel-border" title="W21: Hard concurrent position ceiling">
+          <span class="text-slate-500">MAX SLOTS:</span>
+          <span class="text-slate-200 font-semibold ml-1">3 POSITIONS</span>
+        </div>
+        <div class="px-2.5 py-1 rounded bg-slate-900 border border-panel-border flex items-center gap-1.5" title="W26: Session Clock">
+          <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+          <span id="live-clock" class="text-slate-200 font-medium">--:--:-- IST</span>
+        </div>
+        <span id="ping-badge" class="px-2.5 py-1 rounded bg-slate-900 border border-panel-border text-emerald-400 font-semibold" title="W28: Live Round-Trip Heartbeat Ping to Terminal Server">● --ms</span>
+        <button id="sound-toggle-btn" class="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-panel-border transition cursor-pointer" title="W19: Audio Alerts Toggle (Web Audio API)">🔊 SOUND</button>
+        <button id="hotkeys-btn" class="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-panel-border transition cursor-pointer" title="W20: Keyboard Shortcuts Cheat Sheet [?]">⌨ KEYS [?]</button>
+        <button id="colorblind-toggle-btn" class="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-panel-border transition cursor-pointer" title="W23: Colorblind-Safe High-Contrast Palette">👁 CB: OFF</button>
+        <button id="theme-toggle-btn" class="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-panel-border transition cursor-pointer" title="W25: OLED Pitch Black vs Navy Slate Theme">🎨 NAVY</button>
+        <button id="ms-toggle-btn" class="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-panel-border transition cursor-pointer" title="W26: Millisecond Timestamp Precision Toggle">⏱ MS: OFF</button>
+        <button id="pause-btn" class="px-3 py-1 rounded bg-amber-950/80 hover:bg-amber-900 text-amber-200 border border-amber-700 font-medium transition cursor-pointer" title="Space: Toggle Pause Entries">
+          ⏸ PAUSE ENTRIES
+        </button>
+        <button id="flatten-btn" class="px-3 py-1 rounded bg-rose-950 hover:bg-rose-900 text-rose-200 border border-rose-700 font-medium transition cursor-pointer" title="Shift+Esc: Emergency Market Flatten">
+          🚨 EMERGENCY FLATTEN
+        </button>
+        <button id="rescan-btn" class="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 font-medium transition cursor-pointer" title="R: Trigger Pre-Market Universe Rescan">
+          ↻ RE-SCAN
+        </button>
+      </div>
+    </header>
+
+    <!-- Co-Pilot Pending Authorization Alert Bar (Hidden when empty) -->
+    <div id="copilot-container" class="hidden bg-indigo-950/80 border-2 border-indigo-500 rounded p-3.5 shadow-xl transition-all">
+      <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+        <div class="flex items-center gap-3">
+          <div class="h-10 w-2 bg-indigo-400 rounded-sm animate-pulse"></div>
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-bold tracking-wider text-white uppercase mono">🎯 CO-PILOT AUTHORIZATION REQUIRED</span>
+              <span id="copilot-timer" class="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[11px] mono font-bold">30s</span>
+              <span class="text-[10px] px-1.5 py-0.2 rounded bg-indigo-900/60 text-indigo-300 border border-indigo-700/60 mono font-semibold">PEGGED LIMIT (+15 BPS COLLAR)</span>
+            </div>
+            <div id="copilot-details" class="text-xs text-slate-300 mono mt-1">
+              Loading signal details...
+            </div>
+          </div>
+        </div>
+        <div class="flex items-center gap-2 w-full md:w-auto">
+          <button id="copilot-approve-btn" onclick="approveCurrentIntent()" class="flex-1 md:flex-none px-4 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs mono transition shadow cursor-pointer">
+            ✅ APPROVE LIMIT (+15 bps)
+          </button>
+          <button id="copilot-reject-btn" onclick="rejectCurrentIntent()" class="flex-1 md:flex-none px-4 py-2 rounded bg-rose-700 hover:bg-rose-600 text-white font-bold text-xs mono transition shadow cursor-pointer">
+            ❌ PASS / REJECT
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- VIGIL System Health & Freshness Watchdog Strip -->
+    <section class="bg-panel-card border border-panel-border rounded p-2.5 px-3.5 text-xs mono flex flex-wrap items-center justify-between gap-2">
+      <div class="flex items-center gap-2">
+        <span class="text-[11px] font-bold text-slate-300 tracking-wider flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+          VIGIL WATCHDOG
+        </span>
+        <span class="text-[10px] text-slate-500">// 7-Stage Real-Time Telemetry:</span>
+      </div>
+      <div id="vigil-pills" class="flex flex-wrap items-center gap-1.5 text-[10px]">
+        <span class="px-2 py-0.5 rounded bg-slate-900 text-slate-400 border border-panel-border">KITE 9444: <b class="text-slate-300">CHECKING...</b></span>
+        <span class="px-2 py-0.5 rounded bg-slate-900 text-slate-400 border border-panel-border">DEPTH: <b class="text-slate-300">CHECKING...</b></span>
+        <span class="px-2 py-0.5 rounded bg-slate-900 text-slate-400 border border-panel-border">15M BARS: <b class="text-slate-300">CHECKING...</b></span>
+        <span class="px-2 py-0.5 rounded bg-slate-900 text-slate-400 border border-panel-border">BASELINES: <b class="text-slate-300">CHECKING...</b></span>
+        <span class="px-2 py-0.5 rounded bg-slate-900 text-slate-400 border border-panel-border">SURVEILLANCE: <b class="text-slate-300">CHECKING...</b></span>
+        <span class="px-2 py-0.5 rounded bg-slate-900 text-slate-400 border border-panel-border">DECISION ENGINE: <b class="text-slate-300">CHECKING...</b></span>
+        <span class="px-2 py-0.5 rounded bg-slate-900 text-slate-400 border border-panel-border">EVIDENCE: <b class="text-slate-300">CHECKING...</b></span>
+      </div>
+    </section>
+
+    <!-- Operational State Banner: What The System Is Doing Exactly -->
+    <section class="bg-panel-card border border-panel-border rounded p-3.5 text-xs mono">
+      <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+        <div>
+          <div class="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">Session Phase</div>
+          <div class="text-sm font-bold text-emerald-400 mt-0.5" id="session-phase-text">PRIME_BREAKOUT (09:30 - 10:30 IST)</div>
+          <div class="text-[11px] text-slate-400 mt-1">High-conviction entry window. Requires 15m volume ≥ 2.5x.</div>
+        </div>
+        <div>
+          <div class="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">Current Operation</div>
+          <div class="text-sm font-semibold text-slate-200 mt-0.5" id="operation-text">MONITORING 8 SCREENED LEADERS</div>
+          <div class="text-[11px] text-slate-400 mt-1">Evaluating 15m OR breakout, spread &lt; 1%, extension &lt; 0.5x ATR.</div>
+        </div>
+        <div>
+          <div class="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">Data Feed & Latency</div>
+          <div class="text-sm font-semibold text-slate-200 mt-0.5">ZERODHA KITE OMS // 15M CANDLES</div>
+          <div class="text-[11px] text-slate-400 mt-1">Clock Drift: <span class="text-emerald-400">+0.02s</span> (Tolerance: 5.0s max). Validated.</div>
+        </div>
+        <div>
+          <div class="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">Capacity & Compliance</div>
+          <div class="text-sm font-semibold text-slate-200 mt-0.5">2 ACTIVE / 1 AVAILABLE SLOT</div>
+          <div class="text-[11px] text-slate-400 mt-1">SEBI T+1 Buffer: ₹50,000 cash protected. Zero real capital.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Key Metrics Strip: Macro, Breadth, Regime, Volatility -->
+    <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <!-- Nifty 50 Benchmark -->
+      <div class="bg-panel-card border border-panel-border rounded p-3.5">
+        <div class="flex justify-between items-center text-xs mono text-slate-500">
+          <span>NIFTY 50 BENCHMARK</span>
+          <span id="nifty-or-state" class="text-[10px] text-emerald-400 font-medium">ABOVE OR HIGH</span>
+        </div>
+        <div class="flex justify-between items-baseline mt-1">
+          <span id="nifty-ltp" class="text-xl font-bold mono text-white tabular">25,480.50</span>
+          <span id="nifty-chg" class="text-xs mono font-semibold text-emerald-400 tabular">+0.68%</span>
+        </div>
+        <div class="mt-2 pt-2 border-t border-panel-border/60 text-[11px] mono text-slate-400 flex justify-between">
+          <span>15m Range: <span id="nifty-or-range" class="text-slate-300">25,380 - 25,495</span></span>
+          <span class="text-slate-500">Width: 115 pts (0.45%)</span>
+        </div>
+      </div>
+
+      <!-- Market Breadth -->
+      <div class="bg-panel-card border border-panel-border rounded p-3.5">
+        <div class="flex justify-between items-center text-xs mono text-slate-500">
+          <span>NSE 500 BREADTH</span>
+          <span class="text-[10px] text-emerald-400 font-medium">PASS (≥ 1.20)</span>
+        </div>
+        <div class="flex justify-between items-baseline mt-1">
+          <span id="ad-ratio" class="text-xl font-bold mono text-white tabular">1.65 <span class="text-xs font-normal text-slate-500">A/D</span></span>
+          <span class="text-xs mono text-slate-400 tabular">320 Adv / 194 Dec</span>
+        </div>
+        <div class="mt-2 pt-2 border-t border-panel-border/60 text-[11px] mono text-slate-400 flex justify-between">
+          <span>Breadth Status: <span class="text-slate-300">Bullish Participation</span></span>
+          <span class="text-slate-500">62.3% Positive</span>
+        </div>
+      </div>
+
+      <!-- Macro Regime Filter -->
+      <div class="bg-panel-card border border-panel-border rounded p-3.5">
+        <div class="flex justify-between items-center text-xs mono text-slate-500">
+          <span>MACRO REGIME FILTER</span>
+          <span class="text-[10px] text-slate-400">Trend &amp; Moving Avg</span>
+        </div>
+        <div class="flex items-center gap-2 mt-1">
+          <span id="regime-badge" class="px-2 py-0.5 rounded text-xs mono font-semibold bg-emerald-950/60 text-emerald-300 border border-emerald-800/80">
+            BULLISH_EXPANSION
+          </span>
+        </div>
+        <div class="mt-2 pt-2 border-t border-panel-border/60 text-[11px] mono text-slate-400 flex justify-between">
+          <span>Breakout Volume Req: <span id="req-vol" class="text-slate-200 font-bold">2.5x</span></span>
+          <span class="text-slate-500">Longs Permitted</span>
+        </div>
+      </div>
+
+      <!-- India VIX -->
+      <div class="bg-panel-card border border-panel-border rounded p-3.5">
+        <div class="flex justify-between items-center text-xs mono text-slate-500">
+          <span>INDIA VIX (VOLATILITY)</span>
+          <span class="text-[10px] text-slate-400">Implied Vol</span>
+        </div>
+        <div class="flex justify-between items-baseline mt-1">
+          <span id="vix-val" class="text-xl font-bold mono text-white tabular">13.42</span>
+          <span class="text-xs mono text-emerald-400 tabular">-2.10%</span>
+        </div>
+        <div class="mt-2 pt-2 border-t border-panel-border/60 text-[11px] mono text-slate-400 flex justify-between">
+          <span>Environment: <span class="text-slate-300">Optimal Momentum</span></span>
+          <span class="text-slate-500">Range: 12 - 16</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Performance Analytics & Rule 1 Gate (High Information Density) -->
+    <section class="bg-panel-card border border-panel-border rounded p-4">
+      <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-2.5 mb-3 border-b border-panel-border/60">
+        <div>
+          <h2 class="text-xs font-bold tracking-wider text-slate-300 uppercase mono">ARGUS 8i // CALIBER Performance Analytics &amp; Rule 1 Qualification Gate</h2>
+          <p class="text-[11px] text-slate-500 mono">Real-time mathematical expectancy tracking and 60-session paper verification ledger</p>
+        </div>
+        <div class="mt-2 sm:mt-0">
+          <span id="gate-verdict-badge" class="px-2 py-0.5 rounded text-[11px] mono font-semibold bg-amber-950/60 text-amber-300 border border-amber-800/80" title="W21: Rule 1 Qualification Gate Verdict">
+            OBSERVATION_ONLY_GATED
+          </span>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 mono text-xs">
+        <div class="bg-panel-bg border border-panel-border rounded p-2.5" title="W21: Net Mathematical Expectancy per trade: E = (W * AvgWin) - (L * AvgLoss) - Statutory Charges">
+          <div class="text-[10px] text-slate-500 uppercase">Net Expectancy (E)</div>
+          <div class="text-base font-bold text-emerald-400 mt-0.5 tabular" id="perf-expectancy-r">+0.69 R</div>
+          <div class="text-[10px] text-slate-400 mt-0.5 tabular" id="perf-expectancy-rs">₹1,035 / trade</div>
+        </div>
+        <div class="bg-panel-bg border border-panel-border rounded p-2.5" title="W21: Historical percentage of closed trades with positive net P&L">
+          <div class="text-[10px] text-slate-500 uppercase">Win Rate (W)</div>
+          <div class="text-base font-bold text-white mt-0.5 tabular" id="perf-win-rate">100.0%</div>
+          <div class="text-[10px] text-slate-400 mt-0.5 tabular" id="perf-trades-count">2 Wins / 0 Losses</div>
+        </div>
+        <div class="bg-panel-bg border border-panel-border rounded p-2.5" title="W21: Ratio of gross profits to gross losses">
+          <div class="text-[10px] text-slate-500 uppercase">Profit Factor (PF)</div>
+          <div class="text-base font-bold text-slate-200 mt-0.5 tabular" id="perf-profit-factor">2.14</div>
+          <div class="text-[10px] text-slate-500 mt-0.5">Gross / Losses</div>
+        </div>
+        <div class="bg-panel-bg border border-panel-border rounded p-2.5" title="W21: Net paper P&L after deducting realistic statutory charges (STT, GST, Stamp, Turnover)">
+          <div class="text-[10px] text-slate-500 uppercase">Net Paper P&amp;L</div>
+          <div class="text-base font-bold text-emerald-400 mt-0.5 tabular" id="perf-net-pnl">+₹2,087.70</div>
+          <div class="text-[10px] text-slate-500 mt-0.5">Charges: ₹69.80</div>
+        </div>
+        <div class="bg-panel-bg border border-panel-border rounded p-2.5" title="W21: Rule 1 Mandatory Gate: 60 prospective trading sessions required before live capital">
+          <div class="text-[10px] text-slate-500 uppercase">Rule 1: Sessions</div>
+          <div class="text-base font-bold text-amber-300 mt-0.5 tabular" id="perf-sessions">1 / 60</div>
+          <div class="text-[10px] text-slate-500 mt-0.5">1.7% Progress</div>
+        </div>
+        <div class="bg-panel-bg border border-panel-border rounded p-2.5" title="W21: Rule 1 Mandatory Gate: 20 verified non-deterministic queue/partial fills required">
+          <div class="text-[10px] text-slate-500 uppercase">Rule 1: E3 Fills</div>
+          <div class="text-base font-bold text-amber-300 mt-0.5 tabular" id="perf-fills">0 / 20</div>
+          <div class="text-[10px] text-slate-500 mt-0.5">0.0% Progress</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Capital, Risk Governor & Sector Allocation Strip -->
+    <section class="bg-panel-card border border-panel-border rounded p-4">
+      <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-2.5 mb-3 border-b border-panel-border/60">
+        <div>
+          <h2 class="text-xs font-bold tracking-wider text-slate-300 uppercase mono">ARGUS 8i // BASTION Portfolio Risk Governor &amp; Capital Allocation</h2>
+          <p class="text-[11px] text-slate-500 mono">Strict mathematical risk budgeting on ₹2,50,000 corpus with hard fail-closed ceilings</p>
+        </div>
+        <div class="mt-2 sm:mt-0 flex gap-2 text-xs mono">
+          <span class="text-slate-400">Single Trade: <span class="text-slate-200">₹1,500</span></span>
+          <span class="text-slate-600">|</span>
+          <span class="text-slate-400">Max Open: <span class="text-slate-200">₹4,500</span></span>
+          <span class="text-slate-600">|</span>
+          <span class="text-slate-400">Max Positions: <span class="text-slate-200">3</span></span>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mono text-xs">
+        <!-- Open Risk Consumption -->
+        <div class="bg-panel-bg border border-panel-border rounded p-3">
+          <div class="flex justify-between text-slate-400 text-[11px] mb-1">
+            <span>OPEN RISK CONSUMPTION</span>
+            <span class="text-slate-200 font-semibold"><span id="open-risk-amt">₹3,000</span> / ₹4,500 (<span id="open-risk-pct">66.7%</span>)</span>
+          </div>
+          <div class="w-full bg-slate-900 rounded h-2 overflow-hidden border border-slate-800">
+            <div id="risk-bar" class="bg-amber-500 h-2 transition-all duration-300" style="width: 66.7%"></div>
+          </div>
+          <div class="flex justify-between text-[11px] text-slate-500 mt-1.5">
+            <span>Remaining: <span id="risk-rem" class="text-emerald-400 font-medium">₹1,500 (1 slot)</span></span>
+            <span>Max Portfolio Risk: 1.8%</span>
+          </div>
+        </div>
+
+        <!-- Capital Notional Utilized -->
+        <div class="bg-panel-bg border border-panel-border rounded p-3">
+          <div class="flex justify-between text-slate-400 text-[11px] mb-1">
+            <span>CAPITAL NOTIONAL UTILIZED</span>
+            <span class="text-slate-200 font-semibold"><span id="notional-amt">₹1,38,000</span> / ₹2,00,000 (<span id="notional-pct">69.0%</span>)</span>
+          </div>
+          <div class="w-full bg-slate-900 rounded h-2 overflow-hidden border border-slate-800">
+            <div id="notional-bar" class="bg-slate-500 h-2 transition-all duration-300" style="width: 69%"></div>
+          </div>
+          <div class="flex justify-between text-[11px] text-slate-500 mt-1.5">
+            <span>Cash Buffer: <span class="text-slate-300 font-medium">₹50,000 (Protected)</span></span>
+            <span>Zero Pledging / CNC</span>
+          </div>
+        </div>
+
+        <!-- 3 Concurrent Position Slots -->
+        <div class="bg-panel-bg border border-panel-border rounded p-3">
+          <div class="text-[11px] text-slate-400 mb-1.5">CONCURRENT POSITION SLOTS (MAX 3)</div>
+          <div class="grid grid-cols-3 gap-1.5 text-center text-xs">
+            <div class="p-1.5 rounded bg-slate-900 border border-emerald-800/60">
+              <div class="text-[9px] text-emerald-400 font-semibold">SLOT 1: ACTIVE</div>
+              <div class="font-bold text-white text-xs mt-0.5">CDSL</div>
+              <div class="text-[10px] text-slate-400">₹1,500 Risk</div>
+            </div>
+            <div class="p-1.5 rounded bg-slate-900 border border-emerald-800/60">
+              <div class="text-[9px] text-emerald-400 font-semibold">SLOT 2: ACTIVE</div>
+              <div class="font-bold text-white text-xs mt-0.5">IREDA</div>
+              <div class="text-[10px] text-slate-400">₹1,500 Risk</div>
+            </div>
+            <div class="p-1.5 rounded bg-slate-900 border border-dashed border-slate-700">
+              <div class="text-[9px] text-slate-400 font-semibold">SLOT 3: READY</div>
+              <div class="font-bold text-slate-400 text-xs mt-0.5">AVAILABLE</div>
+              <div class="text-[10px] text-emerald-400">₹1,500 Cap</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Quantitative Universe Pipeline & Daily Rotation -->
+    <section class="bg-panel-card border border-panel-border rounded p-4">
+      <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-2.5 mb-3 border-b border-panel-border/60">
+        <div>
+          <h2 class="text-xs font-bold tracking-wider text-slate-300 uppercase mono">ARGUS 8i // SENTINEL 4-Stage Quantitative Screening Funnel &amp; Rotation Log</h2>
+          <p class="text-[11px] text-slate-500 mono">Autonomous discovery: 210 F&amp;O scrips ➔ Surveillance Check ➔ Multi-Factor Scoring ➔ Top 8 Radar</p>
+        </div>
+        <div class="text-xs mono text-slate-500 mt-1 sm:mt-0" title="W21: SHA-256 digest of today's qualified universe and parameters">
+          SHA-256 Digest: <span id="universe-sha" class="text-slate-300 font-medium">e3b0c442...</span>
+        </div>
+      </div>
+
+      <!-- Funnel Stats -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2.5 mono text-xs mb-3">
+        <div class="bg-panel-bg border border-panel-border rounded p-2.5" title="W21: Official active F&O underlyings in Cash EQ series">
+          <div class="text-[10px] text-slate-500 uppercase">Stage 1: Master Universe</div>
+          <div class="text-base font-bold text-white mt-0.5 tabular"><span id="funnel-total-fno">210</span> Scrips</div>
+          <div class="text-[10px] text-slate-400 mt-0.5">F&amp;O Underlyings in Cash EQ</div>
+        </div>
+        <div class="bg-panel-bg border border-panel-border rounded p-2.5" title="W21: Securities cleared of ASM, GSM, ESM Stage 1/2, MWPL Ban, and T2T">
+          <div class="text-[10px] text-slate-500 uppercase">Stage 2: Surveillance Filter</div>
+          <div class="text-base font-bold text-emerald-400 mt-0.5 tabular"><span id="funnel-surveillance">204</span> Cleared</div>
+          <div class="text-[10px] text-slate-400 mt-0.5">Zero ASM / GSM / ESM / T2T</div>
+        </div>
+        <div class="bg-panel-bg border border-panel-border rounded p-2.5" title="W21: Passing DTV >= ₹30 Cr, ATR >= 3.5%, and Beta >= 1.3">
+          <div class="text-[10px] text-slate-500 uppercase">Stage 3: Multi-Factor Pool</div>
+          <div class="text-base font-bold text-slate-200 mt-0.5 tabular"><span id="funnel-qualified">38</span> Qualified</div>
+          <div class="text-[10px] text-slate-400 mt-0.5">DTV ≥ ₹30Cr, ATR ≥ 3.5%, Beta ≥ 1.3</div>
+        </div>
+        <div class="bg-panel-bg border border-panel-border rounded p-2.5" title="W21: Top 8 ranked momentum leaders enforcing max 2 per sector cluster">
+          <div class="text-[10px] text-slate-500 uppercase">Stage 4: Top Momentum</div>
+          <div class="text-base font-bold text-emerald-400 mt-0.5 tabular"><span id="funnel-top8">8</span> Active Radar</div>
+          <div class="text-[10px] text-slate-400 mt-0.5">Max 2 per Sector Cluster</div>
+        </div>
+      </div>
+
+      <!-- Rotation Delta -->
+      <div class="pt-2.5 border-t border-panel-border/60 flex flex-wrap items-center gap-2.5 text-xs mono">
+        <span class="text-slate-500 uppercase text-[11px] font-semibold">Rotation Delta:</span>
+        <div class="flex items-center gap-1.5" id="rotation-added-container">
+          <span class="text-[11px] text-emerald-400">Added:</span>
+          <span class="px-1.5 py-0.2 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-800 text-[11px]">+ MAZDOCK</span>
+          <span class="px-1.5 py-0.2 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-800 text-[11px]">+ BDL</span>
+        </div>
+        <span class="text-slate-700">|</span>
+        <div class="flex items-center gap-1.5" id="rotation-dropped-container">
+          <span class="text-[11px] text-rose-400">Dropped:</span>
+          <span class="px-1.5 py-0.2 rounded bg-rose-950/60 text-rose-300 border border-rose-800 text-[11px] line-through">- NATIONALUM</span>
+          <span class="px-1.5 py-0.2 rounded bg-rose-950/60 text-rose-300 border border-rose-800 text-[11px] line-through">- RVNL</span>
+        </div>
+        <span class="text-slate-700">|</span>
+        <div class="flex items-center gap-1.5" id="rotation-retained-container">
+          <span class="text-[11px] text-slate-500">Retained:</span>
+          <span class="text-slate-300 text-[11px]">IREDA, COCHINSHIP, CDSL, ANGELONE, SUZLON, INOXWIND</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Dynamic 8-Stock Momentum Radar Table -->
+    <section class="bg-panel-card border border-panel-border rounded p-4">
+      <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-2.5 mb-3 border-b border-panel-border/60">
+        <div>
+          <h2 class="text-xs font-bold tracking-wider text-slate-300 uppercase mono">ARGUS 8i // VECTOR Dynamic 8-Stock Momentum Radar Matrix</h2>
+          <p class="text-[11px] text-slate-500 mono">Autonomous ranking from 210 F&amp;O underlyings // Enforcing 4x2 sector cluster diversification</p>
+        </div>
+        <div class="flex items-center gap-2 mt-1 sm:mt-0 text-xs mono">
+          <button id="export-radar-csv-btn" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-[11px] mono transition cursor-pointer" title="W22: Export Radar Matrix to CSV">📥 CSV</button>
+          <div class="text-slate-500">
+            Last Scan: <span id="radar-timestamp" class="text-slate-300 font-medium">--</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="overflow-x-auto overflow-y-auto max-h-[380px] scrollbar-thin">
+        <table class="w-full text-left text-xs mono" id="radar-table">
+          <thead class="text-slate-400 border-b border-panel-border bg-slate-900/95 sticky top-0 z-10">
+            <tr>
+              <th class="py-2 px-2.5 font-medium" title="F&amp;O Underlying Symbol">SYMBOL</th>
+              <th class="py-2 px-2.5 font-medium" title="Coarse Sector Cluster (Max 2 scrips per cluster)">SECTOR CLUSTER</th>
+              <th class="py-2 px-2.5 text-right font-medium" title="Last Traded Price in Indian Rupees">LTP (₹)</th>
+              <th class="py-2 px-2.5 text-right font-medium" title="Day's Change Percentage vs Previous Close">CHG %</th>
+              <th class="py-2 px-2.5 text-right font-medium" title="W21: Ratio of 15m opening volume to 20-day average 15m volume. Req: >=2.5x">15M VOL MULT</th>
+              <th class="py-2 px-2.5 text-right font-medium" title="W21: 15-Minute Opening Range High (09:15 - 09:30 IST)">OR HIGH</th>
+              <th class="py-2 px-2.5 text-right font-medium" title="W21: 15-Minute Opening Range Low (09:15 - 09:30 IST)">OR LOW</th>
+              <th class="py-2 px-2.5 text-right font-medium" title="W21: 14-day Average True Range as % of price">ATR14 %</th>
+              <th class="py-2 px-2.5 text-center font-medium" title="W21: Candidate health state (LEADER_EXPANDING, DEGRADED_LOW_VOL, EXTENDED_EXHAUSTED, RANGE_BOUND_CHOP, IN_POSITION)">HEALTH STATE</th>
+              <th class="py-2 px-2.5 text-center font-medium" title="W21: Breakout status relative to 15m Opening Range">STATUS</th>
+              <th class="py-2 px-2.5 text-center font-medium" title="W21: Execution signal state (ENTERED_T1_T2, QUEUED_E3, WAITING_VOL, SECTOR_CAPPED, EXTENDED_BLOCKED)">SIGNAL</th>
+            </tr>
+          </thead>
+          <tbody id="radar-table-body" class="divide-y divide-panel-border/40 text-slate-300">
+            <tr><td colspan="11" class="py-4 text-center text-slate-500">Loading Radar Matrix...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Two-Tranche Bracket Ledger & Sector Heatmap -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <!-- Active Two-Tranche Bracket Ledger (2 cols) -->
+      <section class="lg:col-span-2 bg-panel-card border border-panel-border rounded p-4">
+        <div class="flex justify-between items-center pb-2.5 mb-3 border-b border-panel-border/60">
+          <div>
+            <h2 class="text-xs font-bold tracking-wider text-slate-300 uppercase mono">ARGUS 8i // SPLITLOCK Active Two-Tranche Bracket Ledger</h2>
+            <p class="text-[11px] text-slate-500 mono">Execution state machine // Tranche 1 (+1.5R profit exit) &amp; Tranche 2 (Trailing runner)</p>
+          </div>
+          <div class="flex items-center gap-2 text-xs mono">
+            <button id="export-brackets-csv-btn" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-[11px] mono transition cursor-pointer" title="W22: Export Active &amp; Closed Brackets to CSV">📥 CSV</button>
+            <div class="text-slate-500">
+              Auto Cutoff: <span class="text-slate-300">CNC Overnight / MIS 15:25</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="space-y-2.5" id="bracket-ledger-container">
+          <!-- CDSL Bracket -->
+          <div class="p-3 rounded bg-panel-bg border border-panel-border flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+            <div class="flex items-center gap-2.5">
+              <span class="px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-800 text-[10px] mono font-bold">BRK_001</span>
+              <div>
+                <div class="font-bold text-white text-xs mono flex items-center gap-2">
+                  <span>CDSL</span>
+                  <span class="text-[11px] text-slate-500 font-normal">(Financial Services)</span>
+                  <span class="px-1.5 py-0.5 rounded text-[10px] mono font-bold border bg-amber-950/60 text-amber-300 border-amber-800/80" title="W4: Implementation Shortfall vs Arrival Price&#10;Signal: ₹1,399.50 ➔ Fill: ₹1,400.00&#10;Total Slippage: +3.6 bps&#10;Spread Cost: 3.6 bps | Delay Impact: 0.0 bps">SLIP: +3.6 bps</span>
+                  <button onclick="openDepthModal('CDSL', 1442.50, 50, 'BRK_001')" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 text-[10px] font-semibold transition cursor-pointer" title="W5: View 5-Level Market Depth Ladder &amp; Queue Position">📊 DEPTH</button>
+                </div>
+                <div class="text-[11px] mono text-slate-400">50 Qty @ ₹1,400.00 | SL: ₹1,400.00 <span class="text-emerald-400 font-medium">(Breakeven)</span></div>
+              </div>
+            </div>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs mono">
+              <div class="bg-slate-900 p-1.5 rounded border border-panel-border">
+                <div class="text-[9px] text-slate-500">TRANCHE 1 (+1.5R)</div>
+                <div class="text-emerald-400 font-semibold text-xs">FILLED @ ₹1,445</div>
+                <div class="text-[9px] text-slate-400">25 Qty (+₹1,125)</div>
+              </div>
+              <div class="bg-slate-900 p-1.5 rounded border border-panel-border">
+                <div class="text-[9px] text-slate-500">TRANCHE 2 (RUNNER)</div>
+                <div class="text-slate-200 font-semibold text-xs">TRAILING @ ₹1,400</div>
+                <div class="text-[9px] text-slate-400">25 Qty (Zero Risk)</div>
+              </div>
+              <div class="bg-slate-900 p-1.5 rounded border border-panel-border">
+                <div class="text-[9px] text-slate-500">CURRENT LTP</div>
+                <div class="text-white font-semibold text-xs">₹1,442.50</div>
+                <div class="text-[9px] text-emerald-400">+3.04%</div>
+              </div>
+              <div class="bg-slate-900 p-1.5 rounded border border-panel-border">
+                <div class="text-[9px] text-slate-500">NET P&amp;L</div>
+                <div class="text-emerald-400 font-bold text-xs">+₹1,845.20</div>
+                <div class="text-[9px] text-slate-400 flex items-center justify-between mt-0.5">
+                  <span>Charges: ₹42.30</span>
+                  <button onclick="openTcaModal('BRK_001')" class="px-1.5 py-0.2 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 text-[9px] border border-slate-700 transition cursor-pointer" title="W10: View Itemized Statutory Cost Breakdown (Brokerage, STT, Exchange, GST, SEBI, Stamp Duty)">[ℹ TCA]</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- IREDA Bracket -->
+          <div class="p-3 rounded bg-panel-bg border border-panel-border flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+            <div class="flex items-center gap-2.5">
+              <span class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 text-[10px] mono font-bold">BRK_002</span>
+              <div>
+                <div class="font-bold text-white text-xs mono flex items-center gap-2">
+                  <span>IREDA</span>
+                  <span class="text-[11px] text-slate-500 font-normal">(Power / Energy)</span>
+                  <span class="px-1.5 py-0.5 rounded text-[10px] mono font-bold border bg-amber-950/60 text-amber-300 border-amber-800/80" title="W4: Implementation Shortfall vs Arrival Price&#10;Signal: ₹111.95 ➔ Fill: ₹112.00&#10;Total Slippage: +4.5 bps&#10;Spread Cost: 4.5 bps | Delay Impact: 0.0 bps">SLIP: +4.5 bps</span>
+                  <button onclick="openDepthModal('IREDA', 113.80, 150, 'BRK_002')" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 text-[10px] font-semibold transition cursor-pointer" title="W5: View 5-Level Market Depth Ladder &amp; Queue Position">📊 DEPTH</button>
+                </div>
+                <div class="text-[11px] mono text-slate-400">150 Qty @ ₹112.00 | SL: ₹110.00</div>
+              </div>
+            </div>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs mono">
+              <div class="bg-slate-900 p-1.5 rounded border border-panel-border">
+                <div class="text-[9px] text-slate-500">TRANCHE 1 (+1.5R)</div>
+                <div class="text-amber-400 font-semibold text-xs">QUEUED @ ₹115</div>
+                <div class="text-[9px] text-slate-400">75 Qty</div>
+              </div>
+              <div class="bg-slate-900 p-1.5 rounded border border-panel-border">
+                <div class="text-[9px] text-slate-500">TRANCHE 2 (RUNNER)</div>
+                <div class="text-slate-400 font-semibold text-xs">PENDING T1</div>
+                <div class="text-[9px] text-slate-400">SL: ₹110.00</div>
+              </div>
+              <div class="bg-slate-900 p-1.5 rounded border border-panel-border">
+                <div class="text-[9px] text-slate-500">CURRENT LTP</div>
+                <div class="text-white font-semibold text-xs">₹113.80</div>
+                <div class="text-[9px] text-emerald-400">+1.61%</div>
+              </div>
+              <div class="bg-slate-900 p-1.5 rounded border border-panel-border">
+                <div class="text-[9px] text-slate-500">NET P&amp;L</div>
+                <div class="text-emerald-400 font-bold text-xs">+₹242.50</div>
+                <div class="text-[9px] text-slate-400 flex items-center justify-between mt-0.5">
+                  <span>Charges: ₹27.50</span>
+                  <button onclick="openTcaModal('BRK_002')" class="px-1.5 py-0.2 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 text-[9px] border border-slate-700 transition cursor-pointer" title="W10: View Itemized Statutory Cost Breakdown (Brokerage, STT, Exchange, GST, SEBI, Stamp Duty)">[ℹ TCA]</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Sector Concentration Heatmap (1 col) -->
+      <section class="bg-panel-card border border-panel-border rounded p-4">
+        <div class="pb-2.5 mb-3 border-b border-panel-border/60">
+          <h2 class="text-xs font-bold tracking-wider text-slate-300 uppercase mono">ARGUS 8i // BASTION Sector Concentration Heatmap</h2>
+          <p class="text-[11px] text-slate-500 mono">Strict Invariant: Maximum 2 stocks per coarse sector cluster</p>
+        </div>
+
+        <div class="space-y-2.5 mono text-xs" id="sector-heatmap-container">
+          <div class="p-2 rounded bg-panel-bg border border-panel-border">
+            <div class="flex justify-between items-center mb-1">
+              <span class="text-slate-300 font-medium">FINANCIAL SERVICES</span>
+              <span class="text-slate-200 font-semibold">1 / 2 (50%)</span>
+            </div>
+            <div class="w-full bg-slate-900 rounded h-1.5 overflow-hidden">
+              <div class="bg-slate-400 h-1.5" style="width: 50%"></div>
+            </div>
+            <div class="text-[10px] text-slate-500 mt-1">Active: CDSL (1 Slot Available)</div>
+          </div>
+
+          <div class="p-2 rounded bg-panel-bg border border-panel-border">
+            <div class="flex justify-between items-center mb-1">
+              <span class="text-slate-300 font-medium">POWER / RENEWABLE</span>
+              <span class="text-slate-200 font-semibold">1 / 2 (50%)</span>
+            </div>
+            <div class="w-full bg-slate-900 rounded h-1.5 overflow-hidden">
+              <div class="bg-slate-400 h-1.5" style="width: 50%"></div>
+            </div>
+            <div class="text-[10px] text-slate-500 mt-1">Active: IREDA (1 Slot Available)</div>
+          </div>
+
+          <div class="p-2 rounded bg-panel-bg border border-panel-border">
+            <div class="flex justify-between items-center mb-1">
+              <span class="text-slate-400 font-medium">DEFENSE MANUFACTURING</span>
+              <span class="text-slate-500">0 / 2 (0%)</span>
+            </div>
+            <div class="w-full bg-slate-900 rounded h-1.5 overflow-hidden">
+              <div class="bg-slate-700 h-1.5" style="width: 0%"></div>
+            </div>
+            <div class="text-[10px] text-slate-500 mt-1">Radar: BDL, COCHINSHIP (2 Slots Open)</div>
+          </div>
+
+          <div class="p-2 rounded bg-panel-bg border border-panel-border">
+            <div class="flex justify-between items-center mb-1">
+              <span class="text-slate-400 font-medium">INFRASTRUCTURE / RAILWAYS</span>
+              <span class="text-slate-500">0 / 2 (0%)</span>
+            </div>
+            <div class="w-full bg-slate-900 rounded h-1.5 overflow-hidden">
+              <div class="bg-slate-700 h-1.5" style="width: 0%"></div>
+            </div>
+            <div class="text-[10px] text-slate-500 mt-1">Radar: RVNL (2 Slots Open)</div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Real-Time Audit Trail & Event Ledger -->
+    <section class="bg-panel-card border border-panel-border rounded p-4">
+      <div class="flex justify-between items-center pb-2 mb-2.5 border-b border-panel-border/60">
+        <div>
+          <h2 class="text-xs font-bold tracking-wider text-slate-300 uppercase mono">ARGUS 8i // BLACKBOX Real-Time System Audit Trail &amp; Event Stream</h2>
+          <p class="text-[11px] text-slate-500 mono">Execution decisions, risk gate evaluations, and tri-agent consensus events</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <button id="export-audit-csv-btn" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-[11px] mono transition cursor-pointer" title="W22: Export Audit Trail to CSV">📥 CSV</button>
+          <button id="clear-log-btn" class="text-[11px] mono text-slate-500 hover:text-slate-300 transition cursor-pointer">Clear Display</button>
+        </div>
+      </div>
+
+      <div id="audit-log-terminal" class="bg-panel-bg rounded p-2.5 mono text-[11px] h-40 overflow-y-auto scrollbar-thin space-y-1 text-slate-400 border border-panel-border">
+        <div class="text-slate-500">[09:15:00 IST] [SYSTEM] Track 2 Institutional Terminal initialized. Capital base: ₹2,50,000 INR.</div>
+        <div class="text-slate-400">[09:15:01 IST] [ANTIGRAVITY] Dynamic Universe Scanner initialized. F&amp;O underlying master: 210 scrips verified.</div>
+        <div class="text-slate-300">[09:30:00 IST] [ANTIGRAVITY] 15m Opening Range established for 8 candidates. Macro Regime: BULLISH_EXPANSION (A/D 1.65).</div>
+        <div class="text-emerald-400">[09:34:12 IST] [ANTIGRAVITY] CDSL triggered 15m ORB Breakout @ ₹1,400.00. Vol multiple: 3.2x (Req: 2.5x). Approved.</div>
+        <div class="text-slate-300">[09:34:12 IST] [RISK_GOVERNOR] CDSL Sizing: 50 shares, Risk: ₹1,500.00 (1R). Capital: ₹70,000. Approved.</div>
+        <div class="text-slate-300">[09:34:13 IST] [EXECUTION] Two-Tranche Bracket spawned for CDSL (BRK_001): T1=25sh @ ₹1,445.00, T2=25sh Trailing.</div>
+        <div class="text-emerald-400">[10:15:20 IST] [CLAUDE_AUDIT] Verified CDSL Tranche 1 fill @ ₹1,445.00 (+1.5R). Tranche 2 stop moved to Breakeven (₹1,400.00).</div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- Emergency Flatten Modal -->
+  <div id="flatten-modal" class="fixed inset-0 bg-black/80 flex items-center justify-center hidden z-50 p-4">
+    <div class="bg-panel-card border-2 border-rose-600 rounded max-w-md w-full p-5 space-y-4 mono">
+      <div class="flex items-center gap-2 text-rose-400 font-bold text-base">
+        <span>🚨 CONFIRM EMERGENCY SQUAREOFF</span>
+      </div>
+      <p class="text-xs text-slate-300 leading-relaxed">
+        This action will immediately execute an emergency market square-off for <b>ALL ACTIVE PAPER BRACKETS</b> and cancel pending orders.
+      </p>
+      <div class="p-2.5 bg-rose-950/40 border border-rose-900/80 rounded text-[11px] text-rose-300">
+        ⚠️ Rule 1 Paper Execution: Exit records will be written to <code class="text-slate-200">paper_orders.jsonl</code> and <code class="text-slate-200">events.jsonl</code>.
+      </div>
+      <div class="flex justify-end gap-2 pt-2">
+        <button id="modal-cancel-btn" class="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer">
+          ABORT (ESC)
+        </button>
+        <button id="modal-confirm-btn" class="px-3 py-1.5 rounded bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold cursor-pointer">
+          CONFIRM SQUARE OFF ALL
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Keyboard Shortcuts (Hotkeys) Cheat-Sheet Modal (W20) -->
+  <div id="hotkeys-modal" class="fixed inset-0 bg-black/80 flex items-center justify-center hidden z-50 p-4">
+    <div class="bg-panel-card border border-panel-border rounded max-w-lg w-full p-5 space-y-4 mono">
+      <div class="flex justify-between items-center pb-2 border-b border-panel-border">
+        <div class="flex items-center gap-2 text-white font-bold text-sm">
+          <span>⌨ ARGUS 8i KEYBOARD SHORTCUTS</span>
+        </div>
+        <button id="hotkeys-close-btn" class="text-slate-400 hover:text-white text-xs cursor-pointer">✕ CLOSE</button>
+      </div>
+      <div class="space-y-2 text-xs">
+        <div class="flex justify-between items-center py-1.5 border-b border-panel-border/40">
+          <span class="text-slate-300">Toggle Operational Pause</span>
+          <kbd class="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-amber-300 font-bold">Space</kbd>
+        </div>
+        <div class="flex justify-between items-center py-1.5 border-b border-panel-border/40">
+          <span class="text-slate-300">Open Emergency Flatten Modal</span>
+          <kbd class="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-rose-400 font-bold">Shift + Esc</kbd>
+        </div>
+        <div class="flex justify-between items-center py-1.5 border-b border-panel-border/40">
+          <span class="text-slate-300">Trigger Universe Re-Scan</span>
+          <kbd class="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-cyan-300 font-bold">R</kbd>
+        </div>
+        <div class="flex justify-between items-center py-1.5 border-b border-panel-border/40">
+          <span class="text-slate-300">Jump / Highlight Radar Candidate</span>
+          <kbd class="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-emerald-400 font-bold">1 - 8</kbd>
+        </div>
+        <div class="flex justify-between items-center py-1.5 border-b border-panel-border/40">
+          <span class="text-slate-300">Toggle Keyboard Shortcuts</span>
+          <kbd class="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 font-bold">?</kbd>
+        </div>
+        <div class="flex justify-between items-center py-1.5 border-b border-panel-border/40">
+          <span class="text-slate-300">Toggle Audio Mute / Sound</span>
+          <kbd class="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 font-bold">M</kbd>
+        </div>
+        <div class="flex justify-between items-center py-1.5 border-b border-panel-border/40">
+          <span class="text-slate-300">Toggle Colorblind Mode</span>
+          <kbd class="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 font-bold">C</kbd>
+        </div>
+        <div class="flex justify-between items-center py-1.5">
+          <span class="text-slate-300">Close Open Modal / Abort</span>
+          <kbd class="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400 font-bold">Esc</kbd>
+        </div>
+      </div>
+      <div class="pt-2 text-right">
+        <button id="hotkeys-ok-btn" class="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold cursor-pointer">
+          GOT IT
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- W5: Order Book Visual Depth Ladder & Queue Rank Modal -->
+  <div id="depth-modal" class="fixed inset-0 bg-black/80 flex items-center justify-center hidden z-50 p-4">
+    <div class="bg-panel-card border border-panel-border rounded max-w-2xl w-full p-5 space-y-4 mono">
+      <div class="flex justify-between items-center pb-2 border-b border-panel-border">
+        <div class="flex items-center gap-2">
+          <span class="text-white font-bold text-sm">📊 5-LEVEL MARKET DEPTH &amp; QUEUE RANK</span>
+          <span id="depth-modal-symbol" class="px-2 py-0.5 rounded bg-cyan-950/80 text-cyan-300 border border-cyan-800 text-xs font-bold">CDSL</span>
+        </div>
+        <button id="depth-close-btn" onclick="closeDepthModal()" class="text-slate-400 hover:text-white text-xs cursor-pointer">✕ CLOSE (ESC)</button>
+      </div>
+
+      <!-- Top Summary: LTP, Spread, Imbalance -->
+      <div class="grid grid-cols-3 gap-2 text-xs">
+        <div class="bg-panel-bg p-2 rounded border border-panel-border">
+          <div class="text-[10px] text-slate-500 uppercase">LTP / Tick Size</div>
+          <div id="depth-modal-ltp" class="text-sm font-bold text-white tabular">₹1,442.50</div>
+          <div class="text-[10px] text-slate-400">Tick: ₹0.05</div>
+        </div>
+        <div class="bg-panel-bg p-2 rounded border border-panel-border">
+          <div class="text-[10px] text-slate-500 uppercase">Spread (₹ / bps)</div>
+          <div id="depth-modal-spread" class="text-sm font-bold text-slate-200 tabular">₹0.05 (0.35 bps)</div>
+          <div class="text-[10px] text-emerald-400">Tight Spread</div>
+        </div>
+        <div class="bg-panel-bg p-2 rounded border border-panel-border">
+          <div class="text-[10px] text-slate-500 uppercase">Order Book Imbalance</div>
+          <div id="depth-modal-imbalance" class="text-sm font-bold text-emerald-400 tabular">+12.4%</div>
+          <div class="text-[10px] text-slate-400">Buy Pressure</div>
+        </div>
+      </div>
+
+      <!-- 5-Level Split Depth Table -->
+      <div class="border border-panel-border rounded overflow-hidden">
+        <div class="grid grid-cols-2 bg-slate-900/80 text-[10px] font-bold border-b border-panel-border px-2 py-1">
+          <div class="grid grid-cols-3 text-emerald-400">
+            <span>ORDERS</span>
+            <span class="text-right">QTY</span>
+            <span class="text-right">BID PRICE</span>
+          </div>
+          <div class="grid grid-cols-3 text-rose-400">
+            <span class="text-left pl-2">ASK PRICE</span>
+            <span class="text-right">QTY</span>
+            <span class="text-right">ORDERS</span>
+          </div>
+        </div>
+        <div id="depth-modal-ladder" class="text-xs divide-y divide-panel-border/40">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+
+      <!-- Volume Ratio Bar -->
+      <div class="space-y-1">
+        <div class="flex justify-between text-[11px] text-slate-400">
+          <span>Total Bids: <b id="depth-total-bids" class="text-emerald-400">12,450</b></span>
+          <span>Total Asks: <b id="depth-total-asks" class="text-rose-400">9,820</b></span>
+        </div>
+        <div class="w-full bg-rose-950/60 rounded h-2 overflow-hidden flex">
+          <div id="depth-imbalance-bar" class="bg-emerald-500 h-2 transition-all duration-300" style="width: 56%"></div>
+        </div>
+      </div>
+
+      <!-- Queue Rank Estimation Card -->
+      <div id="depth-queue-card" class="bg-slate-950 p-2.5 rounded border border-panel-border text-xs space-y-1.5">
+        <div class="flex justify-between items-center">
+          <span class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Estimated Queue Position (Rule 4 Discrete Model)</span>
+          <span id="depth-queue-status" class="px-1.5 py-0.2 rounded bg-amber-950/60 text-amber-300 border border-amber-800 text-[10px]">QUEUED</span>
+        </div>
+        <div class="grid grid-cols-3 gap-2 text-[11px]">
+          <div>Shares Ahead: <b id="depth-queue-shares" class="text-slate-200">1,240</b></div>
+          <div>Queue Ratio: <b id="depth-queue-ratio" class="text-slate-200">24.8x</b></div>
+          <div>Req Turnover: <b id="depth-queue-turnover" class="text-slate-200">1,290 sh</b></div>
+        </div>
+        <div class="text-[10px] text-slate-500">
+          *Rule 4 fill requires post-arrival turnover &ge; (Queue Rank + Order Size) with queue haircut.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- W10: Explicit Transaction Cost Analysis (TCA) Modal -->
+  <div id="tca-modal" class="fixed inset-0 bg-black/80 flex items-center justify-center hidden z-50 p-4">
+    <div class="bg-panel-card border border-panel-border rounded max-w-lg w-full p-5 space-y-4 mono">
+      <div class="flex justify-between items-center pb-2 border-b border-panel-border">
+        <div class="flex items-center gap-2">
+          <span class="text-white font-bold text-sm">🧾 TRANSACTION COST ANALYSIS (TCA)</span>
+          <span id="tca-modal-order-id" class="px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 text-xs font-bold">BRK_001</span>
+        </div>
+        <button id="tca-close-btn" onclick="closeTcaModal()" class="text-slate-400 hover:text-white text-xs cursor-pointer">✕ CLOSE (ESC)</button>
+      </div>
+
+      <div class="text-xs text-slate-400 leading-relaxed">
+        Statutory regulatory fees and broker charges breakdown calibrated strictly to Indian equity markets:
+      </div>
+
+      <div class="border border-panel-border rounded overflow-hidden text-xs">
+        <table class="w-full divide-y divide-panel-border">
+          <thead class="bg-slate-900/80 text-[10px] font-bold text-slate-400 uppercase">
+            <tr>
+              <th class="py-1.5 px-3 text-left">Statutory Head</th>
+              <th class="py-1.5 px-3 text-left">Rate / Rule</th>
+              <th class="py-1.5 px-3 text-right">Amount (₹)</th>
+            </tr>
+          </thead>
+          <tbody id="tca-table-body" class="divide-y divide-panel-border/40 text-slate-300">
+            <!-- Populated dynamically -->
+          </tbody>
+          <tfoot class="bg-slate-900 font-bold text-white border-t border-panel-border">
+            <tr>
+              <td class="py-2 px-3 text-left" colspan="2">TOTAL REGULATORY FRICTION</td>
+              <td id="tca-total-friction" class="py-2 px-3 text-right text-emerald-400">₹42.30</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      <div class="p-2.5 bg-slate-900/60 border border-panel-border rounded text-[10px] text-slate-400 space-y-1">
+        <div><b>Gross Turnover:</b> <span id="tca-turnover" class="text-slate-200">₹1,06,125.00</span></div>
+        <div><b>Friction Drag:</b> <span id="tca-drag-bps" class="text-amber-400">3.98 bps</span> of turnover</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Live Polling & Sensory Control Engine (ARGUS 8i W19 - W28) -->
+  <script>
+    // State Variables for User Ergonomics
+    let soundEnabled = localStorage.getItem('argus_sound_enabled') !== 'false';
+    let colorblindMode = localStorage.getItem('argus_colorblind') === 'true';
+    let oledTheme = localStorage.getItem('argus_theme') === 'oled';
+    let msPrecision = localStorage.getItem('argus_ms_precision') === 'true';
+    let audioCtx = null;
+    let tabFlashTimer = null;
+    let clockInterval = null;
+    const originalDocumentTitle = document.title;
+    window.lastBracketsData = [];
+
+    // --- W19: Web Audio API Synthesizer ---
+    function initAudio() {
+      if (!audioCtx) {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (AudioContext) audioCtx = new AudioContext();
+      }
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+    }
+
+    function playTone(freq, type, duration, delay = 0, volume = 0.08) {
+      if (!soundEnabled) return;
+      initAudio();
+      if (!audioCtx) return;
+      try {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime + delay);
+        gain.gain.setValueAtTime(volume, audioCtx.currentTime + delay);
+        gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + delay + duration);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(audioCtx.currentTime + delay);
+        osc.stop(audioCtx.currentTime + delay + duration);
+      } catch (e) {}
+    }
+
+    function playBreakoutSound() {
+      // High-frequency rising arpeggio (D5 -> A5 -> D6)
+      playTone(587.33, 'sine', 0.12, 0, 0.09);
+      playTone(880.00, 'sine', 0.12, 0.09, 0.09);
+      playTone(1174.66, 'sine', 0.25, 0.18, 0.11);
+    }
+
+    function playFillSound() {
+      // Clean double-tick audio pulse
+      playTone(987.77, 'triangle', 0.05, 0, 0.07);
+      playTone(1318.51, 'triangle', 0.08, 0.06, 0.07);
+    }
+
+    function playAlertSound() {
+      // Low-frequency alert tone
+      playTone(220.00, 'sawtooth', 0.35, 0, 0.12);
+    }
+
+    function playPauseSound() {
+      // Subtle toggle click
+      playTone(440.00, 'sine', 0.08, 0, 0.05);
+    }
+
+    function updateSoundUI() {
+      const btn = document.getElementById('sound-toggle-btn');
+      if (!btn) return;
+      if (soundEnabled) {
+        btn.innerText = '🔊 SOUND';
+        btn.className = 'px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-emerald-400 border border-panel-border transition cursor-pointer';
+      } else {
+        btn.innerText = '🔇 MUTED';
+        btn.className = 'px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-500 border border-panel-border transition cursor-pointer';
+      }
+    }
+
+    document.getElementById('sound-toggle-btn').addEventListener('click', () => {
+      initAudio();
+      soundEnabled = !soundEnabled;
+      localStorage.setItem('argus_sound_enabled', soundEnabled);
+      updateSoundUI();
+      if (soundEnabled) playPauseSound();
+    });
+
+    // --- W23: Colorblind Accessibility Mode ---
+    function applyColorblind() {
+      const btn = document.getElementById('colorblind-toggle-btn');
+      if (colorblindMode) {
+        document.documentElement.classList.add('colorblind-mode');
+        if (btn) {
+          btn.innerText = '👁 CB: ON';
+          btn.className = 'px-2.5 py-1 rounded bg-sky-950/80 hover:bg-sky-900 text-sky-300 border border-sky-700 transition cursor-pointer';
+        }
+      } else {
+        document.documentElement.classList.remove('colorblind-mode');
+        if (btn) {
+          btn.innerText = '👁 CB: OFF';
+          btn.className = 'px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-panel-border transition cursor-pointer';
+        }
+      }
+    }
+
+    document.getElementById('colorblind-toggle-btn').addEventListener('click', () => {
+      colorblindMode = !colorblindMode;
+      localStorage.setItem('argus_colorblind', colorblindMode);
+      applyColorblind();
+      if (soundEnabled) playPauseSound();
+    });
+
+    // --- W25: Theme Contrast Switcher (OLED vs Navy) ---
+    function applyTheme() {
+      const btn = document.getElementById('theme-toggle-btn');
+      if (oledTheme) {
+        document.documentElement.classList.add('theme-oled');
+        if (btn) {
+          btn.innerText = '🎨 OLED';
+          btn.className = 'px-2.5 py-1 rounded bg-zinc-900 hover:bg-zinc-800 text-zinc-100 border border-zinc-700 transition cursor-pointer';
+        }
+      } else {
+        document.documentElement.classList.remove('theme-oled');
+        if (btn) {
+          btn.innerText = '🎨 NAVY';
+          btn.className = 'px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-panel-border transition cursor-pointer';
+        }
+      }
+    }
+
+    document.getElementById('theme-toggle-btn').addEventListener('click', () => {
+      oledTheme = !oledTheme;
+      localStorage.setItem('argus_theme', oledTheme ? 'oled' : 'navy');
+      applyTheme();
+      if (soundEnabled) playPauseSound();
+    });
+
+    // --- W26: Millisecond Precision Clock & Timestamps ---
+    function updateClock() {
+      const now = new Date();
+      const options = { timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' };
+      let timeStr = now.toLocaleTimeString('en-GB', options);
+      if (msPrecision) {
+        const ms = String(now.getMilliseconds()).padStart(3, '0');
+        timeStr += `.${ms}`;
+      }
+      document.getElementById('live-clock').innerText = timeStr + ' IST';
+    }
+
+    function startClock() {
+      if (clockInterval) clearInterval(clockInterval);
+      clockInterval = setInterval(updateClock, msPrecision ? 100 : 1000);
+      updateClock();
+    }
+
+    function applyMsPrecision() {
+      const btn = document.getElementById('ms-toggle-btn');
+      if (msPrecision) {
+        if (btn) {
+          btn.innerText = '⏱ MS: ON';
+          btn.className = 'px-2.5 py-1 rounded bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 border border-indigo-700 transition cursor-pointer';
+        }
+      } else {
+        if (btn) {
+          btn.innerText = '⏱ MS: OFF';
+          btn.className = 'px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-panel-border transition cursor-pointer';
+        }
+      }
+      startClock();
+    }
+
+    document.getElementById('ms-toggle-btn').addEventListener('click', () => {
+      msPrecision = !msPrecision;
+      localStorage.setItem('argus_ms_precision', msPrecision);
+      applyMsPrecision();
+      if (soundEnabled) playPauseSound();
+    });
+
+    // --- W24: Browser Tab Title Flash & Dynamic Favicon Alert ---
+    function flashTabAlert(alertText) {
+      if (tabFlashTimer) clearInterval(tabFlashTimer);
+      let count = 0;
+      const favicon = document.getElementById('dynamic-favicon');
+      tabFlashTimer = setInterval(() => {
+        count++;
+        if (count % 2 === 1) {
+          document.title = `[!] ${alertText} // ARGUS 8i`;
+          if (favicon) favicon.href = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%23f59e0b'/></svg>";
+        } else {
+          document.title = originalDocumentTitle;
+          if (favicon) favicon.href = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%2310b981'/></svg>";
+        }
+        if (count >= 10) {
+          clearInterval(tabFlashTimer);
+          tabFlashTimer = null;
+          document.title = originalDocumentTitle;
+          if (favicon) favicon.href = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%2310b981'/></svg>";
+        }
+      }, 700);
+    }
+
+    // --- W22: One-Click CSV / Excel Export Engine ---
+    function downloadCSV(filename, csvContent) {
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }
+
+    function getTimestampForFilename() {
+      const now = new Date();
+      return now.toISOString().replace(/[-:T.]/g, '').slice(0, 14);
+    }
+
+    // Export Radar Matrix
+    document.getElementById('export-radar-csv-btn').addEventListener('click', () => {
+      const rows = [
+        ["Symbol", "Sector", "LTP", "Change_Pct", "Vol_Mult", "OR_High", "OR_Low", "ATR14_Pct", "Health_State", "Status", "Signal"]
+      ];
+      const tbody = document.getElementById('radar-table-body');
+      for (const tr of tbody.querySelectorAll('tr')) {
+        const cells = Array.from(tr.querySelectorAll('td')).map(td => td.innerText.trim().replace(/\n/g, ' '));
+        if (cells.length === 11) rows.push(cells);
+      }
+      const csv = rows.map(r => r.map(c => `"${c.replace(/"/g, '""')}"`).join(",")).join("\n");
+      downloadCSV(`ARGUS8i_RADAR_${getTimestampForFilename()}.csv`, csv);
+    });
+
+    // Export Brackets Ledger
+    document.getElementById('export-brackets-csv-btn').addEventListener('click', () => {
+      const rows = [
+        ["Order_ID", "Symbol", "Sector", "Shares", "Entry_Price", "Current_Stop", "T1_Status", "T1_Shares", "T2_Status", "T2_Shares", "LTP", "Net_PnL_Rs", "Charges_Rs"]
+      ];
+      if (window.lastBracketsData && window.lastBracketsData.length > 0) {
+        for (const b of window.lastBracketsData) {
+          rows.push([
+            b.order_id || "", b.symbol || "", b.sector || "", b.shares || 0,
+            b.entry_price || 0, b.current_stop || 0, b.t1_status || "", b.t1_shares || 0,
+            b.t2_status || "", b.t2_shares || 0, b.ltp || 0, b.net_pnl_rs || 0, b.charges_rs || 0
+          ]);
+        }
+      }
+      const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+      downloadCSV(`ARGUS8i_BRACKETS_${getTimestampForFilename()}.csv`, csv);
+    });
+
+    // Export Audit Stream
+    document.getElementById('export-audit-csv-btn').addEventListener('click', () => {
+      const rows = [["Timestamp", "Message"]];
+      const terminal = document.getElementById('audit-log-terminal');
+      for (const div of terminal.querySelectorAll('div')) {
+        rows.push([new Date().toLocaleTimeString(), div.innerText.trim()]);
+      }
+      const csv = rows.map(r => r.map(c => `"${c.replace(/"/g, '""')}"`).join(",")).join("\n");
+      downloadCSV(`ARGUS8i_AUDIT_${getTimestampForFilename()}.csv`, csv);
+    });
+
+    // --- W20: Candidate Row Selection & Highlighting ---
+    function highlightCandidate(index) {
+      const tbody = document.getElementById('radar-table-body');
+      const rows = tbody.querySelectorAll('tr');
+      if (index >= 0 && index < rows.length) {
+        rows.forEach(r => r.classList.remove('row-highlight'));
+        rows[index].classList.add('row-highlight');
+        rows[index].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        if (soundEnabled) playTone(659.25, 'sine', 0.08, 0, 0.06); // E5 feedback
+      }
+    }
+
+    // --- W20: Keyboard Shortcuts (Hotkeys) Listeners ---
+    const hotkeysModal = document.getElementById('hotkeys-modal');
+    const flattenModal = document.getElementById('flatten-modal');
+
+    document.getElementById('hotkeys-btn').addEventListener('click', () => {
+      hotkeysModal.classList.remove('hidden');
+    });
+    document.getElementById('hotkeys-close-btn').addEventListener('click', () => {
+      hotkeysModal.classList.add('hidden');
+    });
+    document.getElementById('hotkeys-ok-btn').addEventListener('click', () => {
+      hotkeysModal.classList.add('hidden');
+    });
+
+    window.addEventListener('keydown', (e) => {
+      // Ignore keystrokes when user is typing in form inputs
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
+
+      // Shift + Escape -> Emergency Flatten Modal
+      if (e.key === 'Escape' && e.shiftKey) {
+        e.preventDefault();
+        flattenModal.classList.remove('hidden');
+        playAlertSound();
+        return;
+      }
+
+      // Escape -> Close any modal
+      if (e.key === 'Escape') {
+        flattenModal.classList.add('hidden');
+        hotkeysModal.classList.add('hidden');
+        closeDepthModal();
+        closeTcaModal();
+        return;
+      }
+
+      // Space -> Toggle Pause Entries
+      if (e.code === 'Space') {
+        e.preventDefault();
+        document.getElementById('pause-btn').click();
+        return;
+      }
+
+      // R or r -> Trigger Pre-Market Universe Rescan
+      if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault();
+        document.getElementById('rescan-btn').click();
+        return;
+      }
+
+      // ? -> Toggle Hotkeys Modal
+      if (e.key === '?') {
+        e.preventDefault();
+        hotkeysModal.classList.toggle('hidden');
+        return;
+      }
+
+      // M or m -> Toggle Audio Mute
+      if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        document.getElementById('sound-toggle-btn').click();
+        return;
+      }
+
+      // C or c -> Toggle Colorblind Palette
+      if (e.key === 'c' || e.key === 'C') {
+        e.preventDefault();
+        document.getElementById('colorblind-toggle-btn').click();
+        return;
+      }
+
+      // 1 to 8 -> Highlight Candidate Row
+      if (e.key >= '1' && e.key <= '8') {
+        const idx = parseInt(e.key, 10) - 1;
+        highlightCandidate(idx);
+      }
+    });
+
+    // Fallback sample radar data
+    const sampleRadar = [
+      { symbol: "CDSL", sector: "FINANCIAL_SERVICES", ltp: 1442.5, chg: 3.04, vol_mult: 3.2, or_high: 1395.0, or_low: 1380.0, atr: 4.1, status: "BREAKOUT", signal: "ENTERED_T1_T2", health_state: "IN_POSITION" },
+      { symbol: "IREDA", sector: "POWER_ENERGY", ltp: 113.8, chg: 1.61, vol_mult: 2.8, or_high: 112.0, or_low: 109.5, atr: 3.8, status: "BREAKOUT", signal: "ENTERED_T1_T2", health_state: "IN_POSITION" },
+      { symbol: "ANGELONE", sector: "FINANCIAL_SERVICES", ltp: 315.0, chg: 1.8, vol_mult: 2.7, or_high: 310.0, or_low: 304.0, atr: 4.8, status: "BREAKOUT", signal: "SECTOR_CAPPED", health_state: "LEADER_EXPANDING" },
+      { symbol: "SUZLON", sector: "POWER_ENERGY", ltp: 44.2, chg: 0.9, vol_mult: 1.4, or_high: 44.5, or_low: 43.8, atr: 4.2, status: "IN_RANGE", signal: "WAITING_VOL", health_state: "DEGRADED_LOW_VOL" },
+      { symbol: "INOXWIND", sector: "POWER_ENERGY", ltp: 76.8, chg: 1.2, vol_mult: 1.8, or_high: 77.5, or_low: 75.2, atr: 4.5, status: "IN_RANGE", signal: "WAITING_VOL", health_state: "RANGE_BOUND_CHOP" },
+      { symbol: "RVNL", sector: "INFRASTRUCTURE", ltp: 212.0, chg: 0.5, vol_mult: 1.1, or_high: 214.0, or_low: 210.0, atr: 3.6, status: "IN_RANGE", signal: "WAITING_VOL", health_state: "DEGRADED_LOW_VOL" },
+      { symbol: "COCHINSHIP", sector: "DEFENSE", ltp: 1395.0, chg: 3.1, vol_mult: 4.1, or_high: 1375.0, or_low: 1350.0, atr: 4.9, status: "EXTENDED", signal: "EXTENDED_BLOCKED", health_state: "EXTENDED_EXHAUSTED" },
+      { symbol: "BDL", sector: "DEFENSE", ltp: 1190.0, chg: 1.5, vol_mult: 2.1, or_high: 1185.0, or_low: 1170.0, atr: 3.9, status: "BREAKOUT", signal: "WAITING_VOL", health_state: "RANGE_BOUND_CHOP" },
+    ];
+
+    // --- W5: 5-Level Market Depth & Queue Rank Modal Engine ---
+    const depthModal = document.getElementById('depth-modal');
+    const tcaModal = document.getElementById('tca-modal');
+
+    function closeDepthModal() {
+      if (depthModal) depthModal.classList.add('hidden');
+    }
+
+    function closeTcaModal() {
+      if (tcaModal) tcaModal.classList.add('hidden');
+    }
+
+    async function openDepthModal(symbol, price, qty = 50, orderId = null) {
+      if (!symbol) return;
+      initAudio();
+      document.getElementById('depth-modal-symbol').innerText = symbol;
+      document.getElementById('depth-modal-ltp').innerText = `₹${parseFloat(price).toFixed(2)}`;
+      depthModal.classList.remove('hidden');
+
+      try {
+        const resp = await fetch(`/api/depth?symbol=${encodeURIComponent(symbol)}`);
+        if (resp.ok) {
+          const data = await resp.json();
+          renderDepthContent(data.depth, data.queue, qty, price);
+        }
+      } catch (e) {
+        console.error("Failed to load depth:", e);
+      }
+    }
+
+    function renderDepthContent(depth, queue, orderQty, orderPrice) {
+      if (!depth) return;
+      document.getElementById('depth-modal-spread').innerText = `₹${depth.spread_rs.toFixed(2)} (${depth.spread_bps.toFixed(2)} bps)`;
+
+      const imbEl = document.getElementById('depth-modal-imbalance');
+      const imb = depth.imbalance_pct;
+      imbEl.innerText = `${imb >= 0 ? '+' : ''}${imb.toFixed(1)}%`;
+      imbEl.className = `text-sm font-bold tabular ${imb >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+
+      document.getElementById('depth-total-bids').innerText = depth.total_bid_qty.toLocaleString();
+      document.getElementById('depth-total-asks').innerText = depth.total_ask_qty.toLocaleString();
+
+      const totalVol = depth.total_bid_qty + depth.total_ask_qty;
+      const bidPct = totalVol > 0 ? (depth.total_bid_qty / totalVol) * 100 : 50;
+      document.getElementById('depth-imbalance-bar').style.width = `${bidPct}%`;
+
+      // Render 5-level ladder
+      const ladderEl = document.getElementById('depth-modal-ladder');
+      const bids = depth.bids || [];
+      const asks = depth.asks || [];
+      const maxQty = Math.max(...bids.map(b => b.qty), ...asks.map(a => a.qty), 1);
+
+      let html = '';
+      for (let i = 0; i < Math.max(bids.length, asks.length); i++) {
+        const b = bids[i] || { orders: 0, qty: 0, price: 0 };
+        const a = asks[i] || { orders: 0, qty: 0, price: 0 };
+        const bWidth = Math.round((b.qty / maxQty) * 100);
+        const aWidth = Math.round((a.qty / maxQty) * 100);
+
+        html += `
+          <div class="grid grid-cols-2 px-2 py-1 relative">
+            <div class="grid grid-cols-3 relative pr-1">
+              <div class="absolute inset-y-0 right-0 bg-emerald-950/30 -z-0 pointer-events-none" style="width: ${bWidth}%"></div>
+              <span class="text-slate-500 z-10">${b.orders}</span>
+              <span class="text-right text-slate-300 z-10 tabular">${b.qty.toLocaleString()}</span>
+              <span class="text-right text-emerald-400 font-bold z-10 tabular">₹${b.price.toFixed(2)}</span>
+            </div>
+            <div class="grid grid-cols-3 relative pl-1 border-l border-panel-border/60">
+              <div class="absolute inset-y-0 left-0 bg-rose-950/30 -z-0 pointer-events-none" style="width: ${aWidth}%"></div>
+              <span class="text-left text-rose-400 font-bold z-10 tabular">₹${a.price.toFixed(2)}</span>
+              <span class="text-right text-slate-300 z-10 tabular">${a.qty.toLocaleString()}</span>
+              <span class="text-right text-slate-500 z-10">${a.orders}</span>
+            </div>
+          </div>
+        `;
+      }
+      ladderEl.innerHTML = html;
+
+      // Queue rank
+      if (queue) {
+        document.getElementById('depth-queue-shares').innerText = queue.vol_ahead.toLocaleString();
+        document.getElementById('depth-queue-ratio').innerText = `${queue.queue_ratio}x`;
+        document.getElementById('depth-queue-turnover').innerText = `${queue.required_turnover_for_fill.toLocaleString()} sh`;
+      }
+    }
+
+    // --- W10: Explicit Transaction Cost Analysis (TCA) Modal Engine ---
+    function openTcaModal(orderId) {
+      initAudio();
+      const bracket = (window.lastBracketsData || []).find(b => b.order_id === orderId);
+      if (!bracket) return;
+
+      document.getElementById('tca-modal-order-id').innerText = orderId;
+      const cb = bracket.cost_breakdown || {
+        turnover: bracket.shares * bracket.entry_price,
+        brokerage: 20.0,
+        stt: 0.0,
+        exchange_charges: 2.08,
+        gst: 3.97,
+        sebi_charges: 0.07,
+        stamp_duty: 2.10,
+        total_cost: bracket.charges_rs || 28.22
+      };
+
+      const rows = [
+        ["Brokerage", "Min(₹20, 0.03% intraday)", cb.brokerage],
+        ["STT / CTT", "0.025% on sell intraday / 0.1% delivery", cb.stt],
+        ["Exchange Turnover Charges", "NSE Cash 0.00297%", cb.exchange_charges],
+        ["GST", "18% on (Brokerage + Exchange)", cb.gst],
+        ["SEBI Turnover Fee", "₹10 per Crore (0.0001%)", cb.sebi_charges],
+        ["Stamp Duty", "0.003% buy intraday / 0.015% delivery", cb.stamp_duty],
+      ];
+
+      const tbody = document.getElementById('tca-table-body');
+      tbody.innerHTML = rows.map(([head, rule, amt]) => `
+        <tr>
+          <td class="py-1.5 px-3 font-medium text-slate-200">${head}</td>
+          <td class="py-1.5 px-3 text-slate-400 text-[10px]">${rule}</td>
+          <td class="py-1.5 px-3 text-right font-mono tabular text-slate-200">₹${(amt || 0).toFixed(2)}</td>
+        </tr>
+      `).join('');
+
+      document.getElementById('tca-total-friction').innerText = `₹${(cb.total_cost || bracket.charges_rs || 0).toFixed(2)}`;
+      const turnoverVal = cb.turnover || (bracket.shares * bracket.entry_price);
+      document.getElementById('tca-turnover').innerText = `₹${turnoverVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      const dragBps = turnoverVal > 0 ? ((cb.total_cost || bracket.charges_rs || 0) / turnoverVal) * 10000 : 0;
+      document.getElementById('tca-drag-bps').innerText = `${dragBps.toFixed(2)} bps`;
+
+      tcaModal.classList.remove('hidden');
+    }
+
+    function renderRadar(items) {
+      const tbody = document.getElementById('radar-table-body');
+      tbody.innerHTML = items.map((item, idx) => {
+        let signalBadge = '';
+        if (item.signal === 'ENTERED_T1_T2') {
+          signalBadge = '<span class="px-1.5 py-0.2 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-800 text-[10px] font-medium">ENTERED (T1+T2)</span>';
+        } else if (item.signal === 'QUEUED_E3') {
+          signalBadge = '<span class="px-1.5 py-0.2 rounded bg-slate-800 text-slate-200 border border-slate-700 text-[10px] font-medium">QUEUED (E3)</span>';
+        } else if (item.signal === 'WAITING_VOL') {
+          signalBadge = '<span class="px-1.5 py-0.2 rounded bg-amber-950/60 text-amber-300 border border-amber-800 text-[10px]">WAITING VOL</span>';
+        } else if (item.signal === 'SECTOR_CAPPED') {
+          signalBadge = '<span class="px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700 text-[10px]">SECTOR CAPPED</span>';
+        } else {
+          signalBadge = '<span class="px-1.5 py-0.2 rounded bg-rose-950/60 text-rose-300 border border-rose-800 text-[10px]">EXTENDED BLOCKED</span>';
+        }
+
+        let healthBadge = '';
+        const hs = item.health_state || 'RANGE_BOUND_CHOP';
+        if (hs === 'IN_POSITION') {
+          healthBadge = '<span class="px-1.5 py-0.2 rounded bg-slate-800 text-slate-200 border border-slate-700 text-[10px] font-medium">IN POSITION</span>';
+        } else if (hs === 'LEADER_EXPANDING') {
+          healthBadge = '<span class="px-1.5 py-0.2 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-800 text-[10px] font-medium">LEADER (EXPANDING)</span>';
+        } else if (hs === 'DEGRADED_LOW_VOL') {
+          healthBadge = '<span class="px-1.5 py-0.2 rounded bg-amber-950/60 text-amber-300 border border-amber-800 text-[10px]">DEGRADED (&lt;1.5x)</span>';
+        } else if (hs === 'EXTENDED_EXHAUSTED') {
+          healthBadge = '<span class="px-1.5 py-0.2 rounded bg-rose-950/60 text-rose-300 border border-rose-800 text-[10px]">EXTENDED (&gt;4%)</span>';
+        } else {
+          healthBadge = '<span class="px-1.5 py-0.2 rounded bg-slate-900 text-slate-400 border border-slate-800 text-[10px]">CHOP / BASE</span>';
+        }
+
+        const chgClass = item.chg >= 0 ? 'text-emerald-400' : 'text-rose-400';
+        const volClass = item.vol_mult >= 2.5 ? 'text-emerald-400 font-semibold' : 'text-slate-400';
+
+        return `
+          <tr class="hover:bg-slate-900/40 transition cursor-pointer" onclick="highlightCandidate(${idx})" title="Press ${idx+1} to jump to ${item.symbol}">
+            <td class="py-2 px-2.5 font-bold text-white flex items-center gap-1.5">
+              <span class="text-[10px] text-slate-500 font-normal">[${idx+1}]</span>
+              <span>${item.symbol}</span>
+              <button onclick="event.stopPropagation(); openDepthModal('${item.symbol}', ${item.ltp}, 50)" class="text-slate-500 hover:text-cyan-300 text-[10px] transition cursor-pointer" title="W5: View 5-Level Depth Ladder for ${item.symbol}">📊</button>
+            </td>
+            <td class="py-2 px-2.5 text-slate-400 text-[11px]">${item.sector}</td>
+            <td class="py-2 px-2.5 text-right font-medium text-white tabular">₹${item.ltp.toFixed(2)}</td>
+            <td class="py-2 px-2.5 text-right font-medium ${chgClass} tabular">${item.chg >= 0 ? '+' : ''}${item.chg.toFixed(2)}%</td>
+            <td class="py-2 px-2.5 text-right ${volClass} tabular">${item.vol_mult.toFixed(1)}x</td>
+            <td class="py-2 px-2.5 text-right text-slate-300 tabular">₹${item.or_high.toFixed(1)}</td>
+            <td class="py-2 px-2.5 text-right text-slate-300 tabular">₹${item.or_low.toFixed(1)}</td>
+            <td class="py-2 px-2.5 text-right text-slate-400 tabular">${item.atr.toFixed(1)}%</td>
+            <td class="py-2 px-2.5 text-center">${healthBadge}</td>
+            <td class="py-2 px-2.5 text-center text-slate-300">${item.status}</td>
+            <td class="py-2 px-2.5 text-center">${signalBadge}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function renderBrackets(brackets) {
+      window.lastBracketsData = brackets || [];
+      const container = document.getElementById('bracket-ledger-container');
+      if (!brackets || brackets.length === 0) {
+        container.innerHTML = '<div class="p-4 rounded bg-panel-bg border border-panel-border text-center text-slate-500 mono text-xs">NO ACTIVE POSITIONS // ALL SLOTS AVAILABLE // ZERO OPEN RISK</div>';
+        return;
+      }
+      container.innerHTML = brackets.map(b => {
+        const isBE = b.is_breakeven;
+        const beBadge = isBE ? '<span class="text-emerald-400 font-medium"> (Breakeven)</span>' : '';
+        const t1Badge = b.t1_status === 'FILLED'
+          ? '<span class="text-emerald-400 font-semibold text-xs">FILLED @ ₹' + b.t1_target + '</span>'
+          : '<span class="text-amber-400 font-semibold text-xs">QUEUED @ ₹' + b.t1_target + '</span>';
+
+        const slip = b.slippage_bps !== undefined ? b.slippage_bps : 0.0;
+        let slipBadgeClass = 'bg-slate-800 text-slate-300 border-slate-700';
+        if (slip <= 0) {
+          slipBadgeClass = 'bg-emerald-950/60 text-emerald-300 border-emerald-800/80';
+        } else if (slip <= 5.0) {
+          slipBadgeClass = 'bg-amber-950/60 text-amber-300 border-amber-800/80';
+        } else {
+          slipBadgeClass = 'bg-rose-950/60 text-rose-300 border-rose-800/80';
+        }
+        const slipSign = slip > 0 ? '+' : '';
+        const sigPrice = (b.signal_price || b.entry_price).toFixed(2);
+        const fillPrice = (b.fill_price || b.entry_price).toFixed(2);
+        const spreadCost = (b.spread_cost_bps || 0).toFixed(1);
+        const delayImpact = (b.delay_slippage_bps || 0).toFixed(1);
+        const slipTooltip = `W4: Implementation Shortfall vs Arrival Price\nSignal: ₹${sigPrice} ➔ Fill: ₹${fillPrice}\nTotal Slippage: ${slipSign}${slip.toFixed(1)} bps\nSpread Cost: ${spreadCost} bps | Delay Impact: ${delayImpact} bps`;
+
+        const charges = b.charges_rs !== undefined ? b.charges_rs.toFixed(2) : '0.00';
+        const tcaBtn = `<button onclick="openTcaModal('${b.order_id}')" class="px-1.5 py-0.2 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 text-[9px] border border-slate-700 transition cursor-pointer" title="W10: View Itemized Statutory Cost Breakdown (Brokerage, STT, Exchange, GST, SEBI, Stamp Duty)">[ℹ TCA]</button>`;
+
+        return `
+          <div class="p-3 rounded bg-panel-bg border border-panel-border flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+            <div class="flex items-center gap-2.5">
+              <span class="px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-800 text-[10px] mono font-bold">${b.order_id}</span>
+              <div>
+                <div class="font-bold text-white text-xs mono flex items-center gap-2">
+                  <span>${b.symbol}</span>
+                  <span class="text-[11px] text-slate-500 font-normal">(${b.sector})</span>
+                  <span class="px-1.5 py-0.5 rounded text-[10px] mono font-bold border ${slipBadgeClass}" title="${slipTooltip}">SLIP: ${slipSign}${slip.toFixed(1)} bps</span>
+                  <button onclick="openDepthModal('${b.symbol}', ${b.ltp || b.entry_price}, ${b.shares}, '${b.order_id}')" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 text-[10px] font-semibold transition cursor-pointer" title="W5: View 5-Level Market Depth Ladder &amp; Queue Position">📊 DEPTH</button>
+                </div>
+                <div class="text-[11px] mono text-slate-400">${b.shares} Qty @ ₹${b.entry_price.toFixed(2)} | SL: ₹${b.current_stop.toFixed(2)}${beBadge}</div>
+              </div>
+            </div>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs mono">
+              <div class="bg-slate-900 p-1.5 rounded border border-panel-border">
+                <div class="text-[9px] text-slate-500">TRANCHE 1 (+1.5R)</div>
+                ${t1Badge}
+                <div class="text-[9px] text-slate-400">${b.t1_shares} Qty</div>
+              </div>
+              <div class="bg-slate-900 p-1.5 rounded border border-panel-border">
+                <div class="text-[9px] text-slate-500">TRANCHE 2 (RUNNER)</div>
+                <div class="text-slate-200 font-semibold text-xs">${b.t2_status}</div>
+                <div class="text-[9px] text-slate-400">${b.t2_shares} Qty</div>
+              </div>
+              <div class="bg-slate-900 p-1.5 rounded border border-panel-border">
+                <div class="text-[9px] text-slate-500">CURRENT LTP</div>
+                <div class="text-white font-semibold text-xs">₹${b.ltp.toFixed(2)}</div>
+                <div class="text-[9px] text-slate-400">Track 2</div>
+              </div>
+              <div class="bg-slate-900 p-1.5 rounded border border-panel-border">
+                <div class="text-[9px] text-slate-500">NET P&amp;L</div>
+                <div class="text-emerald-400 font-bold text-xs">+₹${b.net_pnl_rs.toFixed(2)}</div>
+                <div class="text-[9px] text-slate-400 flex items-center justify-between mt-0.5">
+                  <span>Charges: ₹${charges}</span>
+                  ${tcaBtn}
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderVigil(vigil) {
+      const container = document.getElementById('vigil-pills');
+      if (!vigil || !vigil.stages || vigil.stages.length === 0) return;
+
+      container.innerHTML = vigil.stages.map(s => {
+        let colorClass = 'bg-slate-900 text-slate-400 border-panel-border';
+        let badgeColor = 'text-slate-300';
+        if (s.state === 'OK') {
+          colorClass = 'bg-emerald-950/60 text-emerald-300 border-emerald-800/80';
+          badgeColor = 'text-emerald-400';
+        } else if (s.state === 'WARN') {
+          colorClass = 'bg-amber-950/60 text-amber-300 border-amber-800/80';
+          badgeColor = 'text-amber-400';
+        } else if (s.state === 'ERROR') {
+          colorClass = 'bg-rose-950/60 text-rose-300 border-rose-800/80';
+          badgeColor = 'text-rose-400';
+        }
+        return `<span class="px-2 py-0.5 rounded border ${colorClass}" title="${s.detail}">
+          ${s.name.toUpperCase()}: <b class="${badgeColor}">${s.state}</b>
+        </span>`;
+      }).join('');
+    }
+
+    // --- W28: Live Ping / Heartbeat Indicator & Polling Engine ---
+    async function fetchState() {
+      const t0 = performance.now();
+      try {
+        const resp = await fetch('/api/state');
+        const rtt = Math.round(performance.now() - t0);
+        const pingEl = document.getElementById('ping-badge');
+        if (pingEl) {
+          if (rtt < 60) {
+            pingEl.innerText = `● ${rtt}ms`;
+            pingEl.className = 'px-2.5 py-1 rounded bg-slate-900 border border-panel-border text-emerald-400 font-semibold';
+          } else if (rtt < 150) {
+            pingEl.innerText = `● ${rtt}ms`;
+            pingEl.className = 'px-2.5 py-1 rounded bg-slate-900 border border-panel-border text-amber-400 font-semibold';
+          } else {
+            pingEl.innerText = `● ${rtt}ms`;
+            pingEl.className = 'px-2.5 py-1 rounded bg-slate-900 border border-panel-border text-rose-400 font-semibold';
+          }
+        }
+
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.radar && data.radar.length > 0) {
+            renderRadar(data.radar);
+          }
+          if (data.brackets !== undefined) {
+            renderBrackets(data.brackets);
+          }
+          if (data.vigil) {
+            renderVigil(data.vigil);
+          }
+          if (data.oms) {
+            renderOmsState(data.oms);
+          }
+          if (data.is_paused !== undefined) {
+            const pBtn = document.getElementById('pause-btn');
+            if (data.is_paused) {
+              pBtn.innerText = '▶ RESUME ENTRIES';
+              pBtn.className = 'px-3 py-1 rounded bg-rose-950/80 hover:bg-rose-900 text-rose-200 border border-rose-700 font-medium transition cursor-pointer';
+            } else {
+              pBtn.innerText = '⏸ PAUSE ENTRIES';
+              pBtn.className = 'px-3 py-1 rounded bg-amber-950/80 hover:bg-amber-900 text-amber-200 border border-amber-700 font-medium transition cursor-pointer';
+            }
+          }
+          if (data.nifty) {
+            document.getElementById('nifty-ltp').innerText = data.nifty.ltp.toFixed(2);
+            document.getElementById('nifty-chg').innerText = (data.nifty.chg >= 0 ? '+' : '') + data.nifty.chg.toFixed(2) + '%';
+          }
+          if (data.risk) {
+            document.getElementById('open-risk-amt').innerText = '₹' + data.risk.current_open_risk_rs.toFixed(0);
+            document.getElementById('notional-amt').innerText = '₹' + data.risk.current_notional_rs.toFixed(0);
+            if (document.getElementById('open-risk-pct')) {
+              document.getElementById('open-risk-pct').innerText = data.risk.open_risk_pct + '%';
+            }
+            if (document.getElementById('notional-pct')) {
+              document.getElementById('notional-pct').innerText = data.risk.notional_pct + '%';
+            }
+          }
+          if (data.funnel) {
+            const f = data.funnel;
+            if (f.total_fno) document.getElementById('funnel-total-fno').innerText = f.total_fno;
+            if (f.surveillance_passed) document.getElementById('funnel-surveillance').innerText = f.surveillance_passed;
+            if (f.qualified_pool) document.getElementById('funnel-qualified').innerText = f.qualified_pool;
+            if (f.top_8_count) document.getElementById('funnel-top8').innerText = f.top_8_count;
+            if (f.sha256) document.getElementById('universe-sha').innerText = f.sha256;
+
+            const addedEl = document.getElementById('rotation-added-container');
+            if (f.added && f.added.length > 0) {
+              addedEl.innerHTML = '<span class="text-[11px] text-emerald-400">Added:</span> ' +
+                f.added.map(s => `<span class="px-1.5 py-0.2 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-800 text-[11px]">+ ${s}</span>`).join(' ');
+            } else {
+              addedEl.innerHTML = '<span class="text-[11px] text-emerald-400">Added:</span> <span class="text-slate-500">None</span>';
+            }
+
+            const droppedEl = document.getElementById('rotation-dropped-container');
+            if (f.dropped && f.dropped.length > 0) {
+              droppedEl.innerHTML = '<span class="text-[11px] text-rose-400">Dropped:</span> ' +
+                f.dropped.map(s => `<span class="px-1.5 py-0.2 rounded bg-rose-950/60 text-rose-300 border border-rose-800 text-[11px] line-through">- ${s}</span>`).join(' ');
+            } else {
+              droppedEl.innerHTML = '<span class="text-[11px] text-rose-400">Dropped:</span> <span class="text-slate-500">None</span>';
+            }
+
+            const retainedEl = document.getElementById('rotation-retained-container');
+            if (f.retained && f.retained.length > 0) {
+              retainedEl.innerHTML = '<span class="text-[11px] text-slate-500">Retained:</span> <span class="text-slate-300 text-[11px]">' + f.retained.join(', ') + '</span>';
+            }
+          }
+          if (data.performance) {
+            const p = data.performance;
+            if (document.getElementById('perf-expectancy-r')) {
+              document.getElementById('perf-expectancy-r').innerText = (p.net_expectancy_r >= 0 ? '+' : '') + p.net_expectancy_r.toFixed(2) + ' R';
+              document.getElementById('perf-expectancy-rs').innerText = '₹' + p.net_expectancy_rs.toFixed(0) + ' / trade';
+              document.getElementById('perf-win-rate').innerText = p.win_rate_pct.toFixed(1) + '%';
+              document.getElementById('perf-trades-count').innerText = `${p.winning_trades} Wins / ${p.losing_trades} Losses`;
+              document.getElementById('perf-profit-factor').innerText = p.profit_factor.toFixed(2);
+              document.getElementById('perf-net-pnl').innerText = (p.net_pnl_rs >= 0 ? '+₹' : '-₹') + Math.abs(p.net_pnl_rs).toFixed(2);
+            }
+            if (p.rule_1_gate) {
+              const g = p.rule_1_gate;
+              if (document.getElementById('perf-sessions')) {
+                document.getElementById('perf-sessions').innerText = `${g.completed_sessions} / ${g.required_sessions}`;
+                document.getElementById('perf-fills').innerText = `${g.verified_e3_fills} / ${g.required_e3_fills}`;
+                document.getElementById('gate-verdict-badge').innerText = g.verdict;
+              }
+            }
+          }
+        }
+      } catch (err) {
+        const pingEl = document.getElementById('ping-badge');
+        if (pingEl) {
+          pingEl.innerText = `● OFFLINE`;
+          pingEl.className = 'px-2.5 py-1 rounded bg-rose-950/80 border border-rose-700 text-rose-400 font-semibold';
+        }
+      }
+    }
+
+    // Initialize UI and start polling
+    updateSoundUI();
+    applyColorblind();
+    applyTheme();
+    applyMsPrecision();
+    renderRadar(sampleRadar);
+    document.getElementById('radar-timestamp').innerText = new Date().toLocaleTimeString();
+    setInterval(fetchState, 3000);
+    fetchState();
+
+    // Pause button handler
+    document.getElementById('pause-btn').addEventListener('click', async () => {
+      try {
+        const resp = await fetch('/api/action/pause', { method: 'POST' });
+        const res = await resp.json();
+        if (res.status === 'OK') {
+          playPauseSound();
+          fetchState();
+        }
+      } catch (e) {}
+    });
+
+    // Flatten button & modal handlers
+    document.getElementById('flatten-btn').addEventListener('click', () => {
+      flattenModal.classList.remove('hidden');
+      playAlertSound();
+    });
+    document.getElementById('modal-cancel-btn').addEventListener('click', () => {
+      flattenModal.classList.add('hidden');
+    });
+    document.getElementById('modal-confirm-btn').addEventListener('click', async () => {
+      try {
+        const resp = await fetch('/api/action/squareoff', { method: 'POST' });
+        const res = await resp.json();
+        flattenModal.classList.add('hidden');
+        flashTabAlert('EMERGENCY FLATTEN EXECUTED');
+        playAlertSound();
+        fetchState();
+      } catch (e) {
+        flattenModal.classList.add('hidden');
+      }
+    });
+
+    // Re-scan button handler
+    document.getElementById('rescan-btn').addEventListener('click', async () => {
+      try {
+        const resp = await fetch('/api/action/re-scan', { method: 'POST' });
+        const res = await resp.json();
+        if (res.status === 'OK' && res.rotation) {
+          playFillSound();
+          flashTabAlert('UNIVERSE RE-SCAN COMPLETE');
+          fetchState();
+        }
+      } catch (e) {}
+    });
+
+    // Clear log button handler
+    document.getElementById('clear-log-btn').addEventListener('click', () => {
+      document.getElementById('audit-log-terminal').innerHTML = '<div class="text-slate-600">[Log Cleared]</div>';
+    });
+
+    // --- Co-Pilot & Hybrid OMS Client Logic ---
+    let currentPendingIntentId = null;
+
+    function renderOmsState(oms) {
+      if (!oms) return;
+
+      // 1. Update Mode Badge
+      const modeBadge = document.getElementById('mode-badge');
+      if (modeBadge && oms.mode) {
+        modeBadge.innerText = `MODE: ${oms.mode} ▾`;
+        if (oms.mode === 'CO_PILOT') {
+          modeBadge.className = 'text-[11px] px-2 py-0.5 rounded bg-blue-950/80 text-blue-300 border border-blue-700/80 mono font-semibold cursor-pointer';
+        } else if (oms.mode === 'AUTONOMOUS') {
+          modeBadge.className = 'text-[11px] px-2 py-0.5 rounded bg-purple-950/80 text-purple-300 border border-purple-700/80 mono font-semibold cursor-pointer';
+        } else {
+          modeBadge.className = 'text-[11px] px-2 py-0.5 rounded bg-indigo-950/80 text-indigo-300 border border-indigo-700/80 mono font-semibold cursor-pointer';
+        }
+      }
+
+      // 2. Render Co-Pilot Authorization Banner
+      const copilotContainer = document.getElementById('copilot-container');
+      if (!copilotContainer) return;
+
+      if (oms.pending_intents && oms.pending_intents.length > 0) {
+        const intent = oms.pending_intents[0];
+        currentPendingIntentId = intent.intent_id;
+        copilotContainer.classList.remove('hidden');
+
+        const rem = intent.seconds_remaining !== undefined ? Math.round(intent.seconds_remaining) : 30;
+        const timerEl = document.getElementById('copilot-timer');
+        if (timerEl) {
+          timerEl.innerText = `${rem}s`;
+          timerEl.className = rem < 10
+            ? 'px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 text-[11px] mono font-bold animate-pulse'
+            : 'px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[11px] mono font-bold';
+        }
+
+        const detailsEl = document.getElementById('copilot-details');
+        if (detailsEl) {
+          const limitCollar = intent.limit_price ? `₹${Number(intent.limit_price).toFixed(2)}` : `+0.15%`;
+          detailsEl.innerHTML = `
+            <span class="font-bold text-white">${intent.symbol}</span> |
+            <span class="text-emerald-400">Trigger: ₹${Number(intent.entry_price).toFixed(2)}</span> |
+            <span class="text-cyan-300 font-semibold">Limit Collar: ${limitCollar} (+15 bps)</span> |
+            <span class="text-rose-400">SL: ₹${Number(intent.stop_loss).toFixed(2)}</span> |
+            <span class="text-indigo-400">T1: ₹${Number(intent.target_tranche1).toFixed(2)}</span> |
+            <span>Size: <b>${intent.shares} shs</b> (~₹${Number(intent.notional_rs).toLocaleString()})</span> |
+            <span class="text-amber-400">Risk: ₹${Number(intent.risk_rs).toFixed(0)} (1.0R)</span>
+          `;
+        }
+      } else {
+        currentPendingIntentId = null;
+        copilotContainer.classList.add('hidden');
+      }
+    }
+
+    async function approveCurrentIntent() {
+      if (!currentPendingIntentId) return;
+      try {
+        const resp = await fetch('/api/action/approve', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({intent_id: currentPendingIntentId})
+        });
+        const res = await resp.json();
+        if (res.status === 'SUCCESS') {
+          playFillSound();
+          flashTabAlert('TRADE APPROVED & ROUTED');
+          fetchState();
+        } else {
+          flashTabAlert('APPROVAL ERROR: ' + (res.message || 'FAILED'));
+        }
+      } catch (err) {}
+    }
+
+    async function rejectCurrentIntent() {
+      if (!currentPendingIntentId) return;
+      try {
+        const resp = await fetch('/api/action/reject', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({intent_id: currentPendingIntentId})
+        });
+        const res = await resp.json();
+        playPauseSound();
+        flashTabAlert('TRADE REJECTED');
+        fetchState();
+      } catch (err) {}
+    }
+
+    async function toggleExecutionMode() {
+      const modeBadge = document.getElementById('mode-badge');
+      let currentMode = modeBadge ? modeBadge.innerText.replace('MODE: ', '').replace(' ▾', '').trim() : 'CO_PILOT';
+      let nextMode = 'CO_PILOT';
+      if (currentMode === 'CO_PILOT') nextMode = 'AUTONOMOUS';
+      else if (currentMode === 'AUTONOMOUS') nextMode = 'HYBRID';
+      else nextMode = 'CO_PILOT';
+
+      try {
+        const resp = await fetch('/api/action/set_mode', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({mode: nextMode})
+        });
+        const res = await resp.json();
+        if (res.status === 'OK') {
+          fetchState();
+        }
+      } catch (err) {}
+    }
+  </script>
+</body>
+</html>

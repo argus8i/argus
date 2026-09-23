@@ -1,0 +1,27 @@
+{
+  "candidates": [
+    "CDSL",
+    "ANGELONE",
+    "SUZLON",
+    "INOXWIND",
+    "IREDA",
+    "RVNL",
+    "COCHINSHIP",
+    "BDL"
+  ],
+  "engine_config": {
+    "order_rules": {
+      "strategy": "15M_ORB",
+      "risk_rs": 1500
+    },
+    "cost_model": {
+      "version": "v1",
+      "gross_only_forbidden": true,
+      "minimum_cost_rs": 1.0
+    },
+    "gap_seconds": 5.0,
+    "queue_haircut": 0.25,
+    "latency_ms": 500,
+    "gate_stats_version": "track2-gate-v1"
+  }
+}

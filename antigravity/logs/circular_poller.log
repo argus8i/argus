@@ -6,3 +6,751 @@
 [2026-09-19 13:12:24] Circular Audit Complete: 12/12 Qualified.
 [2026-09-19 13:12:37] Starting 19:00 IST Exchange Circular Poller for session: 2026-09-19
 [2026-09-19 13:12:40] Circular Audit Complete: 12/12 Qualified.
+[2026-09-20 18:48:27] FAIL-CLOSED: fetched_at timestamp is in the future by 49292.1s.
+[2026-09-20 18:48:27] FAIL-CLOSED: fetched_at timestamp is in the future by 49292.1s.
+[2026-09-20 18:48:28] FAIL-CLOSED: fetched_at timestamp is in the future by 49292.0s.
+[2026-09-20 19:07:12] FAIL-CLOSED: fetched_at timestamp is in the future by 48167.7s.
+[2026-09-20 19:07:12] FAIL-CLOSED: fetched_at timestamp is in the future by 48167.6s.
+[2026-09-20 19:07:12] FAIL-CLOSED: fetched_at timestamp is in the future by 48167.6s.
+[2026-09-20 19:07:54] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-20 19:07:54] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-20 19:07:54] FAIL-CLOSED: Parser replay verification failed: RAW_PATH_ESCAPE_FNO
+[2026-09-20 19:08:06] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-20 19:08:06] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-20 19:08:06] FAIL-CLOSED: Parser replay verification failed: RAW_PATH_ESCAPE_FNO
+[2026-09-20 19:09:15] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-20 19:09:15] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-20 19:09:15] FAIL-CLOSED: Parser replay verification failed: RAW_PATH_ESCAPE_FNO
+[2026-09-20 19:09:43] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-20 19:09:43] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-20 19:09:43] FAIL-CLOSED: Parser replay verification failed: RAW_PATH_ESCAPE_FNO
+[2026-09-20 19:13:47] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-20 19:13:47] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-20 19:13:47] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-20 19:13:47] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-20 19:14:06] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-20 19:14:06] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-20 19:14:06] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-20 19:14:07] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-20 19:14:22] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-20 19:14:22] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-20 19:14:22] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-20 19:14:22] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-20 19:14:30] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-20 19:14:30] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-20 19:14:30] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-20 19:14:30] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-20 19:17:57] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-20 19:17:57] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-20 19:17:57] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-20 19:17:57] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-20 19:18:05] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-20 19:18:05] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-20 19:18:05] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-20 19:18:06] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-20 22:23:32] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-20 22:23:32] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-20 22:23:32] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-20 22:23:32] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-20 23:43:39] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-20 23:43:39] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-20 23:43:39] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-20 23:43:39] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-21 00:21:20] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-21 00:21:20] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-21 00:21:20] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-21 00:21:20] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-21 00:23:19] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-21 00:23:19] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-21 00:23:19] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-21 00:23:19] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-21 00:37:56] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-21 00:37:57] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-21 00:37:57] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-21 00:37:57] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-21 00:44:43] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-21 00:44:43] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-21 00:44:43] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-21 00:44:43] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-21 01:06:44] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-21 01:06:44] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-21 01:06:44] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-21 01:06:44] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-21 01:18:06] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-21 01:18:06] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-21 01:18:06] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-21 01:18:06] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-21 01:30:46] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-21 01:30:46] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-21 01:30:46] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-21 01:30:46] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-21 01:37:21] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-21 01:37:21] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-21 01:37:21] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-21 01:37:21] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-21 10:37:44] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:37:44] FAIL-CLOSED: Legacy self-hashed summary without raw evidence rejected.
+[2026-09-21 10:37:44] FAIL-CLOSED: Circular verification failed (LEGACY_SELF_HASHED_WITHOUT_RAW_EVIDENCE_REJECTED). Disqualifying all scrips.
+[2026-09-21 10:37:46] Circular Audit Complete: 0/12 Qualified.
+[2026-09-21 10:37:46]   [DISQUALIFIED ALERT] CDSL: DISQUALIFIED_UNKNOWN -> CDSL surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:37:46]   [DISQUALIFIED ALERT] ANGELONE: DISQUALIFIED_UNKNOWN -> ANGELONE surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:37:46]   [DISQUALIFIED ALERT] SUZLON: DISQUALIFIED_UNKNOWN -> SUZLON surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:37:46]   [DISQUALIFIED ALERT] INOXWIND: DISQUALIFIED_UNKNOWN -> INOXWIND surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:37:46]   [DISQUALIFIED ALERT] IREDA: DISQUALIFIED_UNKNOWN -> IREDA surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:37:46]   [DISQUALIFIED ALERT] RVNL: DISQUALIFIED_UNKNOWN -> RVNL surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:37:46]   [DISQUALIFIED ALERT] COCHINSHIP: DISQUALIFIED_UNKNOWN -> COCHINSHIP surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:37:46]   [DISQUALIFIED ALERT] BDL: DISQUALIFIED_UNKNOWN -> BDL surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:37:46]   [DISQUALIFIED ALERT] TATACHEM: DISQUALIFIED_UNKNOWN -> TATACHEM surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:37:46]   [DISQUALIFIED ALERT] POLICYBZR: DISQUALIFIED_UNKNOWN -> POLICYBZR surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:37:46]   [DISQUALIFIED ALERT] DIXON: DISQUALIFIED_UNKNOWN -> DIXON surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:37:46]   [DISQUALIFIED ALERT] NATIONALUM: DISQUALIFIED_UNKNOWN -> NATIONALUM surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:38:47] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:38:47] FAIL-CLOSED: Legacy self-hashed summary without raw evidence rejected.
+[2026-09-21 10:38:47] FAIL-CLOSED: Circular verification failed (LEGACY_SELF_HASHED_WITHOUT_RAW_EVIDENCE_REJECTED). Disqualifying all scrips.
+[2026-09-21 10:38:49] Circular Audit Complete: 0/12 Qualified.
+[2026-09-21 10:38:49]   [DISQUALIFIED ALERT] CDSL: DISQUALIFIED_UNKNOWN -> CDSL surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:38:49]   [DISQUALIFIED ALERT] ANGELONE: DISQUALIFIED_UNKNOWN -> ANGELONE surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:38:49]   [DISQUALIFIED ALERT] SUZLON: DISQUALIFIED_UNKNOWN -> SUZLON surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:38:49]   [DISQUALIFIED ALERT] INOXWIND: DISQUALIFIED_UNKNOWN -> INOXWIND surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:38:49]   [DISQUALIFIED ALERT] IREDA: DISQUALIFIED_UNKNOWN -> IREDA surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:38:49]   [DISQUALIFIED ALERT] RVNL: DISQUALIFIED_UNKNOWN -> RVNL surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:38:49]   [DISQUALIFIED ALERT] COCHINSHIP: DISQUALIFIED_UNKNOWN -> COCHINSHIP surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:38:49]   [DISQUALIFIED ALERT] BDL: DISQUALIFIED_UNKNOWN -> BDL surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:38:49]   [DISQUALIFIED ALERT] TATACHEM: DISQUALIFIED_UNKNOWN -> TATACHEM surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:38:49]   [DISQUALIFIED ALERT] POLICYBZR: DISQUALIFIED_UNKNOWN -> POLICYBZR surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:38:49]   [DISQUALIFIED ALERT] DIXON: DISQUALIFIED_UNKNOWN -> DIXON surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:38:49]   [DISQUALIFIED ALERT] NATIONALUM: DISQUALIFIED_UNKNOWN -> NATIONALUM surveillance status is unverified (ASM/GSM check missing or timestamp absent). Fail-closed.
+[2026-09-21 10:39:16] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-21 10:39:16] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-21 10:39:16] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-21 10:39:16] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-21 10:39:49] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:39:53] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:40:00] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:40:02] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:41:02] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:41:06] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:41:39] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:41:41] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:42:41] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:42:45] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:43:45] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:43:49] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:44:43] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:44:45] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:44:49] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:44:52] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:45:23] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:45:24] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:45:46] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:45:48] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:45:52] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:45:56] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:46:12] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:46:15] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:46:44] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:46:45] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:46:55] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:46:57] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:47:55] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-21 10:47:55] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-21 10:47:55] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-21 10:47:56] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-21 10:48:00] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:48:03] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:49:08] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:49:11] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:50:14] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:50:18] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:51:21] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:51:24] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:52:29] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:52:32] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:53:36] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:53:39] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:54:45] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:54:50] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:55:54] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:55:58] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:57:02] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:57:06] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:58:10] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:58:13] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 10:59:17] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 10:59:21] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:00:28] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:00:32] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:01:35] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:01:39] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:02:41] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:02:45] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:03:47] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:03:50] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:04:53] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:04:57] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:06:01] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:06:05] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:07:10] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:07:13] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:08:16] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:08:19] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:09:24] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:09:28] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:10:31] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:10:35] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:11:40] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:11:44] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:12:53] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:12:58] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:14:01] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:14:05] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:15:10] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:15:14] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:16:21] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:16:24] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:17:29] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:17:32] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:18:35] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:18:38] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:19:43] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:19:46] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:20:52] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:20:55] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:21:58] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:22:02] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:23:04] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:23:08] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:24:14] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:24:17] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:25:19] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:25:23] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:26:27] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:26:31] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:27:35] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:27:39] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:28:43] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:28:47] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:29:51] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:29:55] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:31:00] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:31:05] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:32:07] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:32:11] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:33:13] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:33:17] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:34:29] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:34:33] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:35:39] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:35:43] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:36:45] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:36:49] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:37:52] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:37:57] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:39:01] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:39:05] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:40:17] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:40:21] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:41:26] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:41:30] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:42:35] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:42:39] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:43:44] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:43:46] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:44:47] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:44:50] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:47:03] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:47:05] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:48:21] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:48:24] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:49:27] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:49:29] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:50:33] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:50:37] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:51:40] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:51:44] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:52:47] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:52:51] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:53:53] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:53:57] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:54:59] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:55:03] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:56:07] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:56:11] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:57:17] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:57:20] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:58:26] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:58:30] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 11:59:35] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 11:59:38] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:00:44] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:00:47] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:01:51] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:01:55] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:02:57] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:03:01] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:04:04] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:04:08] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:05:10] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:05:13] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:06:18] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:06:22] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:07:26] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:07:29] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:08:34] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:08:37] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:09:41] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:09:45] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:10:47] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:10:51] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:11:53] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:11:57] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:13:00] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:13:04] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:14:06] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:14:10] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:15:12] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:15:16] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:16:19] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:16:23] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:17:25] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:17:29] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:18:35] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:18:39] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:19:41] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:19:45] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:20:47] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:20:51] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:21:56] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:21:59] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:23:04] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:23:08] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:24:11] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:24:15] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:25:17] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:25:21] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:26:27] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:26:31] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:27:37] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:27:41] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:28:44] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:28:48] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:29:54] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:29:58] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:31:00] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:31:04] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:32:06] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:32:10] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:33:14] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:33:18] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:34:22] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:34:26] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:35:31] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:35:35] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:36:38] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:36:41] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:37:44] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:37:48] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:38:51] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:38:55] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:39:57] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:40:00] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:41:02] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:41:06] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:42:14] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:42:18] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:43:24] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:43:28] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:44:41] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:44:45] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:45:48] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:45:52] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:46:58] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:47:02] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:48:07] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:48:11] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:49:14] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:49:18] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:50:23] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:50:27] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:51:40] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:51:44] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:52:48] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:52:51] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:53:55] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:53:59] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:55:05] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:55:08] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:56:22] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:56:26] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:57:30] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:57:34] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:58:39] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:58:43] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 12:59:49] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 12:59:53] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:01:01] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:01:05] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:02:08] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:02:12] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:03:17] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:03:21] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:04:24] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:04:28] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:05:33] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:05:37] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:06:40] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:06:44] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:07:48] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:07:52] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:08:57] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:09:01] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:10:03] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:10:07] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:11:09] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:11:13] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:12:27] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:12:31] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:13:34] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:13:38] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:14:41] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:14:45] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:15:48] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:15:52] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:16:55] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:16:58] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:18:01] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:18:05] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:19:08] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:19:12] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:20:15] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:20:19] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:21:22] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:21:26] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:22:28] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:22:32] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:23:36] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:23:40] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:24:43] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:24:47] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:25:52] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:25:56] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:26:58] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:27:02] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:28:04] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:28:08] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:29:11] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:29:14] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:30:18] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:30:22] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:31:27] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:31:31] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:32:35] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:32:39] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:33:44] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:33:48] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:34:54] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:34:58] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:36:03] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:36:07] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:37:11] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:37:15] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:38:19] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:38:23] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:39:28] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:39:32] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:40:59] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:41:03] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:42:09] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:42:13] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:43:17] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:43:21] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:44:27] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:44:31] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:45:35] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:45:39] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:46:43] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:46:47] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:47:57] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:48:01] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:49:04] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:49:09] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:50:18] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:50:22] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:51:25] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:51:30] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:52:33] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:52:38] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:53:41] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:53:45] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:54:49] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:54:54] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:55:56] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:56:00] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:57:05] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:57:09] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:58:15] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:58:19] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 13:59:23] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 13:59:27] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:00:32] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:00:36] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:01:39] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:01:44] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:02:59] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:03:03] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:04:15] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:04:19] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:05:22] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:05:27] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:06:32] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:06:37] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:07:56] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:08:00] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:09:04] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:09:09] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:10:15] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:10:20] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:12:00] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:12:05] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:13:10] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:13:15] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:14:21] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:14:26] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:15:34] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:15:39] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:16:44] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:16:49] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:19:25] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:19:30] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:20:35] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:20:40] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:21:44] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:21:49] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:22:53] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:22:58] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:24:05] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:24:10] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:25:15] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:25:20] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:26:23] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:26:28] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:27:41] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:27:46] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:28:50] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:28:55] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:30:01] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:30:07] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:31:10] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:31:15] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:32:19] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:32:23] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:33:41] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:33:46] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:34:52] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:34:57] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:35:59] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:36:04] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:37:08] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:37:13] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:38:16] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:38:21] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:39:24] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:39:29] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:40:33] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:40:38] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:41:42] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:41:47] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:42:53] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:42:58] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:44:02] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:44:07] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:45:15] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:45:20] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:46:43] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:46:49] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:47:55] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:48:00] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:49:04] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:49:09] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:50:13] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:50:19] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:51:26] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:51:30] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:52:36] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:52:39] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:53:55] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:53:58] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:55:01] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:55:14] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:56:17] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:56:23] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:57:26] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:57:32] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:58:36] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:58:42] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 14:59:45] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 14:59:52] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:00:58] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:01:04] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:02:08] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:02:15] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:03:18] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:03:28] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:04:31] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:04:42] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:05:53] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:06:04] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:07:18] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:07:29] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:08:32] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:08:43] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:09:47] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:09:58] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:11:06] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:11:17] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:12:20] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:12:31] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:13:35] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:13:46] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:14:49] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:14:59] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:16:04] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:16:15] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:17:17] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:17:28] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:18:33] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:18:44] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:19:48] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:19:59] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:21:03] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:21:13] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:21:46] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-21 15:21:46] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-21 15:21:46] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-21 15:21:47] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-21 15:22:17] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:22:24] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:23:28] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:23:34] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:24:37] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:24:49] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:25:56] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:26:08] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:27:11] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:27:22] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:28:25] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:28:32] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:29:34] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:29:41] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:30:46] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:30:54] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:31:56] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:32:08] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:33:11] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:33:20] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:34:24] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:34:33] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:35:37] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:35:45] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:36:49] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:36:55] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:37:57] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:38:00] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:39:07] Starting Exchange Circular Audit for session: 2026-09-21
+[2026-09-21 15:39:12] Circular Audit Complete: 12/12 Qualified.
+[2026-09-21 15:41:15] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-21 15:41:15] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-21 15:41:15] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-21 15:41:15] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-21 15:45:35] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-21 15:45:35] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-21 15:45:35] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-21 15:45:35] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-21 19:57:17] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-21 19:57:17] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-21 19:57:17] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-21 19:57:17] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-21 23:12:48] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-21 23:12:48] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-21 23:12:48] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-21 23:12:48] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-21 23:13:55] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-21 23:13:55] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-21 23:13:55] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-21 23:13:56] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-21 23:23:20] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-21 23:23:20] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-21 23:23:20] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-21 23:23:20] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-21 23:25:24] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-21 23:25:24] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-21 23:25:24] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-21 23:25:24] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-21 23:26:23] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-21 23:26:23] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-21 23:26:24] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-21 23:26:24] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-22 08:31:05] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-22 08:31:05] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-22 08:31:05] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-22 08:31:05] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-22 08:49:33] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-22 08:49:33] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-22 08:49:33] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-22 08:49:33] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-22 08:50:51] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-22 08:50:51] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-22 08:50:51] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-22 08:50:51] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-22 10:02:40] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-22 10:02:40] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-22 10:02:40] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-22 10:02:40] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-22 10:08:44] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-22 10:08:44] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-22 10:08:44] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-22 10:08:44] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-22 10:18:18] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-22 10:18:18] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-22 10:18:18] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-22 10:18:18] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-22 11:21:58] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-22 11:21:58] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-22 11:21:58] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-22 11:21:58] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-22 12:20:12] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-22 12:20:12] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-22 12:20:12] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-22 12:20:12] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-22 12:38:42] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-22 12:38:42] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-22 12:38:42] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-22 12:38:42] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-22 12:57:37] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-22 12:57:38] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-22 12:57:38] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-22 12:57:38] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-23 09:10:40] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-23 09:10:40] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-23 09:10:40] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-23 09:10:41] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-23 14:32:41] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-23 14:32:42] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-23 14:32:42] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-23 14:32:42] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-23 16:15:21] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-23 16:15:21] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-23 16:15:21] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-23 16:15:21] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-23 17:59:22] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-23 17:59:22] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-23 17:59:22] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-23 17:59:22] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-23 18:08:25] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-23 18:08:25] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-23 18:08:25] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-23 18:08:25] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-09-23 18:29:27] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-09-23 18:29:27] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-09-23 18:29:27] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-09-23 18:29:27] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM

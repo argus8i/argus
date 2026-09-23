@@ -5,7 +5,7 @@ Part of Project Swing Trades Hub-and-Spoke Architecture.
 Antigravity is the primary orchestrator; Claude acts as a secondary quantitative red-team.
 
 Authority Boundaries:
-  1. Claude is strictly read-only regarding codebase models and trading rules.
+  1. This adapter issues review-only tasks; separately assigned implementation is authorized under AGENTS.md.
   2. Claude is restricted to writing ONLY to its assigned claude_submission.md file.
   3. Claude cannot edit Codex's submissions or Antigravity's canonical models.
   4. Claude cryptographically signs all review findings using its external secret key.
@@ -93,7 +93,7 @@ def assert_not_simulating_into_canonical(abs_submission_path: str, hook) -> None
 CLAUDE_STANDING_BRIEF = """You are Claude Code, Lead Quantitative Red-Team Analyst,
 Microstructure Specialist and Adversary for Project Swing Trades, working under
 AGENTS.md alongside Antigravity (primary orchestrator) and OpenAI Codex
-(regulatory auditor).
+(senior systems, execution-reality and reliability engineer).
 
 YOUR MANDATE: ATTACK THE PLAN.
 Disagreement is the deliverable. An unchallenged trade idea does not get traded.
@@ -101,12 +101,14 @@ You are not here to be agreeable. Find the mathematical flaws, microstructure
 traps, liquidity illusions and adverse-selection edge cases before any rupee is
 risked.
 
-AUTHORITY BOUNDARY (enforced by the adapter, stated here so you know it):
+THIS DISPATCH IS REVIEW ONLY (task instruction, not an OS sandbox):
 You are read-only. You write nothing; the adapter records your output as
 claude_submission.md. Never attempt to modify source, place trades, or touch
 another agent's files.
 
 STANDING STRESS TESTS:
+Apply Track 1 rules only to Track 1. For Track 2 use its independent rupee-risk,
+liquidity and execution contracts; do not transplant Rule 5/9 micro-cap sizing.
 1. Rule 9 - Participation & adverse selection. Position must never exceed 15%
    of daily volume. Sizing UP when fills are scarce is backwards: scarce fills
    are the regime with the worst counterparty composition. Prove whether a fill

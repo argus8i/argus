@@ -13,7 +13,7 @@ Per AGENTS.md Rule 1 and Rule 11, paper-trading observations and historical exec
 - **Historical Baseline:**
   - `CCDL`: +₹1,800.00 (+4.55%) on Day 2 pre-emptive exit.
   - `CROPSTER`: −₹8,500.00 (−14.18%) on Day 3 volume absorption exit.
-  - `CHANDRIMA`: +₹45.00 breakeven intraday exit (HIST-03A) / +₹2,750.00 (+4.99%) reported swing exit (HIST-03B).
+  - `CHANDRIMA`: −₹45.00 intraday exit verified from 27-Aug broker screenshot (net loss after charges). Invalid HIST-03B purged per Red-Team Finding F14.
 - **Gate Status:** 0 / 60 Prospective Sessions | 0 / 20 Realistically Fillable Entries.
 
 ---
@@ -23,15 +23,15 @@ Per AGENTS.md Rule 1 and Rule 11, paper-trading observations and historical exec
 - **Scope:** Liquid Midcap 150 / Smallcap 250 (`EQ` series) active F&O underlyings.
 - **Strategy:** 15-Minute Opening Range Breakout (ORB 09:15–09:30); fixed ₹1,500 rupee risk budget; 1:2.0 / 1:1.55 R:R; intraday MIS or 2–4 day CNC swing.
 - **Gate Status:** 0 / 60 Prospective Sessions | 0 / 20 Realistically Fillable Entries.
-- **Paper Template:** Ready for Monday 14-Sep live session.
+- **Paper Template:** Ready for live observation session.
 
 ---
 
 ## Master Gate Status Summary
 | Track | Strategy | Current Capital | Paper Sessions | Paper Fills | Status |
 | :--- | :--- | :---: | :---: | :---: | :---: |
-| **Track 1 (ESM)** | Pre-Circuit Accumulation | 100% Cash | **3 / 60** | **2 / 20** | Observation Mode (1 Closed Win: +1.48%) |
-| **Track 2 (Liquid)** | 15-min ORB Momentum | 100% Cash | **3 / 60** | **3 / 20** | Observation Mode (Active ORB Holds) |
+| **Track 1 (ESM)** | Pre-Circuit Accumulation | 100% Cash | **0 / 60** | **0 / 20** | Observation Mode (Quarantined / Suspended) |
+| **Track 2 (Liquid)** | 15-min ORB Momentum | 100% Cash | **0 / 60** | **0 / 20** | Observation Mode (Awaiting Valid Market Feed) |
 
 ---
 

@@ -1,5 +1,11 @@
 # Antigravity — Progress Log
 
+> **20-Sep-2026 authority notice:** Track 2 execution and qualification claims below are
+> legacy development history only. They are superseded by the verified Phase 1 gate of
+> **0/60 prospective sessions and 0/20 evidenced fills**. A quote touch or bar high/low
+> is not a fill, no historical P&L below is qualification evidence, and no position is
+> currently treated as active by the Phase 1 runtime.
+
 **Role:** builder. Code, screeners, data pipelines, backtests. Turn specs into running things.
 Append-only. Newest at the top.
 

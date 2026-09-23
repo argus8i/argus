@@ -20,6 +20,9 @@ The initial hypothesis was simple:
 * Enter via Pre-Market Call Auction (AMO orders at 09:00 AM) or marketable limit orders to capture momentum.
 * Ride consecutive daily circuit limits to achieve an aggregate monthly gain of **+15% to +20%** (compounding four +5% daily circuit days equals $+21.55\%$).
 
+> [!IMPORTANT]
+> **Post-Audit Realignment (23-Sep-2026):** The "+20% monthly" target was formally retired under Red-Team Finding F20. Under strict ₹1,500 rupee risk budgeting on a ₹5,00,000 corpus, targeting 20%/month (+₹1,00,000) mathematically demands an impossible 66.7R/month from 1–2 trades/day. The project objective is realigned to **verifying positive net expectancy ($E > 0$) after 43.0 bps round-trip friction across 60 prospective live trading sessions** before any live capital is deployed. Track 1 micro-caps are quarantined due to pump-and-dump entrapment risks.
+
 ### 1.2 The User's Real-World Experience: Two Wins and the Fatal Third Cycle
 The user's trading trajectory revealed the exact structural trap inherent in Indian micro-caps:
 1. **Cycles 1 & 2 (Success):** The user achieved two consecutive winning cycles producing ~20% net returns by catching early-stage momentum.
