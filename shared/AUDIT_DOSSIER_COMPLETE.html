@@ -710,6 +710,92 @@ Zero failures. Zero regressions. Zero synthetic fallbacks.</code></pre>
     </tbody>
   </table>
 
+  <h3>10.3 Claude Full-System Red-Team Audit & Roadmap Remediation (2026-09-23)</h3>
+  <p>Remediated all 10 priority recommendations across Tier 0 Security, Data Integrity, OMS Guardrails, and Ledger Rectification:</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Step</th>
+        <th>Domain</th>
+        <th>Red-Team Finding</th>
+        <th>Remediation Executed</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>1</strong></td>
+        <td>Tier 0 Security</td>
+        <td>F1–F4: Agent permission bypass; open CDP ports (9333/9444); token harvesting</td>
+        <td>Revoked bypass flags; closed CDP ports; killed process 57348; fail-closed CDP bridge; migrated to headless DhanHQ WebSocket.</td>
+        <td><strong style="color: #15803d;">Remediated & Verified</strong></td>
+      </tr>
+      <tr>
+        <td><strong>2</strong></td>
+        <td>Git Provenance</td>
+        <td>Roadmap §8 Item 2: 4 days of uncommitted work without timestamp</td>
+        <td>Clean git checkpoint commits recorded with explicit audit citations (<code>39d87e5</code>, <code>292a46a</code>).</td>
+        <td><strong style="color: #15803d;">Committed</strong></td>
+      </tr>
+      <tr>
+        <td><strong>3</strong></td>
+        <td>Data Integrity</td>
+        <td>F9–F11: Hardcoded synthetic universe priors stamped with misleading SHA-256 hash</td>
+        <td>Quarantined universe as <code>MANUAL_UNVERIFIED_BASKET</code>; removed misleading hash; excised scrip-name momentum favoritism.</td>
+        <td><strong style="color: #15803d;">Remediated & Verified</strong></td>
+      </tr>
+      <tr>
+        <td><strong>4</strong></td>
+        <td>OMS Guardrails</td>
+        <td>F26–F28: Kill-switch missed PRE_ARMED; open orders lost on boot; unbounded notional</td>
+        <td><code>emergency_flatten_all()</code> cancels PRE_ARMED intents; hydrated open brackets via <code>_load_active_orders()</code>; enforced ₹1,00,000 notional ceiling check fail-closed.</td>
+        <td><strong style="color: #15803d;">Remediated & Verified</strong></td>
+      </tr>
+      <tr>
+        <td><strong>5</strong></td>
+        <td>Log Isolation</td>
+        <td>F13: Tests polluting canonical logs (events.jsonl, paper_orders.jsonl)</td>
+        <td>Isolated test fixtures using temporary directories; purged test orders/intents/events from canonical audit files.</td>
+        <td><strong style="color: #15803d;">Isolated & Clean</strong></td>
+      </tr>
+      <tr>
+        <td><strong>6</strong></td>
+        <td>Track 1 Quarantine</td>
+        <td>F17, F18: Pump-and-dump entrapment; Rule 5 vs Rule 7 mathematical contradictions</td>
+        <td>Formally quarantined Track 1 micro-caps; focused 100% of forward engineering and capital on Track 2 (Liquid F&O Momentum).</td>
+        <td><strong style="color: #15803d;">Quarantined</strong></td>
+      </tr>
+      <tr>
+        <td><strong>7</strong></td>
+        <td>Target Realignment</td>
+        <td>F20: 20%/month target mathematically contradicts ₹1,500 risk model</td>
+        <td>Retired arbitrary "+20%/month" targeting; realigned objective to verifying positive net expectancy (E > 0) after 43.0 bps friction across 60 prospective live sessions.</td>
+        <td><strong style="color: #15803d;">Realigned</strong></td>
+      </tr>
+      <tr>
+        <td><strong>8</strong></td>
+        <td>Ledger Corrections</td>
+        <td>F14, F15: CHANDRIMA sign flipped to +₹45; HIST-03B above circuit limit; desynchronized gate count</td>
+        <td>Corrected CHANDRIMA to broker screenshot loss of −₹45.00; deleted invalid HIST-03B (+₹2,750 above UC); synchronized both tracks to honest 0/60 Sessions and 0/20 Fills.</td>
+        <td><strong style="color: #15803d;">Synchronized</strong></td>
+      </tr>
+      <tr>
+        <td><strong>9</strong></td>
+        <td>Feature Freeze</td>
+        <td>Roadmap §8 Item 9: Feature sprawl with zero accumulated live sessions</td>
+        <td>Imposed hard freeze on new feature development, brokers, and machine-learning integrations until 20 real market sessions are accumulated.</td>
+        <td><strong style="color: #15803d;">Enforced</strong></td>
+      </tr>
+      <tr>
+        <td><strong>10</strong></td>
+        <td>Clutter Purge</td>
+        <td>F5, F42: 264 MB unimported bloatware; 75+ temp test folders; duplicate memos</td>
+        <td>Deleted 264 MB unimported integrations directory; purged all temp test folders; configured clean pytest.ini; deleted duplicate memos.</td>
+        <td><strong style="color: #15803d;">Purged & Clean</strong></td>
+      </tr>
+    </tbody>
+  </table>
+
   <!-- Signoff Box -->
   <div class="signoff-box">
     <h3 style="margin-top: 0;">12. Conclusion & Formal Verdict of the Tri-Agent Council</h3>

@@ -48,6 +48,7 @@
 10. [Unvarnished Gap Analysis & Peer-Audit Remediation Matrix](#10-unvarnished-gap-analysis--peer-audit-remediation-matrix)
    - 10.1 Feature Delivery Matrix
    - 10.2 Tri-Agent Peer Audit Remediation Matrix (Claude & OpenAI Codex Deep Technical Findings)
+   - 10.3 Claude Full-System Red-Team Audit & Roadmap Remediation (2026-09-23)
 11. [External Auditor Cross-Check Guide & Ready-to-Copy LLM Prompts](#11-external-auditor-cross-check-guide--ready-to-copy-llm-prompts)
 12. [Conclusion & Formal Verdict of the Tri-Agent Council](#12-conclusion--formal-verdict-of-the-tri-agent-council)
 
@@ -498,9 +499,26 @@ The live market session on 23 September 2026 was recorded in `field_tests/2026-0
 | **CL-01** | Claude | Critical | 30s Co-Pilot confirmation window creates "Winner's Curse" adverse-selection slippage. | Pre-Armed Conditional Orders (`IntentStatus.PRE_ARMED`) introduced: machine triggers instantly on breakout tick with tight +15 bps collar; reactive co-pilot gets adaptive +25 bps collar. | **Delivered & Verified** (`test_pre_armed_conditional_intent_and_dedup_hydration`) |
 | **CL-02** | Claude | High | Moving stop to breakeven prematurely chokes positive skew on retests of breakout level. | Validated runner payoff curves showing that letting Tranche 2 breathe with $2.0 \times \text{ATR}_{14}$ reduces required win rate to 36.06%. | **Incorporated & Verified** (`test_caliber_breakeven_win_rate_curve`) |
 
+### 10.3 Claude Full-System Red-Team Audit & Roadmap Remediation (2026-09-23)
+On 23 September 2026, Claude (Lead Red-Team Auditor) delivered an unsparing 47-finding audit of the entire codebase and operating posture (`Claude outputs/2026-09-23_full_system_redteam.md`). All 10 recommendations from §8 were remediated and verified under Tri-Agent consensus:
+
+| Step | Action Domain | Red-Team Finding | Remediation Executed | Verification Artifact |
+| :---: | :--- | :--- | :--- | :--- |
+| **1** | **Tier 0 Security & CDP Lockdown** | **F1, F2, F3, F4** (Unrestricted permissions; open Chrome debug ports 9333/9444; CDP token harvesting) | Revoked `--dangerously-*` flags in `agent_access.py`; terminated Chrome listener process 57348; disabled CDP bridge in `kite_web_depth_bridge.py` & `track2_kite_bridge.py` with fail-closed runtime exceptions; migrated feed to headless DhanHQ WebSocket. | Zero listening ports verified; `test_depth_bridge_failclosed.py` PASSED |
+| **2** | **Git Provenance Checkpoint** | **Roadmap §8 Item 2** (4 days of uncommitted work without timestamp) | Staged and committed all architectural work across 20–23 September into clean git checkpoint commits (`39d87e5`, `292a46a`). | `git log -n 2` verified |
+| **3** | **Dynamic Universe De-Certification** | **F9, F10, F11** (Hardcoded synthetic priors stamped with misleading SHA-256 hash) | Quarantined `dynamic_universe.json` as `MANUAL_UNVERIFIED_BASKET`; removed SHA-256 verification hash; excised scrip-name momentum multipliers (`vol_mult = 3.2 if sym in ...`). | `dynamic_universe.json` inspected; `test_track2_premarket_screener.py` PASSED |
+| **4** | **Kill-Switch & OMS Guardrails** | **F26, F27, F28** (Kill-switch missed `PRE_ARMED`; open orders lost on boot; unbounded notional) | Updated `emergency_flatten_all()` to cancel `PRE_ARMED` intents; hydrated open brackets via `_load_active_orders()`; enforced ₹1,00,000 notional ceiling check rejecting oversized orders fail-closed. | `test_hybrid_execution_policy.py` PASSED |
+| **5** | **Test vs. Production Log Isolation** | **F13** (Tests polluting `events.jsonl` and `paper_orders.jsonl` with human operator tags) | Isolated `TerminalHTTPRequestHandler.state_handler` and OMS output paths using temporary fixtures; purged all test orders/intents/events from canonical files. | Working tree clean after full suite run; `test_track2_terminal_server.py` PASSED |
+| **6** | **Track 1 Formal Quarantine** | **F17, F18** (Pump-and-dump entrapment; Rule 5 vs Rule 7 mathematical contradictions) | Formally quarantined Track 1 (micro-caps) due to unresolvable adverse-selection entrapment; directed 100% of forward engineering and capital focus to Track 2 (Liquid F&O Momentum). | AGENTS.md & trade logs updated |
+| **7** | **Performance Target Realignment** | **F20** (20%/month target mathematically contradicts ₹1,500 risk model) | Retired arbitrary "+20%/month" targeting; realigned objective to verifying positive net expectancy ($E > 0$) after 43.0 bps friction across 60 prospective live sessions. | `01_MARKET_MECHANICS.md` & `MASTER_PROJECT_BRIEF.md` updated |
+| **8** | **Track 1 Trade Ledger Corrections** | **F14, F15** (CHANDRIMA sign flipped to +₹45; HIST-03B above circuit limit; desynchronized gate count) | Corrected CHANDRIMA to broker screenshot loss of −₹45.00; deleted invalid HIST-03B (+₹2,750 above UC); synchronized both tracks to honest 0/60 Sessions and 0/20 Fills. | `shared/03_TRADE_LOG.md` & `CHATGPT/observation_log.csv` updated |
+| **9** | **Feature Development Freeze** | **Roadmap §8 Item 9** (Feature sprawl with zero accumulated live sessions) | Imposed a hard freeze on new feature development, brokers, and machine-learning integrations until 20 real market sessions are accumulated. | Documented & consensus ratified |
+| **10** | **Repository Clutter Purge** | **F5, F42** (264 MB unimported bloatware; 75+ `.pytest-*` temp folders; duplicate memos) | Deleted 264 MB `antigravity/integrations/` directory; purged all temp test folders; configured clean `pytest.ini` with workspace-local basetemp; deleted duplicate memos. | 264 MB freed; git clean |
+
 ---
 
 ## 11. EXTERNAL AUDITOR CROSS-CHECK GUIDE & READY-TO-COPY LLM PROMPTS
+
 
 Yashu can copy and paste the exact text prompts below into external models (e.g. Claude 3.5 Sonnet, ChatGPT-4o, or DeepSeek) along with this document to obtain an unvarnished third-party critique.
 
