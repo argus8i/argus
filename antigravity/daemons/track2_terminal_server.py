@@ -74,7 +74,7 @@ def get_current_ist_str() -> str:
 class TerminalStateHandler:
     """Aggregates and formats the live state for the institutional terminal."""
 
-    def __init__(self, corpus_rs: float = 250000.0):
+    def __init__(self, corpus_rs: float = 250000.0, output_dir: Optional[Path] = None):
         self.corpus_rs = corpus_rs
         self.is_paused: bool = False
         self.manual_squared_off: bool = False
@@ -85,7 +85,8 @@ class TerminalStateHandler:
             cash_buffer_rs=50000.0,
         )
         self.analytics = CaliberPerformanceAnalytics(capital_base_rs=corpus_rs)
-        self.oms = HybridExecutionOMS(corpus_rs=corpus_rs)
+        target_dir = output_dir or (PAPER_ORDERS_PATH.parent if PAPER_ORDERS_PATH else SHARED_TRACK2_DIR)
+        self.oms = HybridExecutionOMS(corpus_rs=corpus_rs, output_dir=target_dir)
 
     def get_performance(self) -> Dict[str, Any]:
         return self.analytics.load_from_orders_log().to_dict()

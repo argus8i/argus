@@ -21,10 +21,15 @@ from antigravity.daemons.track2_terminal_server import (
 def clean_paper_orders_and_state(monkeypatch):
     """Isolate tests from shared paper orders file without relying on pytest tmp_path."""
     with tempfile.TemporaryDirectory() as td:
-        temp_orders = Path(td) / "test_paper_orders.jsonl"
-        temp_events = Path(td) / "test_events.jsonl"
+        td_path = Path(td)
+        temp_orders = td_path / "test_paper_orders.jsonl"
+        temp_events = td_path / "test_events.jsonl"
         monkeypatch.setattr("antigravity.daemons.track2_terminal_server.PAPER_ORDERS_PATH", temp_orders)
         monkeypatch.setattr("antigravity.daemons.track2_terminal_server.EVENTS_LOG_PATH", temp_events)
+        monkeypatch.setattr("antigravity.daemons.hybrid_execution_oms.INTENTS_PATH", td_path / "execution_intents.json")
+        monkeypatch.setattr("antigravity.daemons.hybrid_execution_oms.CONFIG_PATH", td_path / "execution_config.json")
+        monkeypatch.setattr("antigravity.daemons.hybrid_execution_oms.SHARED_TRACK2_DIR", td_path)
+        monkeypatch.setattr("antigravity.daemons.track2_terminal_server.TerminalHTTPRequestHandler.state_handler", TerminalStateHandler(corpus_rs=250000.0, output_dir=td_path))
         yield
 
 
