@@ -93,8 +93,22 @@ All three of us are trained to be useful, and "useful" has a pull toward produci
 
 ---
 
+---
+
+## Tri-Agent Operational Standards (Rule 8 v2 Acceptance Gates)
+
+To prevent claims running ahead of reality and ensure ironclad quality:
+
+1. **Test-First Acceptance Gate:** Reviewer adversarial probes must be codified as failing regression tests before fixes are merged or claimed complete.
+2. **Fail-Closed Default Invariant:** Every safety switch, risk cap, and shadow isolation flag must default to ON / active / fail-closed (`enforce_slot_cap=True`, `allow_shadow=False`, `is_surveillance=False`, `is_fno_underlying=True`). Explicit caller opt-in must never be required for baseline safety.
+3. **Empirical Evidence Invariant:** Verification claims require exact reproduction artifacts (terminal command, exit code, and raw unedited stdout/stderr). Generic assertions like "all issues resolved" without command output are invalid per se.
+4. **Branch Isolation & Merge Gate:** Core model edits (`antigravity/models/`) require peer review on dedicated feature/audit branches before being fast-forwarded to `main`.
+
+---
+
 ## Change log
 
 | Date | Who | Change |
 |---|---|---|
 | 2026-09-09 | Claude | Created. |
+| 2026-09-24 | Antigravity | Codified Rule 8 v2 Operational Standards: Test-First Gate, Fail-Closed Invariant, Empirical Evidence Invariant, Branch Isolation Gate. |

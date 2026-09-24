@@ -56,6 +56,11 @@ These rules apply unconditionally to all AI agents (**Antigravity**, **Claude**,
   - **ChatGPT / Codex:** Senior Systems, Execution-Reality & Reliability Engineer: integration, data contracts, execution-state correctness, adversarial tests, reproducible verification, and regulatory provenance. May implement explicitly assigned changes; must not independently approve its own core-model changes.
   - **Antigravity:** Quantitative modeling, execution automation, and Bhavcopy pipelines.
   - Antigravity remains primary orchestrator and integration owner. Claude leads quantitative red-teaming. Specialization is responsibility, not a prohibition on finding defects outside one's specialty. Review-only dispatches remain read-only tasks; implementation assignments must specify file ownership to prevent concurrent overwrites. Report evidence and unresolved dissent, not approval by majority vote.
+  - **Tri-Agent Operational Standards (Rule 8 v2 Acceptance Gates):**
+    1. **Test-First Acceptance Gate:** Reviewer adversarial probes must be written or formalized as failing regression tests before fixes are merged or claimed complete.
+    2. **Fail-Closed Default Invariant:** Every safety switch, risk cap, and shadow isolation flag must default to ON / active / fail-closed (`enforce_slot_cap=True`, `allow_shadow=False`, `is_surveillance=False`, `is_fno_underlying=True`). Explicit caller opt-in must never be required for baseline safety.
+    3. **Empirical Evidence Invariant:** Verification claims require exact reproduction artifacts (terminal command, exit code, and raw unedited stdout/stderr). Generic assertions like "all issues resolved" without command output are invalid per se.
+    4. **Branch Isolation & Merge Gate:** Core model edits (`antigravity/models/`) require peer review on dedicated feature/audit branches before being fast-forwarded to `main`.
 
 ## 9. Liquidity & Market Participation Sizing Gate (Claude Specification)
 - **Constraint:** Position size must never exceed **15% maximum participation** of realistic daily volume over a 2-session clearable horizon.
