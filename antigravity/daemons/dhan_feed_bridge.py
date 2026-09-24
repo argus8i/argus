@@ -219,9 +219,28 @@ class DhanFeedBridge:
             if dyn_path.is_file():
                 try:
                     dyn_data = json.loads(dyn_path.read_text(encoding="utf-8"))
-                    if isinstance(dyn_data.get("symbols"), list) and dyn_data["symbols"]:
+                    today_str = datetime.now(IST).strftime("%Y-%m-%d")
+                    # track2_dynamic_universe_scanner.freeze_universe() stamps
+                    # session_date and qualification_eligible specifically so
+                    # downstream consumers can reject a stale or quarantined
+                    # (MANUAL_UNVERIFIED_BASKET) basket instead of silently
+                    # subscribing to symbols that may since have been delisted
+                    # or entered surveillance. Honor that contract here.
+                    if (
+                        dyn_data.get("session_date") == today_str
+                        and dyn_data.get("qualification_eligible") is True
+                        and isinstance(dyn_data.get("symbols"), list)
+                        and dyn_data["symbols"]
+                    ):
                         loaded_syms = [str(s).strip() for s in dyn_data["symbols"] if str(s).strip()]
                         logger.info(f"Loaded {len(loaded_syms)} dynamic universe symbols from {dyn_path.name}")
+                    else:
+                        logger.warning(
+                            f"Ignoring {dyn_path.name}: stale or unqualified "
+                            f"(session_date={dyn_data.get('session_date')!r}, "
+                            f"qualification_eligible={dyn_data.get('qualification_eligible')!r}); "
+                            f"falling back to default universe."
+                        )
                 except Exception as e:
                     logger.warning(f"Could not load dynamic universe from {dyn_path}: {e}")
             self.symbols = loaded_syms if loaded_syms else list(DEFAULT_TRACK2_SYMBOLS)
@@ -411,7 +430,14 @@ class DhanFeedBridge:
                     "completed_at": now_iso,
                 }
 
-        valid = len(symbols_payload) >= 1
+        now_utc = datetime.now(timezone.utc)
+        tick_delta_sec = (now_utc - self.last_tick_time).total_seconds() if self.last_tick_time else 999.0
+        is_stale = tick_delta_sec > self.stale_timeout_sec
+
+        # A dead/frozen feed must never be reported as valid just because the
+        # daemon process is still alive and re-writing old in-memory bars
+        # (mirrors the staleness gate already enforced in write_live_depth()).
+        valid = len(symbols_payload) >= 1 and not is_stale
 
         payload = {
             "credential_serialized": False,
@@ -420,6 +446,10 @@ class DhanFeedBridge:
             "local_write_time": now_str,
             "session_date": today_str,
             "symbols": symbols_payload,
+            "stats": {
+                "tick_delta_sec": round(tick_delta_sec, 2),
+                "is_stale": is_stale,
+            },
         }
 
         tmp_file = self.live_candles_path.with_suffix(".tmp")
