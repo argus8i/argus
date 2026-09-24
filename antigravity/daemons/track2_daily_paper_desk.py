@@ -160,6 +160,8 @@ def load_current_candles(path: Path, *, now: datetime | None = None) -> dict[str
     if age < 0 or age > 90:
         raise ValueError(f"current Kite candle artifact is stale (age={age:.2f}s)")
     symbols = payload.get("symbols")
+    if isinstance(symbols, dict) and "NIFTY 50" in symbols and "NIFTY50" not in symbols:
+        symbols["NIFTY50"] = symbols["NIFTY 50"]
     allowed = get_candidate_universe() | {'NIFTY50'}
     if not isinstance(symbols, dict) or set(symbols) != allowed:
         if set(symbols) != CANDIDATES | {'NIFTY50'}:

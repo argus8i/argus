@@ -164,11 +164,13 @@ class DhanScripMaster:
                     self.sym_to_seg[sym] = 1  # MarketFeed.NSE
                     count += 1
                 # Map NIFTY 50 Benchmark Index
-                elif seg == "I" and sym in ("NIFTY", "Nifty 50"):
+                elif seg == "I" and sym in ("NIFTY", "Nifty 50", "NIFTY50"):
+                    self.sym_to_id["NIFTY50"] = sec_id
                     self.sym_to_id["NIFTY 50"] = sec_id
                     self.sym_to_id["NIFTY"] = sec_id
-                    self.id_to_sym[sec_id] = "NIFTY 50"
-                    self.sym_to_seg["NIFTY 50"] = 0  # MarketFeed.IDX
+                    self.id_to_sym[sec_id] = "NIFTY50"
+                    self.sym_to_seg["NIFTY50"] = 0  # MarketFeed.IDX
+                    self.sym_to_seg["NIFTY 50"] = 0
                     self.sym_to_seg["NIFTY"] = 0
                     count += 1
 
@@ -210,8 +212,8 @@ class DhanFeedBridge:
 
         # Symbol & Scrip mapping
         self.symbols = symbols or list(DEFAULT_TRACK2_SYMBOLS)
-        if "NIFTY 50" not in self.symbols:
-            self.symbols.append("NIFTY 50")
+        if "NIFTY50" not in self.symbols and "NIFTY 50" not in self.symbols:
+            self.symbols.append("NIFTY50")
 
         self.scrip_master = DhanScripMaster()
         self.scrip_master.load_index()
@@ -220,6 +222,8 @@ class DhanFeedBridge:
         self.quote_cache: Dict[str, Dict[str, Any]] = {}
         self.depth_cache: Dict[str, Any] = {}
         self.intraday_bars: Dict[str, List[Dict[str, Any]]] = {}
+        self.bar_baseline_volume: Dict[str, int] = {}
+        self.symbol_last_tick_time: Dict[str, datetime] = {}
         self.ticks_count = 0
         self.last_tick_time: Optional[datetime] = None
         self.start_time = datetime.now(timezone.utc)
@@ -271,10 +275,6 @@ class DhanFeedBridge:
         if not isinstance(data, dict):
             return
 
-        self.ticks_count += 1
-        now_dt = datetime.now(timezone.utc)
-        self.last_tick_time = now_dt
-
         sec_id = str(data.get("security_id", ""))
         sym = self.scrip_master.id_to_sym.get(sec_id)
         if not sym:
@@ -287,6 +287,11 @@ class DhanFeedBridge:
 
         if ltp <= 0:
             return
+
+        self.ticks_count += 1
+        now_dt = datetime.now(timezone.utc)
+        self.last_tick_time = now_dt
+        self.symbol_last_tick_time[sym] = now_dt
 
         open_val = float(data.get("open", 0.0) or 0.0)
         high_val = float(data.get("high", 0.0) or 0.0)
@@ -306,7 +311,7 @@ class DhanFeedBridge:
         # Update Quote Cache
         self.quote_cache[sym] = {
             "symbol": sym,
-            "exchange": "INDEX" if sym in ("NIFTY 50", "NIFTY") else "NSE",
+            "exchange": "INDEX" if sym in ("NIFTY 50", "NIFTY", "NIFTY50") else "NSE",
             "ltp": ltp,
             "open": open_val,
             "high": high_val,
@@ -355,13 +360,14 @@ class DhanFeedBridge:
 
         sym_bars = self.intraday_bars[sym]
         if not sym_bars or sym_bars[-1]["timestamp"] != bucket_iso:
+            self.bar_baseline_volume[sym] = volume
             sym_bars.append({
                 "timestamp": bucket_iso,
                 "open": ltp,
                 "high": ltp,
                 "low": ltp,
                 "close": ltp,
-                "volume": volume,
+                "volume": 0,
             })
         else:
             current_bar = sym_bars[-1]
@@ -369,7 +375,8 @@ class DhanFeedBridge:
             current_bar["low"] = min(float(current_bar["low"]), ltp)
             current_bar["close"] = ltp
             if volume > 0:
-                current_bar["volume"] = volume
+                baseline = self.bar_baseline_volume.get(sym, volume)
+                current_bar["volume"] = max(0, volume - baseline)
 
     def write_live_candles(self) -> None:
         """Atomically formats and writes shared/track2_liquid/live_candles_track2.json."""
@@ -377,13 +384,18 @@ class DhanFeedBridge:
             return
 
         now_ist = datetime.now(IST)
+        now_iso = datetime.now(timezone.utc).isoformat()
         today_str = now_ist.strftime("%Y-%m-%d")
         now_str = now_ist.strftime("%Y-%m-%d %H:%M:%S")
 
         symbols_payload = {}
         for sym, bars in self.intraday_bars.items():
             if bars:
-                symbols_payload[sym] = {"bars": bars}
+                symbols_payload[sym] = {
+                    "bars": bars,
+                    "requested_at": now_iso,
+                    "completed_at": now_iso,
+                }
 
         valid = len(symbols_payload) >= 1
 

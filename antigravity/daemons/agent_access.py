@@ -66,7 +66,7 @@ def prepare_dispatch(agent):
     checkpoint = create_checkpoint()
     print(f"[CHECKPOINT] {checkpoint}", flush=True)
     if agent == "CODEX":
-        return ["--sandbox"]
+        return ["--sandbox", "workspace-write"]
     if agent == "ANTIGRAVITY":
         return ["--project", "3ccee98c-0ec8-497b-a076-f86d4ef452ae", "--sandbox"]
     return []

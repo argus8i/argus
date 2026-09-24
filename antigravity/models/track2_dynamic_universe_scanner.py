@@ -277,19 +277,25 @@ class DynamicUniverseScanner:
         ranked: Sequence[RankedCandidate],
         output_path: str = DYNAMIC_UNIVERSE_PATH,
         session_date: Optional[str] = None,
+        is_verified_live: bool = False,
     ) -> Dict[str, Any]:
         """
-        Serializes the frozen universe to JSON with canonical sorting and SHA-256 hash.
+        Serializes the frozen universe to JSON.
+        Under Red-Team Finding F9 and Codex R10, offline bootstrap or manual baskets
+        must be quarantined with qualification_eligible=False and universe_status=MANUAL_UNVERIFIED_BASKET,
+        without stamping a SHA-256 hash that mimics verified authentic data.
         """
         now_ist = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
         date_str = session_date or datetime.now(IST).strftime("%Y-%m-%d")
 
-        payload = {
+        payload: Dict[str, Any] = {
             "session_date": date_str,
             "generated_at_ist": now_ist,
             "total_qualified": len(ranked),
             "symbols": [r.symbol for r in ranked],
             "candidates": [r.to_dict() for r in ranked],
+            "universe_status": "PROSPECTIVE_QUALIFIED_BASKET" if is_verified_live else "MANUAL_UNVERIFIED_BASKET",
+            "qualification_eligible": bool(is_verified_live),
         }
 
         canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))

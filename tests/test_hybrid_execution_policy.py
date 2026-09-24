@@ -17,6 +17,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import pytest
 
+import json
 from antigravity.models.execution_policy import (
     ExecutionEnvironment,
     ExecutionIntent,
@@ -26,6 +27,23 @@ from antigravity.models.execution_policy import (
     SecurityViolationError,
 )
 from antigravity.daemons.hybrid_execution_oms import HybridExecutionOMS
+
+
+@pytest.fixture(autouse=True)
+def seed_mock_depth_feed(tmp_path):
+    """Provides simulated live depth quotes for tested candidates in tmp_path."""
+    depth_file = tmp_path / "live_depth_track2.json"
+    depth_file.write_text(json.dumps({
+        "data_valid": True,
+        "watchlist": [
+            {"symbol": "BDL", "ltp": 1200.0},
+            {"symbol": "CDSL", "ltp": 1000.0},
+            {"symbol": "COCHINSHIP", "ltp": 1350.0},
+            {"symbol": "IREDA", "ltp": 110.0},
+            {"symbol": "SUZLON", "ltp": 50.0},
+            {"symbol": "RVNL", "ltp": 200.0},
+        ]
+    }), encoding="utf-8")
 
 
 def test_execution_intent_sizing_and_tranches():
@@ -93,6 +111,7 @@ def test_30_second_expiry_sweeper(tmp_path):
         "entry_price": 300.0,
         "stop_loss": 290.0,
         "volume_multiplier": 3.7,
+        "var_elm_rate": 0.20,
     }
     intent, msg = oms.submit_candidate(candidate)
     assert intent is not None
@@ -128,6 +147,7 @@ def test_copilot_approve_and_reject_flow(tmp_path):
         "entry_price": 1200.0,
         "stop_loss": 1170.0,
         "volume_multiplier": 3.8,
+        "var_elm_rate": 0.20,
     }
     intent, _ = oms.submit_candidate(candidate)
     assert intent is not None
@@ -149,6 +169,7 @@ def test_copilot_approve_and_reject_flow(tmp_path):
         "entry_price": 110.0,
         "stop_loss": 105.0,
         "volume_multiplier": 3.5,
+        "var_elm_rate": 0.20,
     }
     intent2, _ = oms.submit_candidate(cand2)
     assert intent2 is not None
@@ -170,6 +191,7 @@ def test_adverse_selection_limit_collar_abort(tmp_path):
         "entry_price": 200.0,
         "stop_loss": 195.0,
         "volume_multiplier": 3.5,
+        "var_elm_rate": 0.20,
     }
     intent, _ = oms.submit_candidate(candidate)
     assert intent is not None
@@ -200,6 +222,7 @@ def test_false_breakout_retracement_abort(tmp_path):
         "entry_price": 50.0,
         "stop_loss": 48.5,
         "volume_multiplier": 3.5,
+        "var_elm_rate": 0.20,
     }
     intent, _ = oms.submit_candidate(candidate)
     assert intent is not None
@@ -228,9 +251,15 @@ def test_concurrent_multi_thread_approval_safety(tmp_path):
         "entry_price": 1400.0,
         "stop_loss": 1370.0,
         "volume_multiplier": 3.5,
+        "var_elm_rate": 0.20,
     }
     intent, _ = oms.submit_candidate(candidate)
     assert intent is not None
+
+    (tmp_path / "live_depth_track2.json").write_text(json.dumps({
+        "data_valid": True,
+        "watchlist": [{"symbol": "CDSL", "ltp": 1400.0}]
+    }), encoding="utf-8")
 
     results = []
     # Launch 10 worker threads concurrently
@@ -265,6 +294,7 @@ def test_deduplication_cache_rejects_duplicate_request(tmp_path):
         "entry_price": 1350.0,
         "stop_loss": 1310.0,
         "volume_multiplier": 3.5,
+        "var_elm_rate": 0.20,
     }
     intent, _ = oms.submit_candidate(candidate)
     assert intent is not None
@@ -296,6 +326,7 @@ def test_rule1_security_gate_blocks_live_capital(tmp_path):
         "stop_loss": 207.5,
         "volume_multiplier": 4.5,
         "nifty_breadth_confirmed": True,
+        "var_elm_rate": 0.20,
     }
     # Submission should fail-closed because routing cannot proceed
     with pytest.raises(SecurityViolationError, match="RULE 1 VIOLATION"):
@@ -309,6 +340,7 @@ def test_emergency_kill_switch(tmp_path):
         "entry_price": 1380.0,
         "stop_loss": 1340.0,
         "volume_multiplier": 3.5,
+        "var_elm_rate": 0.20,
     }
     intent, _ = oms.submit_candidate(candidate)
     assert intent is not None
@@ -335,6 +367,7 @@ def test_pre_armed_conditional_intent_and_dedup_hydration(tmp_path):
         "entry_price": 1000.0,
         "stop_loss": 980.0,
         "volume_multiplier": 3.2,
+        "var_elm_rate": 0.20,
     }
     intent, msg = oms.submit_candidate(cand)
     assert intent is not None

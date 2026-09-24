@@ -17,6 +17,7 @@ import argparse
 import asyncio
 import json
 import logging
+import math
 import os
 import sys
 import threading
@@ -73,15 +74,23 @@ class HybridExecutionOMS:
         config: Optional[PolicyConfig] = None,
         corpus_rs: float = DEFAULT_CORPUS_RS,
         output_dir: Path = SHARED_TRACK2_DIR,
+        config_path: Optional[Path] = None,
     ):
         self._lock = threading.RLock()
         self._dedup_cache: Dict[str, float] = {}  # key -> monotonic_ts
 
-        self.config = config or self.load_config()
+        self.output_dir = Path(output_dir)
+        if config_path is not None:
+            self.config_path = Path(config_path)
+        elif self.output_dir != SHARED_TRACK2_DIR:
+            self.config_path = self.output_dir / "execution_config.json"
+        else:
+            self.config_path = CONFIG_PATH
+
+        self.config = config or self.load_config(self.config_path)
         self.corpus_rs = corpus_rs
-        self.output_dir = output_dir
-        self.intents_path = output_dir / "execution_intents.json"
-        self.orders_path = output_dir / "paper_orders.jsonl"
+        self.intents_path = self.output_dir / "execution_intents.json"
+        self.orders_path = self.output_dir / "paper_orders.jsonl"
 
         self.governor = PortfolioRiskGovernor.calibrate_for_corpus(
             corpus_rs=corpus_rs,
@@ -92,6 +101,19 @@ class HybridExecutionOMS:
 
         self.intents: Dict[str, ExecutionIntent] = {}
         self.active_orders: List[Dict[str, Any]] = []
+
+        self.capacity_ledger = None
+        try:
+            from research.execution_realism.capacity import CapacityConfig, ReservationLedger
+            cap_cfg = CapacityConfig(
+                capital_rs=self.corpus_rs,
+                cash_buffer_rs=self.config.cash_buffer_rs,
+                slots=self.config.max_open_positions,
+                risk_per_trade_rs=self.config.risk_budget_rs,
+            )
+            self.capacity_ledger = ReservationLedger(output_dir / "capacity_ledger.db", cap_cfg)
+        except Exception:
+            pass
         with self._lock:
             self._load_intents()
             self._load_active_orders()
@@ -105,9 +127,12 @@ class HybridExecutionOMS:
             with open(self.orders_path, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
-                    if not line:
+                    if not line or line.startswith("#"):
                         continue
-                    rec = json.loads(line)
+                    try:
+                        rec = json.loads(line)
+                    except Exception:
+                        continue
                     oid = rec.get("order_id")
                     status = rec.get("status")
                     if not oid:
@@ -122,11 +147,12 @@ class HybridExecutionOMS:
             logger.warning(f"Failed to load active orders: {exc}")
 
     @classmethod
-    def load_config(cls) -> PolicyConfig:
+    def load_config(cls, config_path: Optional[Path] = None) -> PolicyConfig:
         """Loads execution policy config from JSON or returns default."""
-        if CONFIG_PATH.is_file():
+        target_path = Path(config_path) if config_path is not None else CONFIG_PATH
+        if target_path.is_file():
             try:
-                data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+                data = json.loads(target_path.read_text(encoding="utf-8"))
                 mode_str = data.get("mode", "CO_PILOT").upper()
                 env_str = data.get("environment", "PAPER_SIMULATION").upper()
                 return PolicyConfig(
@@ -136,17 +162,18 @@ class HybridExecutionOMS:
                     max_slippage_bps=float(data.get("max_slippage_bps", 15.0)),
                     risk_budget_rs=float(data.get("risk_budget_rs", 1500.0)),
                     max_open_positions=int(data.get("max_open_positions", 3)),
+                    cash_buffer_rs=float(data.get("cash_buffer_rs", 75000.0)),
                     tier1_vol_mult_threshold=float(data.get("tier1_vol_mult_threshold", 4.0)),
                     enforce_rule1_lock=bool(data.get("enforce_rule1_lock", True)),
                 )
             except Exception as exc:
-                logger.warning(f"Error parsing execution_config.json: {exc}. Using default CO_PILOT.")
+                logger.warning(f"Error parsing {target_path.name}: {exc}. Using default CO_PILOT.")
         return PolicyConfig()
 
     def save_config(self) -> None:
         """Persists policy config to disk."""
         with self._lock:
-            CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            self.config_path.parent.mkdir(parents=True, exist_ok=True)
             payload = {
                 "mode": self.config.mode.value,
                 "environment": self.config.environment.value,
@@ -154,14 +181,15 @@ class HybridExecutionOMS:
                 "max_slippage_bps": self.config.max_slippage_bps,
                 "risk_budget_rs": self.config.risk_budget_rs,
                 "max_open_positions": self.config.max_open_positions,
+                "cash_buffer_rs": self.config.cash_buffer_rs,
                 "tier1_vol_mult_threshold": self.config.tier1_vol_mult_threshold,
                 "enforce_rule1_lock": self.config.enforce_rule1_lock,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
-            tmp = CONFIG_PATH.with_suffix(".tmp")
+            tmp = self.config_path.with_suffix(".tmp")
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2)
-            tmp.replace(CONFIG_PATH)
+            tmp.replace(self.config_path)
 
     def set_mode(self, mode: ExecutionMode) -> None:
         """Updates operational mode (CO_PILOT / AUTONOMOUS / HYBRID)."""
@@ -215,6 +243,47 @@ class HybridExecutionOMS:
         except Exception as exc:
             logger.error(f"Failed to save intents: {exc}")
 
+    def _get_active_and_pending_exposures(
+        self, exclude_intent_id: Optional[str] = None
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """
+        Claude Pillar 2 CapacityLedger:
+        Calculates exposure across active orders and all non-terminal pending intents
+        (PENDING_APPROVAL, PRE_ARMED, APPROVED).
+        """
+        active_pos = [
+            {
+                "symbol": o.get("symbol"),
+                "sector": o.get("sector"),
+                "open_risk_rs": float(o.get("risk_rs", 0.0)),
+                "notional_rs": float(o.get("notional", 0.0)),
+                "shares": int(o.get("shares", 0)),
+                "entry_price": float(o.get("entry_price", 0.0)),
+            }
+            for o in self.active_orders
+        ]
+
+        pending_pos = []
+        now_utc = datetime.now(timezone.utc)
+        active_order_intent_ids = {o.get("intent_id") for o in self.active_orders if o.get("intent_id")}
+
+        for intent in self.intents.values():
+            if intent.intent_id == exclude_intent_id:
+                continue
+            if intent.intent_id in active_order_intent_ids:
+                continue
+            if intent.status in (IntentStatus.PENDING_APPROVAL, IntentStatus.PRE_ARMED, IntentStatus.APPROVED):
+                if not intent.is_expired(now_utc):
+                    pending_pos.append({
+                        "symbol": intent.symbol,
+                        "sector": getattr(intent, "sector", None),
+                        "open_risk_rs": float(intent.risk_rs),
+                        "notional_rs": float(intent.notional_rs),
+                        "shares": int(intent.shares),
+                        "entry_price": float(intent.entry_price),
+                    })
+        return active_pos, pending_pos
+
     def submit_candidate(self, candidate: Dict[str, Any]) -> Tuple[Optional[ExecutionIntent], str]:
         """
         Submits a candidate breakout signal.
@@ -243,30 +312,23 @@ class HybridExecutionOMS:
             except Exception as exc:
                 return None, f"REJECTED: Sizing or validation failed: {exc}"
 
-            # 3. Risk Governor Gate
-            active_pos_for_governor = []
-            for o in self.active_orders:
-                active_pos_for_governor.append({
-                    "symbol": o.get("symbol"),
-                    "sector": o.get("sector"),
-                    "open_risk_rs": float(o.get("risk_rs", 0.0)),
-                    "current_notional_rs": float(o.get("notional", 0.0)),
-                    "shares": int(o.get("shares", 0)),
-                    "entry_price": float(o.get("entry_price", 0.0)),
-                })
+            # 3. Risk Governor Gate with Capacity Ledger (Claude Pillar 2 & Codex R02/R03)
+            active_pos, pending_pos = self._get_active_and_pending_exposures()
 
             assessment = self.governor.assess_candidate(
                 symbol=intent.symbol,
                 entry_price=intent.entry_price,
                 stop_price=intent.stop_loss,
                 quantity=intent.shares,
-                active_positions=active_pos_for_governor,
+                active_positions=active_pos,
+                pending_orders=pending_pos,
                 var_elm_rate=candidate.get("var_elm_rate"),
                 custom_sector=candidate.get("sector"),
             )
             if not assessment.is_approved:
-                logger.warning(f"Candidate {sym} rejected by Risk Governor: {assessment.reason}")
-                return None, f"REJECTED: Risk Governor: {assessment.reason}"
+                reason = assessment.rejection_reason or assessment.reason or "REJECTED_BY_RISK_GOVERNOR"
+                logger.warning(f"Candidate {sym} rejected by Risk Governor: {reason}")
+                return None, f"REJECTED: Risk Governor: {reason}"
 
             self.intents[intent.intent_id] = intent
             self._save_intents()
@@ -341,6 +403,25 @@ class HybridExecutionOMS:
                     "message": f"Intent is in {intent.status.value}, cannot approve",
                 }
 
+            # Re-evaluate capacity with governor before approval (Claude Pillar 2 & Codex R02)
+            active_pos, pending_pos = self._get_active_and_pending_exposures(exclude_intent_id=intent.intent_id)
+            assessment = self.governor.assess_candidate(
+                symbol=intent.symbol,
+                entry_price=intent.entry_price,
+                stop_price=intent.stop_loss,
+                quantity=intent.shares,
+                active_positions=active_pos,
+                pending_orders=pending_pos,
+                var_elm_rate=getattr(intent, "var_elm_rate", None),
+                custom_sector=getattr(intent, "sector", None),
+            )
+            if not assessment.is_approved:
+                reason = assessment.rejection_reason or assessment.reason or "REJECTED_CAPACITY"
+                logger.warning(f"Cannot approve intent {intent_id}: Risk Governor rejected: {reason}")
+                intent.reject(reason=f"CAPACITY_EXCEEDED: {reason}")
+                self._save_intents()
+                return {"status": "REJECTED_CAPACITY", "reason": reason, "message": f"Governor capacity exceeded: {reason}"}
+
             self._dedup_cache[dedup_key] = now_mono
             intent.approve(approver=approver)
             self._save_intents()
@@ -390,7 +471,7 @@ class HybridExecutionOMS:
             now_dt = datetime.now(timezone.utc)
             expired_count = 0
             for intent in self.intents.values():
-                if intent.status == IntentStatus.PENDING_APPROVAL and intent.is_expired(now_dt):
+                if intent.status in (IntentStatus.PENDING_APPROVAL, IntentStatus.PRE_ARMED) and intent.is_expired(now_dt):
                     intent.mark_expired()
                     expired_count += 1
                     logger.info(f"[EXPIRED] Intent {intent.intent_id} ({intent.symbol}) expired fail-closed.")
@@ -432,6 +513,23 @@ class HybridExecutionOMS:
                     "message": f"Intent {intent.intent_id} is already in {intent.status.value}",
                 }
 
+            # Expiry and State Guard (Codex R12)
+            now_utc = datetime.now(timezone.utc)
+            if intent.is_expired(now_utc) or intent.status == IntentStatus.EXPIRED:
+                abort_reason = "INTENT_EXPIRED"
+                abort_msg = f"ABORTED: Intent {intent.intent_id} has expired."
+                logger.warning(f"🚨 [PRE-ROUTING ABORT] {intent.intent_id} {intent.symbol}: {abort_msg}")
+                intent.mark_expired()
+                self._save_intents()
+                return {"status": "ERROR", "reason": abort_reason, "message": abort_msg}
+
+            if intent.status != IntentStatus.APPROVED:
+                return {
+                    "status": "ERROR",
+                    "reason": "INVALID_STATE",
+                    "message": f"Intent {intent.intent_id} is in {intent.status.value}, cannot route without APPROVED status",
+                }
+
             # 1. Notional Ceiling Gate (Claude Red-Team F28)
             if intent.notional_rs > 100000.0:
                 abort_reason = "NOTIONAL_CEILING_EXCEEDED"
@@ -447,10 +545,26 @@ class HybridExecutionOMS:
                 self._save_intents()
                 return {"status": "ERROR", "reason": abort_reason, "message": abort_msg}
 
-            # Pre-Flight Market Data Verification
+            # Pre-Flight Market Data Verification (Codex R01)
             market_ltp = current_ltp if current_ltp is not None else self._sample_live_ltp(intent.symbol)
-            if market_ltp is None or market_ltp <= 0:
-                market_ltp = intent.entry_price
+            if (
+                market_ltp is None
+                or not isinstance(market_ltp, (int, float))
+                or not math.isfinite(float(market_ltp))
+                or float(market_ltp) <= 0
+            ):
+                abort_reason = "LIVE_FEED_UNAVAILABLE"
+                abort_msg = (
+                    f"ABORTED: Live market LTP unavailable, stale, or invalid for {intent.symbol}. "
+                    f"Routing without verified live market feed is strictly prohibited."
+                )
+                logger.warning(f"🚨 [PRE-ROUTING ABORT] {intent.intent_id} {intent.symbol}: {abort_msg}")
+                intent.status = IntentStatus.REJECTED
+                intent.resolved_at = datetime.now(timezone.utc).isoformat()
+                intent.resolved_by = "FEED_GUARD"
+                intent.resolution_notes = abort_msg
+                self._save_intents()
+                return {"status": "ERROR", "reason": abort_reason, "message": abort_msg}
 
             # 2. Adverse Selection Check: Price extended beyond limit collar
             if market_ltp > intent.limit_price:
@@ -563,26 +677,87 @@ class HybridExecutionOMS:
 
             # Record explicit exit orders to paper_orders.jsonl
             squared_off_orders = []
+            unsquared_held = []
             if self.active_orders:
                 self.orders_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(self.orders_path, "a", encoding="utf-8") as f:
                     for o in self.active_orders:
-                        exit_rec = {
-                            "order_id": o.get("order_id"),
-                            "intent_id": o.get("intent_id"),
-                            "symbol": o.get("symbol"),
-                            "shares": o.get("shares"),
-                            "action": "EMERGENCY_EXIT",
-                            "exit_price": o.get("entry_price"),
-                            "status": "SQUARED_OFF",
-                            "reason": reason,
-                            "timestamp": now_str,
-                        }
-                        f.write(json.dumps(exit_rec) + "\n")
-                        squared_off_orders.append(exit_rec)
+                        o_status = str(o.get("status", "QUEUED")).upper()
+                        total_shares = int(o.get("shares", 0))
+                        if o_status in ("OPEN", "FILLED", "SQUARED_OFF"):
+                            filled_shares = int(o.get("filled_shares", total_shares))
+                        elif o_status == "PARTIAL":
+                            filled_shares = int(o.get("filled_shares", 0))
+                        else:
+                            filled_shares = int(o.get("filled_shares", 0))
+                        unfilled_shares = max(0, total_shares - filled_shares)
 
-            squared_off = len(self.active_orders)
-            self.active_orders.clear()
+                        # 1. Cancel unfilled order or unfilled remainder of PARTIAL order (Codex R05)
+                        if unfilled_shares > 0 and o_status in ("QUEUED", "ROUTED", "PARTIAL"):
+                            action = "EMERGENCY_CANCEL" if filled_shares == 0 else "EMERGENCY_CANCEL_UNFILLED"
+                            cancel_rec = {
+                                "order_id": o.get("order_id"),
+                                "intent_id": o.get("intent_id"),
+                                "symbol": o.get("symbol"),
+                                "shares": unfilled_shares,
+                                "action": action,
+                                "exit_price": None,
+                                "status": "CANCELLED",
+                                "reason": reason,
+                                "timestamp": now_str,
+                            }
+                            f.write(json.dumps(cancel_rec) + "\n")
+                            squared_off_orders.append(cancel_rec)
+
+                        # 2. Square off or preserve filled inventory (Claude A22 & Codex R05)
+                        if filled_shares > 0:
+                            market_exit = self._sample_live_ltp(o.get("symbol", ""))
+                            if market_exit is not None and market_exit > 0:
+                                entry_px = float(o.get("entry_price", 0.0))
+                                gross_pnl = round(filled_shares * (market_exit - entry_px), 2)
+                                friction = 0.0
+                                try:
+                                    from antigravity.models.track2_paper_execution import calculate_transaction_costs
+                                    cost = calculate_transaction_costs(market_exit, filled_shares, "SELL", is_intraday=True)
+                                    friction = cost.get("total_cost", 0.0)
+                                except Exception:
+                                    pass
+                                net_pnl = round(gross_pnl - friction, 2)
+                                exit_rec = {
+                                    "order_id": o.get("order_id"),
+                                    "intent_id": o.get("intent_id"),
+                                    "symbol": o.get("symbol"),
+                                    "shares": filled_shares,
+                                    "action": "EMERGENCY_EXIT",
+                                    "exit_price": market_exit,
+                                    "status": "SQUARED_OFF",
+                                    "gross_pnl_rs": gross_pnl,
+                                    "net_pnl_rs": net_pnl,
+                                    "reason": reason,
+                                    "timestamp": now_str,
+                                }
+                                f.write(json.dumps(exit_rec) + "\n")
+                                squared_off_orders.append(exit_rec)
+                            else:
+                                # Market feed unavailable: DO NOT fabricate entry_price as exit price!
+                                held_rec = {
+                                    "order_id": o.get("order_id"),
+                                    "intent_id": o.get("intent_id"),
+                                    "symbol": o.get("symbol"),
+                                    "shares": filled_shares,
+                                    "action": "EMERGENCY_UNSQUARED_HELD",
+                                    "exit_price": None,
+                                    "status": "OPEN_FEED_UNAVAILABLE",
+                                    "requires_manual_broker_intervention": True,
+                                    "reason": f"{reason}: Market feed unavailable to confirm squareoff price",
+                                    "timestamp": now_str,
+                                }
+                                f.write(json.dumps(held_rec) + "\n")
+                                unsquared_held.append({**o, "status": "OPEN_FEED_UNAVAILABLE", "shares": filled_shares, "filled_shares": filled_shares})
+                                squared_off_orders.append(held_rec)
+
+            squared_off = len(squared_off_orders)
+            self.active_orders = unsquared_held
 
             return {
                 "status": "KILL_SWITCH_EXECUTED",

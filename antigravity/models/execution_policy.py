@@ -47,7 +47,28 @@ class IntentStatus(str, Enum):
 
 class SecurityViolationError(Exception):
     """Raised when an action violates security or regulatory gates (e.g. Rule 1)."""
-    pass
+try:
+    from research.execution_realism.marketdata import schedule_tick, floor_to_tick, ceil_to_tick
+except ImportError:
+    def schedule_tick(reference_close: float) -> float:
+        p = float(reference_close)
+        if p < 250:
+            return 0.01
+        if p <= 1000:
+            return 0.05
+        if p <= 5000:
+            return 0.10
+        if p <= 10000:
+            return 0.50
+        if p <= 20000:
+            return 1.00
+        return 5.00
+
+    def floor_to_tick(price: float, tick: float) -> float:
+        return round(math.floor(price / tick + 1e-9) * tick, 2)
+
+    def ceil_to_tick(price: float, tick: float) -> float:
+        return round(math.ceil(price / tick - 1e-9) * tick, 2)
 
 
 @dataclass
@@ -71,6 +92,8 @@ class ExecutionIntent:
     conviction_tier: int = 2
     volume_multiplier: float = 1.0
     nifty_breadth_confirmed: bool = False
+    var_elm_rate: Optional[float] = None
+    sector: Optional[str] = None
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     expires_at: str = field(default_factory=lambda: (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat())
     resolved_at: Optional[str] = None
@@ -138,6 +161,18 @@ class ExecutionIntent:
         else:
             limit_price = pct_collar
 
+        # Align prices to exchange tick grid (NSE CM tick schedule: Claude Finding A26)
+        tick = schedule_tick(entry)
+        entry = floor_to_tick(entry, tick)
+        stop = floor_to_tick(stop, tick)
+        target1 = ceil_to_tick(target1, tick)
+        runner_target = ceil_to_tick(runner_target, tick)
+        limit_price = floor_to_tick(limit_price, tick)
+
+        var_elm = candidate.get("var_elm_rate")
+        var_elm_rate = float(var_elm) if var_elm is not None and not isinstance(var_elm, bool) else None
+        sector = candidate.get("sector")
+
         # Determine conviction tier: Tier 1 if volume >= 4.0x and breadth confirmed
         conviction_tier = 1 if (vol_mult >= 4.0 and breadth_ok) else 2
 
@@ -182,6 +217,8 @@ class ExecutionIntent:
             conviction_tier=conviction_tier,
             volume_multiplier=vol_mult,
             nifty_breadth_confirmed=breadth_ok,
+            var_elm_rate=var_elm_rate,
+            sector=sector,
             created_at=now_utc.isoformat(),
             expires_at=exp_utc.isoformat(),
             resolved_at=resolved_at,

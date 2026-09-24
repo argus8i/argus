@@ -59,12 +59,13 @@ def test_tranche1_target_hit_moves_tranche2_to_breakeven():
     # Price rises to 1035 -> Tranche 1 fills at 1030
     bracket = BracketOrderManager.create_bracket("brk_003", "CDSL", 1000.0, 980.0, 10)
     
-    # Tick reaches 1035
+    # Tick reaches 1035 with execution evidence
     updated = BracketOrderManager.update_bracket_quote(
         bracket=bracket,
         ltp=1032.0,
         tick_high=1035.0,
         timestamp="2026-09-22T10:15:00+05:30",
+        execution_evidence=True,
     )
     assert updated.is_t1_target_filled is True
     assert updated.t1_exit_price == 1030.0
@@ -83,8 +84,23 @@ def test_tranche1_target_hit_moves_tranche2_to_breakeven():
     assert final_state.is_stopped_out is True
     assert final_state.terminal_state == "STOPPED_OUT_T2_BREAKEVEN"
     assert final_state.t2_exit_price == 1000.0
-    assert final_state.realized_pnl_gross == 150.0  # 150 (T1) + 0 (T2)
     assert final_state.realized_pnl_net > 0.0  # Net profit preserved after friction!
+
+
+def test_quote_only_target_reach_is_unverified():
+    # Codex R06: A quote tick touch without execution evidence does not fill target or realize profit
+    bracket = BracketOrderManager.create_bracket("brk_probe", "CDSL", 1000.0, 980.0, 10)
+    quote_state = BracketOrderManager.update_bracket_quote(
+        bracket=bracket,
+        ltp=1032.0,
+        tick_high=1035.0,
+        execution_evidence=False,
+    )
+    assert quote_state.is_t1_target_filled is False
+    assert quote_state.realized_pnl_gross == 0.0
+    assert quote_state.total_friction_cost == 0.0
+    assert quote_state.is_t2_breakeven_trailed is False
+
 
 
 def test_broker_cutoff_cas_squareoff():

@@ -4,6 +4,7 @@ test_hybrid_oms_callbacks.py - Tests for Telegram Interactive Callbacks & Comman
 Part of Project Swing Trades (ARGUS 8i // BEACON Track 2).
 """
 
+import json
 from unittest.mock import MagicMock, patch
 import pytest
 
@@ -57,11 +58,18 @@ def test_telegram_callback_approve_flow(mock_get, mock_post, tmp_path):
     oms = HybridExecutionOMS(output_dir=tmp_path)
     oms.set_mode(ExecutionMode.CO_PILOT)
 
+    # Provide valid live market depth for RVNL to satisfy fail-closed feed check (Codex R01)
+    (tmp_path / "live_depth_track2.json").write_text(
+        json.dumps({"watchlist": [{"symbol": "RVNL", "ltp": 215.05}]}),
+        encoding="utf-8",
+    )
+
     candidate = {
         "symbol": "RVNL",
         "entry_price": 215.0,
         "stop_loss": 207.5,
         "volume_multiplier": 3.8,
+        "var_elm_rate": 0.20,
     }
     intent, _ = oms.submit_candidate(candidate)
     assert intent is not None

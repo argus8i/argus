@@ -32,8 +32,9 @@ import hashlib
 import json
 import math
 import os
+import re
 import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -306,19 +307,46 @@ class PremarketScreener:
             if not base.exists():
                 continue
             files = sorted(glob.glob(str(base / "nse_surveillance_snapshot_*.json")), reverse=True)
-            if files:
+            for file_path in files:
                 try:
-                    with open(files[0], "r", encoding="utf-8") as f:
+                    p = Path(file_path)
+                    # Check minimum size (> 64 bytes to reject empty objects)
+                    if p.stat().st_size < 64:
+                        continue
+
+                    # Validate date freshness from filename (reject snapshots older than 30 days)
+                    date_match = re.search(r"(\d{4}-\d{2}-\d{2})", p.name)
+                    if date_match:
+                        file_date = date.fromisoformat(date_match.group(1))
+                        if (date.today() - file_date).days > 30:
+                            continue
+
+                    with open(p, "r", encoding="utf-8") as f:
                         data = json.load(f)
-                    for k in ["asm_long_term", "asm_short_term", "gsm"]:
-                        items = data.get(k, [])
-                        if isinstance(items, list):
-                            for sym in items:
+
+                    # Support track2.surveillance.v3 schema from execution_realism
+                    if data.get("schema_version") == "track2.surveillance.v3":
+                        lists = data.get("lists", {})
+                        for k in ["asm_lt", "asm_st", "gsm", "fo_ban"]:
+                            for sym in lists.get(k, []):
                                 surv_symbols.add(str(sym).strip().upper())
+                        found_valid_file = True
+                        break
+
+                    # Required legacy surveillance schema keys
+                    required_keys = ["asm_long_term", "asm_short_term", "gsm"]
+                    if not all(k in data and isinstance(data[k], list) for k in required_keys):
+                        continue
+
+                    for k in required_keys:
+                        for sym in data[k]:
+                            surv_symbols.add(str(sym).strip().upper())
                     found_valid_file = True
                     break
                 except Exception:
                     pass
+            if found_valid_file:
+                break
         if not found_valid_file:
             raise RuntimeError(
                 "FAIL-CLOSED: Surveillance files missing, unreadable, or corrupted. "
@@ -332,6 +360,8 @@ class PremarketScreener:
         surveillance_set: Set[str],
         pre_open_gap_mult: float = 1.0,
         pre_open_vol_mult: float = 1.0,
+        market_data: Optional[Dict[str, Any]] = None,
+        allow_synthetic: bool = False,
     ) -> ScripCandidate:
         """Constructs a ScripCandidate with verified or prior metrics."""
         sym = symbol.strip().upper()
@@ -349,14 +379,27 @@ class PremarketScreener:
         prev_close = priors["prev_close"]
         atr_points = prev_close * (atr_pct / 100.0)
 
-        # Pre-open simulation / live quote
-        open_price = round(prev_close * (1.0 + (0.015 * pre_open_gap_mult)), 2)
-        median_pre_vol = 50000
-        pre_open_vol = int(median_pre_vol * pre_open_vol_mult)
-
-        # 20D Return and Nifty 20D Return
-        return_20d = 8.5 * (beta / 1.5)
-        nifty_return_20d = 3.2
+        # Market metrics: use authentic data if provided; prohibit synthetic fabrication by default (Codex R10)
+        if market_data:
+            open_price = float(market_data.get("open_price", prev_close))
+            pre_open_vol = int(market_data.get("pre_open_vol", 0))
+            median_pre_vol = int(market_data.get("median_pre_open_vol_10d", 0))
+            return_20d = float(market_data.get("return_20d_pct", 0.0))
+            nifty_return_20d = float(market_data.get("nifty_return_20d_pct", 0.0))
+        elif allow_synthetic:
+            # Explicit synthetic simulation mode only
+            open_price = round(prev_close * (1.0 + (0.015 * pre_open_gap_mult)), 2)
+            median_pre_vol = 50000
+            pre_open_vol = int(median_pre_vol * pre_open_vol_mult)
+            return_20d = round(8.5 * (beta / 1.5), 2)
+            nifty_return_20d = 3.2
+        else:
+            # Fail-closed default: authentic baseline only, zero fabricated gap or volume
+            open_price = prev_close
+            median_pre_vol = 0
+            pre_open_vol = 0
+            return_20d = 0.0
+            nifty_return_20d = 0.0
 
         is_surv = sym in surveillance_set
         sector = resolve_sector(sym)

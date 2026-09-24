@@ -181,3 +181,66 @@ def test_dhan_feed_bridge_stale_watchdog_freeze(tmp_path):
     hb_payload = json.loads(bridge.heartbeat_path.read_text())
     assert hb_payload["status"] == "FEED_STALE_FREEZE"
     assert hb_payload["data_valid"] is False
+
+
+def test_dhan_feed_to_daily_paper_desk_session_valid_integration(tmp_path):
+    """
+    Codex Finding R07:
+    Demonstrates session-valid end-to-end integration between DhanFeedBridge output
+    and track2_daily_paper_desk.load_current_candles().
+    Uses complete Track 2 universe (8 scrips + NIFTY50) during active market hours.
+    """
+    from antigravity.models.session_manifest import IST
+    from antigravity.daemons import track2_daily_paper_desk as desk
+
+    now = datetime(2026, 9, 24, 10, 0, 0, tzinfo=IST)
+    now_iso = now.isoformat()
+    all_syms = DEFAULT_TRACK2_SYMBOLS + ["NIFTY50"]
+
+    bars = [
+        {
+            "timestamp": "2026-09-24T09:15:00+05:30",
+            "open": 100.0,
+            "high": 105.0,
+            "low": 99.0,
+            "close": 104.0,
+            "volume": 10000,
+        },
+        {
+            "timestamp": "2026-09-24T09:30:00+05:30",
+            "open": 104.0,
+            "high": 108.0,
+            "low": 103.0,
+            "close": 107.0,
+            "volume": 15000,
+        },
+    ]
+
+    payload = {
+        "credential_serialized": False,
+        "data_valid": True,
+        "interval": "15minute",
+        "local_write_time": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "session_date": "2026-09-24",
+        "symbols": {
+            s: {
+                "bars": bars,
+                "requested_at": now_iso,
+                "completed_at": now_iso,
+            }
+            for s in all_syms
+        },
+    }
+
+    candles_path = tmp_path / "live_candles_track2.json"
+    candles_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    loaded = desk.load_current_candles(candles_path, now=now)
+    assert loaded["data_valid"] is True
+    assert set(loaded["symbols"].keys()) == set(all_syms)
+    for sym in all_syms:
+        rec = loaded["symbols"][sym]
+        assert "bars" in rec
+        assert len(rec["bars"]) == 2
+        assert rec["bars"][0]["open"] == 100.0
+        assert rec["bars"][1]["close"] == 107.0

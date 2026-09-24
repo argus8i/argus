@@ -82,6 +82,11 @@ class RiskAssessmentResult:
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
+    @property
+    def reason(self) -> Optional[str]:
+        """Backwards compatibility alias for rejection_reason."""
+        return self.rejection_reason
+
 
 class PortfolioRiskGovernor:
     """
@@ -96,6 +101,8 @@ class PortfolioRiskGovernor:
         max_positions_per_sector: int = 2,
         total_capital_allocation_rs: float = 100000.0,
         sector_mapping: Optional[Mapping[str, str]] = None,
+        max_concurrent_positions: Optional[int] = None,
+        enforce_var_elm_gate: bool = False,
     ):
         for val in [max_single_trade_risk_rs, max_aggregate_risk_rs, total_capital_allocation_rs]:
             if (
@@ -118,6 +125,8 @@ class PortfolioRiskGovernor:
         self.max_positions_per_sector = int(max_positions_per_sector)
         self.total_capital_allocation_rs = round(float(total_capital_allocation_rs), 2)
         self.sector_mapping = dict(sector_mapping or DEFAULT_SECTOR_MAP)
+        self.max_concurrent_positions = int(max_concurrent_positions) if max_concurrent_positions is not None else 3
+        self.enforce_var_elm_gate = bool(enforce_var_elm_gate)
 
     @classmethod
     def calibrate_for_corpus(
@@ -155,6 +164,8 @@ class PortfolioRiskGovernor:
             max_positions_per_sector=max_positions_per_sector,
             total_capital_allocation_rs=deployable_capital,
             sector_mapping=sector_mapping,
+            max_concurrent_positions=max_concurrent_positions,
+            enforce_var_elm_gate=True,
         )
 
     def resolve_sector(self, symbol: str) -> str:
@@ -173,7 +184,7 @@ class PortfolioRiskGovernor:
         active_positions: Sequence[Mapping[str, Any]],
         pending_orders: Optional[Sequence[Mapping[str, Any]]] = None,
         custom_sector: Optional[str] = None,
-        var_elm_rate: Optional[float] = None,
+        var_elm_rate: Any = None,
     ) -> RiskAssessmentResult:
         """
         Assesses whether proposed candidate trade passes all portfolio risk gates:
@@ -229,30 +240,7 @@ class PortfolioRiskGovernor:
         proposed_risk = round(quantity * risk_per_share, 2)
         proposed_notional = round(quantity * entry_price, 2)
 
-        # 1. Single Trade Risk Ceiling
-        if proposed_risk > self.max_single_trade_risk_rs + 1e-4:
-            return self._rejected(
-                sym,
-                "SINGLE_TRADE_RISK_EXCEEDED",
-                f"Proposed risk Rs {proposed_risk:.2f} exceeds single trade ceiling Rs {self.max_single_trade_risk_rs:.2f}.",
-                sector=sector,
-                proposed_risk=proposed_risk,
-                proposed_notional=proposed_notional,
-            )
-
-        # 1b. VAR+ELM Margin Ceiling Gate (SEBI T+1 Shortfall Immunity)
-        if var_elm_rate is not None:
-            if isinstance(var_elm_rate, (int, float)) and var_elm_rate > 0.30:
-                return self._rejected(
-                    sym,
-                    "VAR_ELM_EXCEEDS_MARGIN_CEILING",
-                    f"Scrip VAR+ELM margin rate {var_elm_rate * 100:.1f}% exceeds 30.0% ceiling for SEBI shortfall immunity.",
-                    sector=sector,
-                    proposed_risk=proposed_risk,
-                    proposed_notional=proposed_notional,
-                )
-
-        # Calculate currently committed risk and notional across active & pending
+        # 0. Check existing active & pending exposures first
         active_items = list(active_positions) + list(pending_orders or [])
         current_open_risk = 0.0
         current_total_notional = 0.0
@@ -325,6 +313,52 @@ class PortfolioRiskGovernor:
         current_open_risk = round(current_open_risk, 2)
         current_total_notional = round(current_total_notional, 2)
 
+        # 1. Single Trade Risk Ceiling
+        if proposed_risk > self.max_single_trade_risk_rs + 1e-4:
+            return self._rejected(
+                sym,
+                "SINGLE_TRADE_RISK_EXCEEDED",
+                f"Proposed risk Rs {proposed_risk:.2f} exceeds single trade ceiling Rs {self.max_single_trade_risk_rs:.2f}.",
+                sector=sector,
+                proposed_risk=proposed_risk,
+                proposed_notional=proposed_notional,
+            )
+
+        # 1b. VAR+ELM Margin Ceiling Gate (SEBI T+1 Shortfall Immunity)
+        if self.enforce_var_elm_gate or var_elm_rate is not None:
+            if var_elm_rate is None:
+                return self._rejected(
+                    sym,
+                    "MISSING_MARGIN_RATE",
+                    "Scrip VAR+ELM margin rate is required for SEBI shortfall immunity.",
+                    sector=sector,
+                    proposed_risk=proposed_risk,
+                    proposed_notional=proposed_notional,
+                )
+            if (
+                isinstance(var_elm_rate, bool)
+                or not isinstance(var_elm_rate, (int, float))
+                or not math.isfinite(float(var_elm_rate))
+                or float(var_elm_rate) <= 0
+            ):
+                return self._rejected(
+                    sym,
+                    "INVALID_MARGIN_RATE",
+                    f"Scrip VAR+ELM margin rate must be a valid positive number: {var_elm_rate}",
+                    sector=sector,
+                    proposed_risk=proposed_risk,
+                    proposed_notional=proposed_notional,
+                )
+            if float(var_elm_rate) > 0.30:
+                return self._rejected(
+                    sym,
+                    "VAR_ELM_EXCEEDS_MARGIN_CEILING",
+                    f"Scrip VAR+ELM margin rate {float(var_elm_rate) * 100:.1f}% exceeds 30.0% ceiling for SEBI shortfall immunity.",
+                    sector=sector,
+                    proposed_risk=proposed_risk,
+                    proposed_notional=proposed_notional,
+                )
+
         # Duplicate Symbol Check: cannot open duplicate position in same symbol
         active_symbols = {str(item.get("symbol", "")).strip().upper() for item in active_items}
         if sym in active_symbols:
@@ -363,6 +397,21 @@ class PortfolioRiskGovernor:
                 "AGGREGATE_PORTFOLIO_RISK_EXCEEDED",
                 f"New total open risk Rs {new_total_risk:.2f} exceeds portfolio risk ceiling "
                 f"Rs {self.max_aggregate_risk_rs:.2f} (Current open: Rs {current_open_risk:.2f}).",
+                sector=sector,
+                proposed_risk=proposed_risk,
+                current_open_risk=current_open_risk,
+                new_total_risk=new_total_risk,
+                proposed_notional=proposed_notional,
+                current_total_notional=current_total_notional,
+                sector_count=existing_sector_count,
+            )
+
+        # 3b. Slot Limit Check (Concurrent Positions)
+        if len(active_items) >= self.max_concurrent_positions:
+            return self._rejected(
+                sym,
+                "MAX_CONCURRENT_POSITIONS_REACHED",
+                f"Portfolio already has {len(active_items)} active/pending positions (max allowed: {self.max_concurrent_positions}).",
                 sector=sector,
                 proposed_risk=proposed_risk,
                 current_open_risk=current_open_risk,

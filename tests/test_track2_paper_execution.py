@@ -71,18 +71,44 @@ def test_bracket_exit_deducts_proportional_entry_and_exit_friction():
         product_type="MIS",
     )
     # Target 1 is at 107.50
-    # Simulate high reaching target 1 (108.0)
+    # Simulate high reaching target 1 (108.0) with verified execution evidence
     b_updated = BracketOrderManager.update_bracket_quote(
         bracket=bracket,
         ltp=107.50,
         tick_high=108.0,
         tick_low=99.0,
         timestamp="2026-09-23T10:00:00+05:30",
+        execution_evidence=True,
     )
     assert b_updated.is_t1_target_filled is True
     # Realized net P&L must be strictly less than gross P&L due to friction
     assert b_updated.realized_pnl_gross > 0
     assert b_updated.total_friction_cost > 0
     assert b_updated.realized_pnl_net == round(b_updated.realized_pnl_gross - b_updated.total_friction_cost, 2)
+
+
+def test_quote_only_target_reach_does_not_fill_without_evidence():
+    # Codex R06: Quote reach without execution evidence must not claim filled target or manufacture profit
+    from antigravity.models.track2_paper_execution import BracketOrderManager
+    bracket = BracketOrderManager.create_bracket(
+        order_id="TEST_B2",
+        symbol="CDSL",
+        entry_price=1000.0,
+        stop_price=980.0,
+        total_shares=10,
+        target_1_rr=1.5,
+    )
+    # Target 1 is at 1030.0. Quote reaches 1035.0 without execution evidence
+    b_quote = BracketOrderManager.update_bracket_quote(
+        bracket=bracket,
+        ltp=1032.0,
+        tick_high=1035.0,
+        execution_evidence=False,
+    )
+    assert b_quote.is_t1_target_filled is False
+    assert b_quote.realized_pnl_gross == 0.0
+    assert b_quote.total_friction_cost == 0.0
+    assert b_quote.is_t2_breakeven_trailed is False
+
 
 

@@ -43,6 +43,23 @@ from antigravity.models.two_tranche_exit_model import (
     TrancheStatus,
 )
 
+try:
+    from research.execution_realism.fills import (
+        PassiveOrderSim,
+        taker_fill,
+        Envelope as FillEnvelope,
+        Side as OrderSide,
+        FillState as RealismFillState,
+        QueueParams,
+    )
+    from research.execution_realism.exits import (
+        DynamicBand,
+        EmergencyExitSim,
+        TokenBucket,
+    )
+except ImportError:
+    pass
+
 
 def calculate_transaction_costs(
     price: float,
@@ -526,6 +543,7 @@ class BracketOrderManager:
         is_cas_eligible: bool = False,
         current_time_ist: Optional[dtime] = None,
         adverse_slippage_pct: float = 0.0,
+        execution_evidence: bool = False,
     ) -> BracketOrderState:
         """
         Evaluates bracket state transitions upon receipt of a new quote/tick:
@@ -639,8 +657,12 @@ class BracketOrderManager:
                 bracket.cost_breakdown = aggregate_transaction_costs([entry_cost, t1_cost_rec, t2_cost_rec])
                 return bracket
 
-        # 3. Check Tranche 1 Target Execution
+        # 3. Check Tranche 1 Target Execution (Codex R06 / Claude A36: Quote-reach is eligibility only)
         if not bracket.is_t1_target_filled and high >= bracket.t1_target_price:
+            if not execution_evidence:
+                # Quote reach without execution evidence (fill ledger, queue depletion) cannot manufacture realized profit
+                return bracket
+
             bracket.is_t1_target_filled = True
             bracket.t1_exit_price = bracket.t1_target_price
             bracket.t1_fill_timestamp = ts

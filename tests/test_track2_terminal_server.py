@@ -44,8 +44,8 @@ def test_terminal_state_handler_calibration():
     assert state["risk"]["corpus_rs"] == 250000.0
     assert state["risk"]["max_single_trade_risk_rs"] == 1500.0
     assert state["risk"]["max_aggregate_risk_rs"] == 4500.0
-    assert state["risk"]["max_notional_rs"] == 200000.0
-    assert state["risk"]["cash_buffer_rs"] == 50000.0
+    assert state["risk"]["max_notional_rs"] == 175000.0
+    assert state["risk"]["cash_buffer_rs"] == 75000.0
     assert state["risk"]["max_positions"] == 3
 
     # Verify Radar items
@@ -122,6 +122,7 @@ def test_terminal_server_http_endpoints():
             "entry_price": 200.0,
             "stop_price": 190.0,
             "quantity": 150,  # 1500 Rs risk
+            "var_elm_rate": 0.20,
         }).encode("utf-8")
         req = urllib.request.Request(
             f"http://127.0.0.1:{port}/api/action/enter",
@@ -141,6 +142,7 @@ def test_terminal_server_http_endpoints():
             "entry_price": 1000.0,
             "stop_price": 950.0,
             "quantity": 40,  # 2000 Rs risk > 1500 Rs limit
+            "var_elm_rate": 0.20,
         }).encode("utf-8")
         req_excess = urllib.request.Request(
             f"http://127.0.0.1:{port}/api/action/enter",

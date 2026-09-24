@@ -328,6 +328,41 @@ class MultiTimeframeAlphaEngine:
             health_state=CandidateHealthState.LEADER_EXPANDING.value,
         )
 
+    @staticmethod
+    def evaluate_microstructure_defense(
+        depth_snapshots: Sequence[Any],
+        breakout_level: float,
+        tick: float = 0.05,
+    ) -> Dict[str, Any]:
+        """
+        Claude Pillar 2 Adverse-Selection Defense:
+        Evaluates Order Flow Imbalance (OFI) and hidden supply absorption at breakout level.
+        Detects iceberg distribution traps (distributors dumping into the breakout).
+        """
+        try:
+            from research.execution_realism.features import ofi_normalized, absorption_at_level
+            norm_ofi = ofi_normalized(depth_snapshots)
+            abs_info = absorption_at_level(depth_snapshots, breakout_level, tick)
+            raw_ratio = abs_info.get("absorption_ratio", abs_info.get("ratio", 0.0))
+            if math.isinf(raw_ratio):
+                ratio = 999.0
+            else:
+                ratio = float(raw_ratio) if math.isfinite(raw_ratio) else 0.0
+            is_trap = ratio > 2.5
+            return {
+                "normalized_ofi": round(norm_ofi, 4),
+                "absorption_ratio": round(ratio, 2),
+                "is_distribution_trap": is_trap,
+                "details": abs_info,
+            }
+        except Exception as exc:
+            return {
+                "normalized_ofi": 0.0,
+                "absorption_ratio": 0.0,
+                "is_distribution_trap": False,
+                "error": str(exc),
+            }
+
 
 # Canonical VECTOR Alias for ARGUS 8i // BEACON
 VectorAlphaEngine = MultiTimeframeAlphaEngine

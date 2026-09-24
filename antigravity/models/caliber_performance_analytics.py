@@ -110,7 +110,7 @@ class CaliberPerformanceAnalytics:
     def calculate_metrics(
         self,
         trades: Sequence[Dict[str, Any]],
-        completed_sessions: int = 1,
+        completed_sessions: int = 0,
         verified_e3_fills: int = 0,
     ) -> PerformanceSummary:
         now_str = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
@@ -172,7 +172,21 @@ class CaliberPerformanceAnalytics:
             net_pnl = float(t.get("net_pnl_rs", t.get("pnl_rs", 0.0)))
             charge = float(t.get("charges_rs", 0.0))
             gross_pnl = float(t.get("gross_pnl_rs", t.get("gross_pnl", net_pnl + charge)))
-            r_mult = float(t.get("r_multiple", net_pnl / self.risk_per_trade_rs))
+            # Trade actual risk calibration for R-multiple scaling (Claude Finding A28)
+            trade_risk = 0.0
+            if "risk_rs" in t and math.isfinite(float(t["risk_rs"])) and float(t["risk_rs"]) > 0:
+                trade_risk = float(t["risk_rs"])
+            elif (
+                "entry_price" in t and "stop_loss" in t and "shares" in t
+                and math.isfinite(float(t["entry_price"])) and math.isfinite(float(t["stop_loss"]))
+                and int(t.get("shares", 0)) > 0
+            ):
+                trade_risk = round(abs(float(t["entry_price"]) - float(t["stop_loss"])) * int(t["shares"]), 2)
+            
+            if trade_risk <= 0.0:
+                trade_risk = self.risk_per_trade_rs
+
+            r_mult = float(t.get("r_multiple", net_pnl / trade_risk))
             sym = str(t.get("symbol", "UNKNOWN"))
             trade_time = str(t.get("timestamp", now_str))
 
@@ -247,13 +261,20 @@ class CaliberPerformanceAnalytics:
         else:
             sharpe_ratio = 0.0
 
-        # Rule 1 Gate
+        # Rule 1 Gate: Observation only. Requires 60 sessions, 20 fills, AND positive net expectancy (Claude A13)
         is_permitted = False
         gate_verdict = "OBSERVATION_ONLY_GATED"
-        gate_reason = (
-            f"Rule 1 in force: {completed_sessions}/60 sessions, {verified_e3_fills}/20 fills completed. "
-            "Real capital deployment strictly prohibited."
-        )
+        if completed_sessions >= 60 and verified_e3_fills >= 20 and net_expectancy_r > 0.0:
+            gate_verdict = "QUALIFIED_FOR_REVIEW"
+            gate_reason = (
+                f"Rule 1 Milestones Met: {completed_sessions}/60 sessions, {verified_e3_fills}/20 fills, "
+                f"Net Expectancy +{net_expectancy_r:.2f}R. Real capital deployment requires explicit user unlock."
+            )
+        else:
+            gate_reason = (
+                f"Rule 1 in force: {completed_sessions}/60 sessions, {verified_e3_fills}/20 fills completed "
+                f"(Net Expectancy: {net_expectancy_r:.2f}R). Real capital deployment strictly prohibited."
+            )
 
         gate = Rule1GateStatus(
             required_sessions=60,
@@ -297,11 +318,12 @@ class CaliberPerformanceAnalytics:
     def load_from_orders_log(
         self,
         orders_path: Optional[Path | str] = None,
-        completed_sessions: int = 1,
+        completed_sessions: int = 0,
         verified_e3_fills: int = 0,
     ) -> PerformanceSummary:
         path = Path(orders_path or self.orders_log_path)
         trades: List[Dict[str, Any]] = []
+        orders_by_id: Dict[str, dict] = {}
 
         if path.exists():
             try:
@@ -310,17 +332,26 @@ class CaliberPerformanceAnalytics:
                         line = line.strip()
                         if not line or line.startswith("#"):
                             continue
-                        rec = json.loads(line)
+                        try:
+                            rec = json.loads(line)
+                        except Exception:
+                            continue
                         if not isinstance(rec, dict):
                             continue
-                        status = str(rec.get("status", "")).upper()
-                        # Only verified closed orders with explicit realized net PnL are included
-                        if (
-                            status in {"CLOSED", "SQUARED_OFF", "STOPPED_OUT", "TARGET_FILLED", "EMERGENCY_EXIT"}
-                            or "net_pnl_rs" in rec
-                        ):
-                            if "net_pnl_rs" in rec and math.isfinite(float(rec["net_pnl_rs"])):
-                                trades.append(rec)
+                        
+                        order_id = rec.get("order_id")
+                        if not order_id:
+                            continue
+                        
+                        # Sequential replay: latest record per order_id tracks current lifecycle state (Codex R13)
+                        orders_by_id[str(order_id)] = rec
+
+                for rec in orders_by_id.values():
+                    status = str(rec.get("status", "")).upper()
+                    # Strictly require explicit valid terminal / closed status and valid numeric PnL
+                    if status in {"CLOSED", "SQUARED_OFF", "STOPPED_OUT", "TARGET_FILLED", "EMERGENCY_EXIT"}:
+                        if "net_pnl_rs" in rec and math.isfinite(float(rec["net_pnl_rs"])):
+                            trades.append(rec)
             except Exception:
                 trades = []
 

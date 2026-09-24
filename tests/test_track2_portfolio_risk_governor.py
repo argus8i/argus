@@ -166,6 +166,7 @@ def test_governor_calibrate_for_corpus_2_5_lakhs():
         stop_price=190.0,
         quantity=150,  # Risk = 10 * 150 = 1500 Rs, Notional = 30000 Rs
         active_positions=active,
+        var_elm_rate=0.20,
     )
     assert res.is_approved is True
     assert res.new_total_risk_rs == 4500.0
@@ -178,6 +179,7 @@ def test_governor_calibrate_for_corpus_2_5_lakhs():
         stop_price=980.0,
         quantity=50,  # Risk = 1000 Rs -> Total = 5500 > 4500
         active_positions=active + [{"symbol": "RVNL", "open_risk_rs": 1500.0, "notional_rs": 30000.0}],
+        var_elm_rate=0.20,
     )
     assert res_4th.is_approved is False
     assert "AGGREGATE_PORTFOLIO_RISK_EXCEEDED" in res_4th.rejection_reason
