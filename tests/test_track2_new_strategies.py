@@ -44,7 +44,7 @@ def test_trapdoor_strategy_signal():
     # Bar 5: Confirmation Bar (Close=101.1 > Inside High 100.9, Vol=25000)
     candles = [
         {"open": 100.5, "high": 101.5, "low": 99.8, "close": 100.4, "volume": 10000},
-        {"open": 100.4, "high": 101.2, "low": 100.0, "close": 100.8, "volume": 10000},  # Mother (range 1.2)
+        {"open": 100.4, "high": 101.1, "low": 100.0, "close": 100.8, "volume": 10000},  # Mother (range 1.1)
         {"open": 100.8, "high": 100.9, "low": 100.3, "close": 100.6, "volume": 8000},   # Inside
         {"open": 100.6, "high": 100.8, "low": 99.9, "close": 100.4, "volume": 12000},  # Failed probe
         {"open": 100.4, "high": 100.7, "low": 100.2, "close": 100.4, "volume": 9000},
