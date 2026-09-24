@@ -120,21 +120,21 @@ def test_broker_cutoff_cas_squareoff():
 
 
 def test_broker_cutoff_non_cas_squareoff():
-    # MIS Position before 15:25 non-CAS cutoff does NOT force squareoff
+    # MIS Position before 15:08 Dhan MIS cutoff does NOT force squareoff
     bracket = BracketOrderManager.create_bracket("brk_005", "CDSL", 1000.0, 980.0, 10, product_type="MIS")
     mid_state = BracketOrderManager.update_bracket_quote(
         bracket=bracket,
         ltp=1010.0,
-        current_time_ist=dtime(15, 20),
+        current_time_ist=dtime(15, 5),
         is_cas_eligible=False,
     )
     assert mid_state.terminal_state is None
 
-    # At 15:26 IST forces squareoff for MIS
+    # At 15:09 IST forces squareoff for MIS (pre-empting Dhan 15:10 auto-squareoff)
     final_state = BracketOrderManager.update_bracket_quote(
         bracket=mid_state,
         ltp=1012.0,
-        current_time_ist=dtime(15, 26),
+        current_time_ist=dtime(15, 9),
         is_cas_eligible=False,
     )
     assert final_state.is_eod_squared_off is True

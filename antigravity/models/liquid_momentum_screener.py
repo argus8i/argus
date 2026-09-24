@@ -345,7 +345,7 @@ class LiquidMomentumEngine:
         dtv_med20_cr: float,
         exchange: str = "NSE",
         risk_budget_rs: float = 1500.0,
-        max_notional_rs: float = 100000.0,
+        max_notional_rs: float = 58333.33,
         limit_offset_pct: float = 0.5,
         order_execution_type: Optional[str] = None
     ) -> SizingResult:

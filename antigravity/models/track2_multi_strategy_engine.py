@@ -103,7 +103,7 @@ class MultiStrategyEngine:
         sector_candle_4_bars_ago: Optional[Mapping[str, Any]] = None,
         market_candle_now: Optional[Mapping[str, Any]] = None,
         market_candle_4_bars_ago: Optional[Mapping[str, Any]] = None,
-        sector_breadth: float = 0.60,
+        sector_breadth: Optional[float] = None,
         stock_sector_beta: float = 1.0,
     ) -> List[UnifiedTradeSignal]:
         """
@@ -389,6 +389,7 @@ class MultiStrategyEngine:
             and sector_candle_4_bars_ago is not None
             and market_candle_now is not None
             and market_candle_4_bars_ago is not None
+            and sector_breadth is not None
         ):
             compass_res = self.compass_engine.evaluate_setup(
                 symbol=symbol,
@@ -440,7 +441,7 @@ class MultiStrategyEngine:
         candidate_signals: Sequence[UnifiedTradeSignal],
         existing_sector_counts: Optional[Mapping[str, int]] = None,
         available_slots: Optional[int] = None,
-        allow_shadow: bool = True,
+        allow_shadow: bool = False,
     ) -> List[UnifiedTradeSignal]:
         """
         Ranks all incoming signals across all strategies by conviction score,

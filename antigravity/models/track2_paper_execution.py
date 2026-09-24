@@ -565,9 +565,9 @@ class BracketOrderManager:
         low = min(ltp, tick_low if tick_low is not None else ltp)
         ts = timestamp or datetime.now().isoformat()
 
-        # 1. Check Broker Cutoff (15:08 CAS pre-emption or 15:25 Non-CAS) for MIS orders ONLY
+        # 1. Check Broker Cutoff (15:08 Dhan MIS auto-squareoff pre-emption) for MIS orders ONLY
         if bracket.product_type == "MIS":
-            cutoff_time = dtime(15, 8) if is_cas_eligible else dtime(15, 25)
+            cutoff_time = dtime(15, 8)  # Dhan squares off ALL cash intraday positions at 15:10 IST
             if current_time_ist is not None and current_time_ist >= cutoff_time:
                 # Force MIS Market Squareoff at LTP
                 bracket.is_eod_squared_off = True

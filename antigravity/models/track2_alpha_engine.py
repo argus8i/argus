@@ -375,12 +375,14 @@ class MultiTimeframeAlphaEngine:
         market_regime_allows_orb: bool = True,
         depth_snapshots: Optional[Sequence[Any]] = None,
         risk_budget_rs: float = 1500.0,
+        regime_snapshot: Optional[MarketRegimeSnapshot] = None,
     ) -> AlphaEvaluationResult:
         """
         Adapts sequential 15m candle stream to evaluate_15m_orb.
         Requires at least 2 completed bars:
           - Bar 0 (09:15-09:30): Establishes OR High / OR Low
           - Bar 1..N: Evaluates breakout on the latest completed bar
+        Fails closed if historical volume baseline <= 0.
         """
         sym = str(symbol).strip().upper()
         if not candles_15m or len(candles_15m) < 2:
@@ -397,6 +399,20 @@ class MultiTimeframeAlphaEngine:
                 health_state=CandidateHealthState.RANGE_BOUND_CHOP.value,
             )
 
+        if hist_median_volume_15m is None or hist_median_volume_15m <= 0:
+            return AlphaEvaluationResult(
+                symbol=sym,
+                decision="VOLUME_INSUFFICIENT",
+                passed_all_gates=False,
+                rejection_reason="Missing historical volume baseline (median <= 0)",
+                entry_price=None, stop_price=None, target_price=None,
+                shares=None, notional_value_rs=None, actual_risk_rs=None,
+                volume_multiple=0.0, min_volume_required=2.5,
+                extension_points=None, max_extension_allowed=None,
+                paper_instruction=None,
+                health_state=CandidateHealthState.RANGE_BOUND_CHOP.value,
+            )
+
         opening_bar = candles_15m[0]
         latest_bar = candles_15m[-1]
 
@@ -405,18 +421,19 @@ class MultiTimeframeAlphaEngine:
         current_price = float(latest_bar.get("close", 0.0))
         bucket_vol = int(latest_bar.get("volume", 0))
 
-        regime_snapshot = MarketRegimeSnapshot(
-            state=MarketRegimeState.BULLISH_EXPANSION if market_regime_allows_orb else MarketRegimeState.DISTRIBUTION_GATED,
-            nifty_ltp=current_price,
-            nifty_or_high=or_high,
-            nifty_or_low=or_low,
-            ad_ratio=1.5 if market_regime_allows_orb else 0.5,
-            advances=35 if market_regime_allows_orb else 15,
-            declines=15 if market_regime_allows_orb else 35,
-            allow_standard_orb=market_regime_allows_orb,
-            min_volume_multiple=2.5,
-            reason="Adaptive candidate evaluation",
-        )
+        if regime_snapshot is None:
+            regime_snapshot = MarketRegimeSnapshot(
+                state=MarketRegimeState.BULLISH_EXPANSION if market_regime_allows_orb else MarketRegimeState.DISTRIBUTION_GATED,
+                nifty_ltp=current_price,
+                nifty_or_high=or_high,
+                nifty_or_low=or_low,
+                ad_ratio=1.0,
+                advances=None,
+                declines=None,
+                allow_standard_orb=market_regime_allows_orb,
+                min_volume_multiple=2.5,
+                reason="Adaptive candidate evaluation (unconfirmed breadth)",
+            )
 
         return cls.evaluate_15m_orb(
             symbol=sym,
@@ -424,7 +441,7 @@ class MultiTimeframeAlphaEngine:
             or_high=or_high,
             or_low=or_low,
             bucket_volume=bucket_vol,
-            historical_bucket_volume_median=int(hist_median_volume_15m) if hist_median_volume_15m > 0 else 1000,
+            historical_bucket_volume_median=int(hist_median_volume_15m) if hist_median_volume_15m > 0 else 0,
             atr14_points=atr14_points,
             regime_snapshot=regime_snapshot,
             daily_ema20=daily_ema20,

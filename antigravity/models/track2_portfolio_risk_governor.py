@@ -143,7 +143,7 @@ class PortfolioRiskGovernor:
         cash_buffer_rs: float = 75000.0,
         max_positions_per_sector: int = 2,
         sector_mapping: Optional[Mapping[str, str]] = None,
-        enforce_slot_cap: bool = False,
+        enforce_slot_cap: bool = True,
     ) -> "PortfolioRiskGovernor":
         """
         Calibrates the PortfolioRiskGovernor specifically for a retail/prop corpus (e.g. Rs 2L - 3L).

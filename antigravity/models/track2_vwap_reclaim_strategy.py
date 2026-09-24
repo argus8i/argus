@@ -94,7 +94,7 @@ class VWAPReclaimStrategy:
         self,
         min_volume_mult: float = 1.80,
         risk_budget_rs: float = 1500.0,
-        max_notional_rs: float = 200000.0,
+        max_notional_rs: float = 58333.33,
         r_multiple_t1: float = 1.5,
         r_multiple_t2: float = 3.0,
     ):

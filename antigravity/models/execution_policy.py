@@ -121,12 +121,15 @@ class ExecutionIntent:
         # Risk budgeting: ₹1,500 target risk per trade (1.0R)
         risk_rs = float(candidate.get("actual_risk_rs", candidate.get("risk_rs", 1500.0)))
         raw_shares = candidate.get("shares")
+        max_slot_notional = float(candidate.get("max_slot_notional_rs", 58333.33))
         if raw_shares is not None:
             shares = int(raw_shares)
             if shares <= 0:
                 raise ValueError(f"Order shares must be positive, got {shares}")
         else:
             shares = max(1, int(risk_rs / risk_per_share))
+            if (shares * entry) > max_slot_notional:
+                shares = max(1, int(max_slot_notional / entry))
 
         actual_risk = round(shares * risk_per_share, 2)
         notional = round(shares * entry, 2)

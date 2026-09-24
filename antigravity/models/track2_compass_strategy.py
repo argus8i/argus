@@ -287,3 +287,206 @@ class CompassStrategy:
             residual_strength=round(residual_strength * 100.0, 2),
             max_holding_bars=6,
         )
+
+    def evaluate_setup(
+        self,
+        symbol: str,
+        sector: str,
+        candles_15m: Sequence[Mapping[str, Any]],
+        sector_candle_now: Mapping[str, Any],
+        sector_candle_4_bars_ago: Mapping[str, Any],
+        market_candle_now: Mapping[str, Any],
+        market_candle_4_bars_ago: Mapping[str, Any],
+        sector_breadth: Optional[float] = None,
+        stock_sector_beta: float = 1.0,
+        bucket_median_vol: float = 10000.0,
+        current_ask: Optional[float] = None,
+    ) -> CompassSignal:
+        """
+        Evaluates COMPASS sector leadership using point-in-time sector and market candles.
+        Fails closed if sector_breadth is None or < 0.50.
+        """
+        if sector_breadth is None:
+            return CompassSignal(
+                symbol=symbol, sector=sector,
+                decision="BREADTH_UNAVAILABLE", passed_all_gates=False,
+                rejection_reason="Sector breadth not provided (fail-closed)",
+                entry_price=None, stop_price=None, target_price=None,
+                shares=None, notional_value_rs=None, actual_risk_rs=None, risk_pct=None,
+                sector_return_1h_pct=None, residual_strength=None,
+            )
+
+        if len(candles_15m) < 5:
+            return CompassSignal(
+                symbol=symbol, sector=sector,
+                decision="DATA_INVALID", passed_all_gates=False,
+                rejection_reason="Insufficient candles (minimum 5 completed 15m bars required)",
+                entry_price=None, stop_price=None, target_price=None,
+                shares=None, notional_value_rs=None, actual_risk_rs=None, risk_pct=None,
+                sector_return_1h_pct=None, residual_strength=None,
+            )
+
+        features = SharedFeatureEngine.extract_features(symbol, candles_15m, bucket_median_vol)
+        if not features:
+            return CompassSignal(
+                symbol=symbol, sector=sector,
+                decision="DATA_INVALID", passed_all_gates=False,
+                rejection_reason="Failed to extract valid bar features",
+                entry_price=None, stop_price=None, target_price=None,
+                shares=None, notional_value_rs=None, actual_risk_rs=None, risk_pct=None,
+                sector_return_1h_pct=None, residual_strength=None,
+            )
+
+        c_now = float(candles_15m[-1].get("close", 0.0))
+        c_4ago = float(candles_15m[-5].get("close", 0.0))
+        if c_now <= 0 or c_4ago <= 0:
+            return CompassSignal(
+                symbol=symbol, sector=sector,
+                decision="DATA_INVALID", passed_all_gates=False,
+                rejection_reason="Invalid price values for 1-hour return",
+                entry_price=None, stop_price=None, target_price=None,
+                shares=None, notional_value_rs=None, actual_risk_rs=None, risk_pct=None,
+                sector_return_1h_pct=None, residual_strength=None,
+            )
+
+        r_stock = math.log(c_now / c_4ago)
+
+        sec_c_now = float(sector_candle_now.get("close", 0.0))
+        sec_c_4ago = float(sector_candle_4_bars_ago.get("close", 0.0))
+        if sec_c_now <= 0 or sec_c_4ago <= 0:
+            return CompassSignal(
+                symbol=symbol, sector=sector,
+                decision="DATA_INVALID", passed_all_gates=False,
+                rejection_reason="Invalid sector candle prices for 1-hour return",
+                entry_price=None, stop_price=None, target_price=None,
+                shares=None, notional_value_rs=None, actual_risk_rs=None, risk_pct=None,
+                sector_return_1h_pct=None, residual_strength=None,
+            )
+        r_sector = math.log(sec_c_now / sec_c_4ago)
+
+        mkt_c_now = float(market_candle_now.get("close", 0.0))
+        mkt_c_4ago = float(market_candle_4_bars_ago.get("close", 0.0))
+        if mkt_c_now <= 0 or mkt_c_4ago <= 0:
+            return CompassSignal(
+                symbol=symbol, sector=sector,
+                decision="DATA_INVALID", passed_all_gates=False,
+                rejection_reason="Invalid market candle prices for 1-hour return",
+                entry_price=None, stop_price=None, target_price=None,
+                shares=None, notional_value_rs=None, actual_risk_rs=None, risk_pct=None,
+                sector_return_1h_pct=None, residual_strength=None,
+            )
+        r_market = math.log(mkt_c_now / mkt_c_4ago)
+
+        # Gate A: Sector must outperform broad market and have positive breadth >= 50%
+        if r_sector <= r_market or sector_breadth < 0.50:
+            return CompassSignal(
+                symbol=symbol, sector=sector,
+                decision="SECTOR_NOT_LEADING", passed_all_gates=False,
+                rejection_reason=f"Sector return {r_sector*100:.2f}% <= Market {r_market*100:.2f}% or breadth {sector_breadth*100:.0f}% < 50%",
+                entry_price=None, stop_price=None, target_price=None,
+                shares=None, notional_value_rs=None, actual_risk_rs=None, risk_pct=None,
+                sector_return_1h_pct=round(r_sector * 100.0, 2), residual_strength=None,
+            )
+
+        # Gate B: Stock must have positive residual strength (outperforming its own sector beta)
+        beta_adj = max(0.5, min(2.5, float(stock_sector_beta)))
+        residual_strength = r_stock - (beta_adj * r_sector)
+        if residual_strength <= 0:
+            return CompassSignal(
+                symbol=symbol, sector=sector,
+                decision="RESIDUAL_STRENGTH_WEAK", passed_all_gates=False,
+                rejection_reason=f"Residual strength {residual_strength*100:.2f}% <= 0 (stock lagging sector)",
+                entry_price=None, stop_price=None, target_price=None,
+                shares=None, notional_value_rs=None, actual_risk_rs=None, risk_pct=None,
+                sector_return_1h_pct=round(r_sector * 100.0, 2),
+                residual_strength=round(residual_strength * 100.0, 2),
+            )
+
+        # Gate C: Stock must close above its previous 4-bar high
+        prev_4_high = max(float(b.get("high", 0.0)) for b in candles_15m[-5:-1])
+        if c_now <= prev_4_high:
+            return CompassSignal(
+                symbol=symbol, sector=sector,
+                decision="BREAKOUT_MISSING", passed_all_gates=False,
+                rejection_reason=f"Close {c_now:.2f} <= previous 4-bar high {prev_4_high:.2f}",
+                entry_price=None, stop_price=None, target_price=None,
+                shares=None, notional_value_rs=None, actual_risk_rs=None, risk_pct=None,
+                sector_return_1h_pct=round(r_sector * 100.0, 2),
+                residual_strength=round(residual_strength * 100.0, 2),
+            )
+
+        # Gate D: Relative Volume Confirmation
+        if features.rvol < self.min_rvol:
+            return CompassSignal(
+                symbol=symbol, sector=sector,
+                decision="VOLUME_INSUFFICIENT", passed_all_gates=False,
+                rejection_reason=f"RVOL {features.rvol:.2f}x below threshold {self.min_rvol:.2f}x",
+                entry_price=None, stop_price=None, target_price=None,
+                shares=None, notional_value_rs=None, actual_risk_rs=None, risk_pct=None,
+                sector_return_1h_pct=round(r_sector * 100.0, 2),
+                residual_strength=round(residual_strength * 100.0, 2),
+            )
+
+        # 5. Sizing & Structural Stop (Lowest of previous 3 bars minus 0.10 ATR20)
+        entry_price = round(current_ask or c_now, 2)
+        prev_3_low = min(float(b.get("low", c_now)) for b in candles_15m[-4:-1])
+        structural_stop = round(prev_3_low - (0.10 * features.atr20), 2)
+        risk_per_share = entry_price - structural_stop
+        risk_pct = (risk_per_share / entry_price) * 100.0
+
+        if risk_per_share <= 0 or not (0.40 <= risk_pct <= 2.50):
+            return CompassSignal(
+                symbol=symbol, sector=sector,
+                decision="INVALID_STOP", passed_all_gates=False,
+                rejection_reason=f"Stop distance {risk_pct:.2f}% outside permitted [0.40%, 2.50%] structural bounds",
+                entry_price=None, stop_price=None, target_price=None,
+                shares=None, notional_value_rs=None, actual_risk_rs=None, risk_pct=None,
+                sector_return_1h_pct=round(r_sector * 100.0, 2),
+                residual_strength=round(residual_strength * 100.0, 2),
+            )
+
+        shares = int(min(self.risk_budget_rs // risk_per_share, self.max_notional_rs // entry_price))
+        if shares <= 0:
+            return CompassSignal(
+                symbol=symbol, sector=sector,
+                decision="SIZING_ZERO", passed_all_gates=False,
+                rejection_reason="Position sizing yielded 0 shares",
+                entry_price=None, stop_price=None, target_price=None,
+                shares=None, notional_value_rs=None, actual_risk_rs=None, risk_pct=None,
+                sector_return_1h_pct=round(r_sector * 100.0, 2),
+                residual_strength=round(residual_strength * 100.0, 2),
+            )
+
+        notional_rs = round(shares * entry_price, 2)
+        actual_risk_rs = round(shares * risk_per_share, 2)
+        target_price = round(entry_price + (self.target_r_multiple * risk_per_share), 2)
+
+        # 6. Economic Friction Hurdle Check
+        gross_gain = shares * (target_price - entry_price)
+        est_cost = round(notional_rs * self.est_friction_pct, 2)
+        if gross_gain < 3.0 * est_cost:
+            return CompassSignal(
+                symbol=symbol, sector=sector,
+                decision="COST_HURDLE_FAILED", passed_all_gates=False,
+                rejection_reason=f"Target gross gain ₹{gross_gain:.1f} < 3x estimated friction ₹{est_cost:.1f}",
+                entry_price=None, stop_price=None, target_price=None,
+                shares=None, notional_value_rs=None, actual_risk_rs=None, risk_pct=None,
+                sector_return_1h_pct=round(r_sector * 100.0, 2),
+                residual_strength=round(residual_strength * 100.0, 2),
+            )
+
+        return CompassSignal(
+            symbol=symbol, sector=sector,
+            decision="SIGNAL_BUY", passed_all_gates=True,
+            rejection_reason=None,
+            entry_price=entry_price,
+            stop_price=structural_stop,
+            target_price=target_price,
+            shares=shares,
+            notional_value_rs=notional_rs,
+            actual_risk_rs=actual_risk_rs,
+            risk_pct=round(risk_pct, 2),
+            sector_return_1h_pct=round(r_sector * 100.0, 2),
+            residual_strength=round(residual_strength * 100.0, 2),
+            max_holding_bars=6,
+        )

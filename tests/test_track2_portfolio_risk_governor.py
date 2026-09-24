@@ -197,7 +197,7 @@ def test_governor_calibrate_default_75k_buffer_and_var_elm_gate():
         symbol="CDSL",
         entry_price=1000.0,
         stop_price=985.0,
-        quantity=100,  # Risk Rs 1500, Notional Rs 100k
+        quantity=50,  # Risk Rs 750, Notional Rs 50k (within slot cap)
         active_positions=[],
         var_elm_rate=0.25,  # 25% VAR+ELM
     )
@@ -208,7 +208,7 @@ def test_governor_calibrate_default_75k_buffer_and_var_elm_gate():
         symbol="CDSL",
         entry_price=1000.0,
         stop_price=985.0,
-        quantity=100,
+        quantity=50,
         active_positions=[],
         var_elm_rate=0.35,  # 35% VAR+ELM exceeds 30% ceiling
     )
