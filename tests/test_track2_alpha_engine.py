@@ -195,3 +195,46 @@ def test_orb_degenerate_stop_rejected(bullish_regime):
     )
     assert res.passed_all_gates is False
     assert res.decision == "DEGENERATE_STOP"
+
+
+def test_evaluate_microstructure_defense():
+    """Verifies OFI and iceberg absorption calculation with execution_realism features."""
+    import math
+    from research.execution_realism.marketdata import Snapshot, Level, Session
+
+    # Create synthetic snapshots around level 100.0
+    s1 = Snapshot(
+        symbol="CDSL",
+        source="REPLAY",
+        seq=1,
+        recv_ts=1000.0,
+        session=Session.CONTINUOUS,
+        ltp=100.00,
+        cum_volume=10000,
+        day_high=105.00,
+        day_low=95.00,
+        bids=(Level(price=99.95, qty=1000, orders=5),),
+        asks=(Level(price=100.00, qty=1000, orders=5),),
+        ltq=200,
+    )
+    s2 = Snapshot(
+        symbol="CDSL",
+        source="REPLAY",
+        seq=2,
+        recv_ts=1001.0,
+        session=Session.CONTINUOUS,
+        ltp=100.00,
+        cum_volume=10500,
+        day_high=105.00,
+        day_low=95.00,
+        bids=(Level(price=99.95, qty=1000, orders=5),),
+        asks=(Level(price=100.00, qty=1500, orders=6),),  # Refilled by 500
+        ltq=300,
+    )
+    res = MultiTimeframeAlphaEngine.evaluate_microstructure_defense([s1, s2], breakout_level=100.00)
+    assert "normalized_ofi" in res
+    assert "absorption_ratio" in res
+    assert "is_distribution_trap" in res
+    assert isinstance(res["absorption_ratio"], float)
+    assert not math.isinf(res["absorption_ratio"])
+
