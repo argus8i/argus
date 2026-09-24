@@ -427,6 +427,8 @@ class BracketOrderState:
     t2_exit_price: Optional[float] = None
     t1_fill_timestamp: Optional[str] = None
     t2_fill_timestamp: Optional[str] = None
+    t2_target_price: Optional[float] = None
+    is_t2_target_filled: bool = False
     realized_pnl_gross: float = 0.0
     total_friction_cost: float = 0.0
     realized_pnl_net: float = 0.0
@@ -482,6 +484,7 @@ class BracketOrderManager:
         stop_price: float,
         total_shares: int,
         target_1_rr: float = 1.5,
+        target_2_rr: float = 3.0,
         product_type: str = "CNC",
         signal_price: Optional[float] = None,
         limit_price: Optional[float] = None,
@@ -491,6 +494,7 @@ class BracketOrderManager:
             stop_price=stop_price,
             total_shares=total_shares,
             target_1_rr=target_1_rr,
+            target_2_rr=target_2_rr,
         )
         s_price = signal_price if signal_price is not None else entry_price
         l_price = limit_price if limit_price is not None else entry_price
@@ -516,8 +520,10 @@ class BracketOrderManager:
             t1_shares=alloc.tranche1_shares,
             t2_shares=alloc.tranche2_shares,
             t1_target_price=alloc.tranche1_target,
+            t2_target_price=alloc.tranche2_target,
             t2_current_stop_price=alloc.initial_stop,
             is_t1_target_filled=False,
+            is_t2_target_filled=False,
             is_t2_breakeven_trailed=False,
             is_stopped_out=False,
             is_eod_squared_off=False,
@@ -682,5 +688,31 @@ class BracketOrderManager:
             # Auto-trail Tranche 2 stop to Breakeven
             bracket.t2_current_stop_price = bracket.entry_price
             bracket.is_t2_breakeven_trailed = True
+
+        # 4. Check Tranche 2 Runner Target Execution (+3.0R)
+        if (bracket.is_t1_target_filled and not bracket.is_t2_target_filled
+                and bracket.t2_target_price is not None
+                and high >= bracket.t2_target_price):
+            if not execution_evidence:
+                return bracket
+
+            bracket.is_t2_target_filled = True
+            bracket.t2_exit_price = bracket.t2_target_price
+            bracket.t2_fill_timestamp = ts
+            bracket.terminal_state = "TARGET_FILLED_FULL"
+
+            is_intra = (bracket.product_type == "MIS")
+            entry_cost = calculate_transaction_costs(bracket.entry_price, bracket.total_shares, "BUY", is_intra)
+            t2_pnl = bracket.t2_shares * (bracket.t2_target_price - bracket.entry_price)
+            t1_cost_rec = calculate_transaction_costs(bracket.t1_target_price, bracket.t1_shares, "SELL", is_intra)
+            t2_cost_rec = calculate_transaction_costs(bracket.t2_target_price, bracket.t2_shares, "SELL", is_intra)
+            t2_cost = t2_cost_rec["total_cost"]
+            t2_entry_friction = round(entry_cost["total_cost"] * (bracket.t2_shares / bracket.total_shares), 2)
+
+            bracket.realized_pnl_gross += round(t2_pnl, 2)
+            bracket.total_friction_cost += round(t2_entry_friction + t2_cost, 2)
+            bracket.realized_pnl_net = round(bracket.realized_pnl_gross - bracket.total_friction_cost, 2)
+            bracket.cost_breakdown = aggregate_transaction_costs([entry_cost, t1_cost_rec, t2_cost_rec])
+            return bracket
 
         return bracket

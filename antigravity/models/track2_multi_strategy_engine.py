@@ -25,12 +25,20 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 from antigravity.models.track2_alpha_engine import MultiTimeframeAlphaEngine, AlphaEvaluationResult
 from antigravity.models.track2_vwap_reclaim_strategy import VWAPReclaimStrategy, VWAPReclaimSignal
 from antigravity.models.track2_volatility_squeeze_strategy import VolatilitySqueezeStrategy, VolatilitySqueezeSignal
+from antigravity.models.track2_trapdoor_strategy import TrapdoorStrategy, TrapdoorSignal
+from antigravity.models.track2_compass_strategy import CompassStrategy, CompassSignal
+from antigravity.models.track2_last_light_strategy import LastLightStrategy, LastLightSignal
+from antigravity.models.track2_recoil_strategy import RecoilStrategy, RecoilSignal
 
 
 class StrategyType(str, Enum):
     ORB_MOMENTUM = "ORB_MOMENTUM"
     VWAP_RECLAIM = "VWAP_RECLAIM"
     VOLATILITY_SQUEEZE = "VOLATILITY_SQUEEZE"
+    TRAPDOOR = "TRAPDOOR"
+    COMPASS = "COMPASS"
+    LAST_LIGHT = "LAST_LIGHT"
+    RECOIL = "RECOIL"
 
 
 @dataclass(frozen=True)
@@ -73,6 +81,10 @@ class MultiStrategyEngine:
         self.orb_engine = MultiTimeframeAlphaEngine()
         self.vwap_engine = VWAPReclaimStrategy(risk_budget_rs=risk_budget_rs)
         self.squeeze_engine = VolatilitySqueezeStrategy(risk_budget_rs=risk_budget_rs)
+        self.trapdoor_engine = TrapdoorStrategy(risk_budget_rs=risk_budget_rs)
+        self.compass_engine = CompassStrategy(risk_budget_rs=risk_budget_rs)
+        self.last_light_engine = LastLightStrategy(risk_budget_rs=risk_budget_rs)
+        self.recoil_engine = RecoilStrategy(risk_budget_rs=risk_budget_rs)
 
     def evaluate_symbol(
         self,
@@ -235,6 +247,123 @@ class MultiStrategyEngine:
                         volume_multiple=round(vol_mult, 2),
                         sector=sector,
                         details=squeeze_res.to_dict(),
+                    )
+                )
+
+        # -------------------------------------------------------------
+        # Strategy 4: TRAPDOOR (Failed-Breakdown Reversal)
+        # -------------------------------------------------------------
+        if len(candles_15m) >= 6:
+            trap_res = self.trapdoor_engine.evaluate_setup(
+                symbol=symbol,
+                candles_15m=candles_15m,
+                bucket_median_vol=hist_median_volume_15m,
+            )
+            if trap_res.passed_all_gates and trap_res.entry_price and trap_res.stop_price and trap_res.shares:
+                entry = trap_res.entry_price
+                stop = trap_res.stop_price
+                risk_per_sh = entry - stop
+                conviction = round(
+                    (0.35 * 0.85)
+                    + (0.30 * 1.0)
+                    + (0.20 * math.tanh(relative_strength / 10.0))
+                    + (0.15 * max(0.0, norm_ofi)),
+                    3,
+                )
+                signals.append(
+                    UnifiedTradeSignal(
+                        symbol=symbol,
+                        strategy_type=StrategyType.TRAPDOOR.value,
+                        conviction_score=conviction,
+                        entry_price=entry,
+                        stop_price=stop,
+                        target_tranche1=trap_res.target_price or round(entry + 1.5 * risk_per_sh, 2),
+                        target_tranche2=round(entry + 3.0 * risk_per_sh, 2),
+                        shares=trap_res.shares,
+                        notional_value_rs=trap_res.notional_value_rs or 0.0,
+                        actual_risk_rs=trap_res.actual_risk_rs or 0.0,
+                        risk_pct=trap_res.risk_pct or 0.0,
+                        volume_multiple=1.5,
+                        sector=sector,
+                        details=trap_res.to_dict(),
+                    )
+                )
+
+        # -------------------------------------------------------------
+        # Strategy 5: LAST LIGHT (Pre-Close Momentum Continuation)
+        # -------------------------------------------------------------
+        if len(candles_15m) >= 8:
+            ll_res = self.last_light_engine.evaluate_setup(
+                symbol=symbol,
+                candles_15m=candles_15m,
+                bucket_median_vol=hist_median_volume_15m,
+            )
+            if ll_res.passed_all_gates and ll_res.entry_price and ll_res.stop_price and ll_res.shares:
+                entry = ll_res.entry_price
+                stop = ll_res.stop_price
+                risk_per_sh = entry - stop
+                conviction = round(
+                    (0.35 * 0.80)
+                    + (0.30 * 1.0)
+                    + (0.20 * math.tanh(relative_strength / 10.0))
+                    + (0.15 * max(0.0, norm_ofi)),
+                    3,
+                )
+                signals.append(
+                    UnifiedTradeSignal(
+                        symbol=symbol,
+                        strategy_type=StrategyType.LAST_LIGHT.value,
+                        conviction_score=conviction,
+                        entry_price=entry,
+                        stop_price=stop,
+                        target_tranche1=ll_res.target_tranche1 or round(entry + 1.5 * risk_per_sh, 2),
+                        target_tranche2=ll_res.target_tranche2 or round(entry + 3.0 * risk_per_sh, 2),
+                        shares=ll_res.shares,
+                        notional_value_rs=ll_res.notional_value_rs or 0.0,
+                        actual_risk_rs=ll_res.actual_risk_rs or 0.0,
+                        risk_pct=ll_res.risk_pct or 0.0,
+                        volume_multiple=1.5,
+                        sector=sector,
+                        details=ll_res.to_dict(),
+                    )
+                )
+
+        # -------------------------------------------------------------
+        # Strategy 6: RECOIL (Volume-Climax Exhaustion Fade)
+        # -------------------------------------------------------------
+        if len(candles_15m) >= 8:
+            recoil_res = self.recoil_engine.evaluate_setup(
+                symbol=symbol,
+                candles_15m=candles_15m,
+                bucket_median_vol=hist_median_volume_15m,
+            )
+            if recoil_res.passed_all_gates and recoil_res.entry_price and recoil_res.stop_price and recoil_res.shares:
+                entry = recoil_res.entry_price
+                stop = recoil_res.stop_price
+                risk_per_sh = abs(entry - stop)
+                conviction = round(
+                    (0.35 * 0.80)
+                    + (0.30 * 1.0)
+                    + (0.20 * math.tanh(relative_strength / 10.0))
+                    + (0.15 * max(0.0, norm_ofi)),
+                    3,
+                )
+                signals.append(
+                    UnifiedTradeSignal(
+                        symbol=symbol,
+                        strategy_type=StrategyType.RECOIL.value,
+                        conviction_score=conviction,
+                        entry_price=entry,
+                        stop_price=stop,
+                        target_tranche1=recoil_res.target_price or round(entry + 1.5 * risk_per_sh, 2),
+                        target_tranche2=recoil_res.target_price or round(entry + 3.0 * risk_per_sh, 2),
+                        shares=recoil_res.shares,
+                        notional_value_rs=recoil_res.notional_value_rs or 0.0,
+                        actual_risk_rs=recoil_res.actual_risk_rs or 0.0,
+                        risk_pct=recoil_res.risk_pct or 0.0,
+                        volume_multiple=2.2,
+                        sector=sector,
+                        details=recoil_res.to_dict(),
                     )
                 )
 

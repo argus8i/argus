@@ -190,3 +190,51 @@ def test_transaction_cost_calculator():
     assert costs_sell["stt"] == 25.75  # 0.025% of 1,03,000 = 25.75
     assert costs_sell["stamp_duty"] == 0.0  # Zero stamp duty on sell
     assert costs_sell["total_cost"] > 50.0
+
+
+def test_tranche2_target_runner_hit_exits_at_full_target():
+    # Entry: 1000, Stop: 980, Risk: 20/sh, 10 shares (5 T1, 5 T2)
+    # T1 target: 1030.0 (+1.5R), T2 target: 1060.0 (+3.0R)
+    bracket = BracketOrderManager.create_bracket("brk_runner", "CDSL", 1000.0, 980.0, 10, target_1_rr=1.5, target_2_rr=3.0)
+    assert bracket.t1_target_price == 1030.0
+    assert bracket.t2_target_price == 1060.0
+
+    # Step 1: Hit T1 at 1032 with execution evidence
+    t1_state = BracketOrderManager.update_bracket_quote(
+        bracket=bracket,
+        ltp=1032.0,
+        tick_high=1035.0,
+        execution_evidence=True,
+    )
+    assert t1_state.is_t1_target_filled is True
+    assert t1_state.t1_exit_price == 1030.0
+    assert t1_state.is_t2_breakeven_trailed is True
+    assert t1_state.t2_current_stop_price == 1000.0
+    assert t1_state.terminal_state is None  # T2 runner still active
+
+    # Step 2: Quote touches 1062 without execution evidence -> must NOT fill T2
+    probe_state = BracketOrderManager.update_bracket_quote(
+        bracket=t1_state,
+        ltp=1062.0,
+        tick_high=1065.0,
+        execution_evidence=False,
+    )
+    assert probe_state.is_t2_target_filled is False
+    assert probe_state.terminal_state is None
+
+    # Step 3: Hits T2 with execution evidence -> Fills at 1060.0 (+3.0R)
+    final_state = BracketOrderManager.update_bracket_quote(
+        bracket=t1_state,
+        ltp=1062.0,
+        tick_high=1065.0,
+        execution_evidence=True,
+    )
+    assert final_state.is_t2_target_filled is True
+    assert final_state.t2_exit_price == 1060.0
+    assert final_state.terminal_state == "TARGET_FILLED_FULL"
+    # Gross PnL: 5 * 30 + 5 * 60 = 150 + 300 = 450 Rs
+    assert final_state.realized_pnl_gross == 450.0
+    assert final_state.total_friction_cost > 0.0
+    assert final_state.realized_pnl_net == round(450.0 - final_state.total_friction_cost, 2)
+    assert final_state.realized_pnl_net > 400.0  # Captures full runner upside
+

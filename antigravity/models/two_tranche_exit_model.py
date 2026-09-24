@@ -63,6 +63,8 @@ class TrancheAllocation:
     tranche1_rr: float
     notional_value: float
     total_rupee_risk: float
+    tranche2_target: Optional[float] = None
+    tranche2_rr: float = 3.0
 
 
 @dataclass
@@ -91,6 +93,7 @@ class TwoTrancheState:
     combined_mtm_pnl: float
     total_realized_pnl: float
     combined_risk_state: str
+    t2_target: Optional[float] = None
     realized_source: str = "NONE_PENDING_FILL_LEDGER"
     qualification_eligible: bool = False
     research_only: bool = True
@@ -114,17 +117,18 @@ class TwoTrancheExitModel:
         entry_price: float,
         stop_price: float,
         total_shares: int,
-        target_1_rr: float = 1.5
+        target_1_rr: float = 1.5,
+        target_2_rr: float = 3.0,
     ) -> TrancheAllocation:
         """
         Partitions total shares into Tranche 1 (profit bank) and Tranche 2 (swing runner).
         Fails closed on invalid inputs.
         """
-        for val in [entry_price, stop_price, target_1_rr]:
+        for val in [entry_price, stop_price, target_1_rr, target_2_rr]:
             if (isinstance(val, bool) or not isinstance(val, numbers.Real)
                     or not math.isfinite(float(val)) or float(val) <= 0):
                 raise ValueError("FAIL-CLOSED: Invalid entry or stop price.")
-        entry_price, stop_price, target_1_rr = map(float, (entry_price, stop_price, target_1_rr))
+        entry_price, stop_price, target_1_rr, target_2_rr = map(float, (entry_price, stop_price, target_1_rr, target_2_rr))
         entry_price, stop_price = round(entry_price, 2), round(stop_price, 2)
         if stop_price >= entry_price:
             raise ValueError("FAIL-CLOSED: Stop price must be strictly below entry price.")
@@ -135,6 +139,7 @@ class TwoTrancheExitModel:
 
         risk_per_sh = round(entry_price - stop_price, 3)
         t1_target = round(entry_price + (target_1_rr * risk_per_sh), 2)
+        t2_target = round(entry_price + (target_2_rr * risk_per_sh), 2)
 
         if total_shares == 1:
             t1_shares = 1
@@ -156,7 +161,9 @@ class TwoTrancheExitModel:
             tranche1_target=t1_target,
             tranche1_rr=target_1_rr,
             notional_value=notional,
-            total_rupee_risk=total_risk
+            total_rupee_risk=total_risk,
+            tranche2_target=t2_target,
+            tranche2_rr=target_2_rr,
         )
 
     @staticmethod
@@ -191,7 +198,8 @@ class TwoTrancheExitModel:
         # Validate allocation against its source inputs, including mutated dataclasses.
         expected = TwoTrancheExitModel.allocate_tranches(
             allocation.entry_price, allocation.initial_stop,
-            allocation.total_shares, allocation.tranche1_rr)
+            allocation.total_shares, allocation.tranche1_rr,
+            allocation.tranche2_rr)
         if allocation != expected:
             raise ValueError("INVALID_ALLOCATION")
         entry, stop = allocation.entry_price, allocation.initial_stop
@@ -213,8 +221,9 @@ class TwoTrancheExitModel:
         low = min(ltp, tick_low) if tick_low is not None else ltp
         stop_hit = low <= stop
         target_hit = peak >= allocation.tranche1_target
+        t2_target_hit = (peak >= allocation.tranche2_target) if allocation.tranche2_target is not None else False
         ambiguous = current_state is None and stop_hit and target_hit
-        def next_status(previous, shares, has_target=False, eod=False):
+        def next_status(previous, shares, has_target=False, is_t2=False, eod=False):
             if stop_hit:
                 return TrancheStatus.PENDING_STOP_EXIT
             if previous in PENDING_TRANCHE_STATES:
@@ -225,11 +234,13 @@ class TwoTrancheExitModel:
                 return TrancheStatus.PENDING_EOD_SQUAREOFF
             if has_target and target_hit:
                 return TrancheStatus.PENDING_TARGET_EXIT
+            if is_t2 and t2_target_hit:
+                return TrancheStatus.PENDING_TARGET_EXIT
             return TrancheStatus.ACTIVE_INITIAL_STOP
         t1 = next_status(current_state.t1_status if current_state else None,
-                         allocation.tranche1_shares, True, is_eod_squareoff)
+                         allocation.tranche1_shares, has_target=True, eod=is_eod_squareoff)
         t2 = next_status(current_state.t2_status if current_state else None,
-                         allocation.tranche2_shares)
+                         allocation.tranche2_shares, is_t2=True)
         mtm1 = round(allocation.tranche1_shares * (ltp - entry), 2)
         mtm2 = round(allocation.tranche2_shares * (ltp - entry), 2)
         return TwoTrancheState(
@@ -238,7 +249,8 @@ class TwoTrancheExitModel:
             t1_target=allocation.tranche1_target, t1_realized_pnl=0.0,
             t1_unrealized_pnl=mtm1, t2_shares=allocation.tranche2_shares,
             t2_status=t2, t2_active_sl=stop, t2_realized_pnl=0.0,
-            t2_unrealized_pnl=mtm2, combined_mtm_pnl=round(mtm1 + mtm2, 2),
+            t2_unrealized_pnl=mtm2, t2_target=allocation.tranche2_target,
+            combined_mtm_pnl=round(mtm1 + mtm2, 2),
             total_realized_pnl=0.0,
             combined_risk_state=("AMBIGUOUS_ORDER" if ambiguous else
                                  "OCO_CONFLICT_PENDING_STOP_PRIORITY"
