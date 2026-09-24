@@ -211,7 +211,21 @@ class DhanFeedBridge:
         self.heartbeat_path = output_dir / "dhan_feed_heartbeat.json"
 
         # Symbol & Scrip mapping
-        self.symbols = symbols or list(DEFAULT_TRACK2_SYMBOLS)
+        if symbols is not None:
+            self.symbols = list(symbols)
+        else:
+            dyn_path = self.output_dir / "dynamic_universe.json"
+            loaded_syms = []
+            if dyn_path.is_file():
+                try:
+                    dyn_data = json.loads(dyn_path.read_text(encoding="utf-8"))
+                    if isinstance(dyn_data.get("symbols"), list) and dyn_data["symbols"]:
+                        loaded_syms = [str(s).strip() for s in dyn_data["symbols"] if str(s).strip()]
+                        logger.info(f"Loaded {len(loaded_syms)} dynamic universe symbols from {dyn_path.name}")
+                except Exception as e:
+                    logger.warning(f"Could not load dynamic universe from {dyn_path}: {e}")
+            self.symbols = loaded_syms if loaded_syms else list(DEFAULT_TRACK2_SYMBOLS)
+
         if "NIFTY50" not in self.symbols and "NIFTY 50" not in self.symbols:
             self.symbols.append("NIFTY50")
 

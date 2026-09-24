@@ -244,3 +244,23 @@ def test_dhan_feed_to_daily_paper_desk_session_valid_integration(tmp_path):
         assert len(rec["bars"]) == 2
         assert rec["bars"][0]["open"] == 100.0
         assert rec["bars"][1]["close"] == 107.0
+
+
+def test_dhan_feed_bridge_dynamic_universe_loading(tmp_path):
+    """Verifies DhanFeedBridge dynamically loads symbols from dynamic_universe.json when present."""
+    dyn_file = tmp_path / "dynamic_universe.json"
+    dyn_data = {
+        "session_date": "2026-09-24",
+        "symbols": ["TATAMOTORS", "RELIANCE", "INFY", "NATIONALUM"]
+    }
+    dyn_file.write_text(json.dumps(dyn_data), encoding="utf-8")
+
+    cfg = {"client_id": "test", "access_token": "test"}
+    bridge = DhanFeedBridge(config=cfg, symbols=None, output_dir=tmp_path, test_mode=True)
+
+    assert "TATAMOTORS" in bridge.symbols
+    assert "RELIANCE" in bridge.symbols
+    assert "INFY" in bridge.symbols
+    assert "NATIONALUM" in bridge.symbols
+    assert "NIFTY50" in bridge.symbols
+
