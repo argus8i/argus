@@ -148,3 +148,43 @@ def test_multi_strategy_engine_ranking_and_sector_capping():
     assert allocated[1].symbol == "METAL_B"
     assert allocated[2].symbol == "AUTO_A"
     assert "METAL_C" not in [s.symbol for s in allocated]
+
+
+def test_shadow_mode_isolation_and_filtering():
+    """
+    Verifies Tri-Agent Consensus Mandate (ChatGPT / Codex & Claude Audit 2026-09-24):
+    - ORB_MOMENTUM is the active control baseline (is_shadow=False).
+    - Unproven strategies (VWAP, SQUEEZE, etc.) are quarantined to shadow mode (is_shadow=True).
+    - When allow_shadow=False, rank_and_allocate strictly allocates capital only to active baseline signals.
+    """
+    engine = MultiStrategyEngine(risk_budget_rs=1500.0, max_portfolio_slots=3, max_per_sector=2)
+
+    active_orb = UnifiedTradeSignal(
+        symbol="SBIN", strategy_type="ORB_MOMENTUM", conviction_score=0.82,
+        entry_price=800.0, stop_price=790.0, target_tranche1=815.0, target_tranche2=830.0,
+        shares=150, notional_value_rs=120000.0, actual_risk_rs=1500.0, risk_pct=1.25,
+        volume_multiple=2.2, sector="Banking", details={}, is_shadow=False
+    )
+    shadow_vwap = UnifiedTradeSignal(
+        symbol="TATASTEEL", strategy_type="VWAP_RECLAIM", conviction_score=0.95,
+        entry_price=150.0, stop_price=147.0, target_tranche1=154.5, target_tranche2=159.0,
+        shares=500, notional_value_rs=75000.0, actual_risk_rs=1500.0, risk_pct=2.0,
+        volume_multiple=3.0, sector="Metals", details={}, is_shadow=True
+    )
+    shadow_recoil = UnifiedTradeSignal(
+        symbol="INFY", strategy_type="RECOIL", conviction_score=0.90,
+        entry_price=1900.0, stop_price=1870.0, target_tranche1=1945.0, target_tranche2=1990.0,
+        shares=50, notional_value_rs=95000.0, actual_risk_rs=1500.0, risk_pct=1.58,
+        volume_multiple=2.5, sector="IT", details={}, is_shadow=True
+    )
+
+    # In Shadow Logging Mode (allow_shadow=True), all signals are visible in rankings
+    all_signals = engine.rank_and_allocate([active_orb, shadow_vwap, shadow_recoil], allow_shadow=True)
+    assert len(all_signals) == 3
+    assert all_signals[0].symbol == "TATASTEEL"
+
+    # In Production Execution Mode (allow_shadow=False), only verified baseline signals compete for capital
+    prod_allocated = engine.rank_and_allocate([active_orb, shadow_vwap, shadow_recoil], allow_shadow=False)
+    assert len(prod_allocated) == 1
+    assert prod_allocated[0].symbol == "SBIN"
+    assert prod_allocated[0].is_shadow is False

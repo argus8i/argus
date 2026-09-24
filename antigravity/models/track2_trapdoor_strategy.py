@@ -227,7 +227,7 @@ class TrapdoorStrategy:
         # 5. Economic Friction Hurdle Check
         # Target gross gain: q * g. Must be >= 3 * all_in_cost
         gross_gain = shares * (target_price - entry_price)
-        est_cost = (notional_rs + (shares * target_price)) * self.est_friction_pct
+        est_cost = round(notional_rs * self.est_friction_pct, 2)
         if gross_gain < 3.0 * est_cost:
             return TrapdoorSignal(
                 symbol=symbol,
@@ -252,3 +252,6 @@ class TrapdoorStrategy:
             risk_pct=round(risk_pct, 2),
             max_holding_bars=4,
         )
+
+    # Alias for MultiStrategyEngine compatibility
+    evaluate_setup = evaluate

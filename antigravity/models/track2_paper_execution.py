@@ -485,7 +485,7 @@ class BracketOrderManager:
         total_shares: int,
         target_1_rr: float = 1.5,
         target_2_rr: float = 3.0,
-        product_type: str = "CNC",
+        product_type: str = "MIS",
         signal_price: Optional[float] = None,
         limit_price: Optional[float] = None,
     ) -> BracketOrderState:
@@ -555,7 +555,7 @@ class BracketOrderManager:
         Evaluates bracket state transitions upon receipt of a new quote/tick:
         - Checks stop breach (low <= active_stop) with gap slippage modeling.
         - Checks Tranche 1 target reach (high >= t1_target).
-        - Enforces broker cutoffs for MIS orders (15:12 CAS or 15:25 non-CAS).
+        - Enforces broker cutoffs for MIS orders (15:08 CAS or 15:25 non-CAS).
           CNC delivery positions roll overnight without broker squareoff.
         """
         if bracket.terminal_state is not None:
@@ -565,9 +565,9 @@ class BracketOrderManager:
         low = min(ltp, tick_low if tick_low is not None else ltp)
         ts = timestamp or datetime.now().isoformat()
 
-        # 1. Check Broker Cutoff (15:12 CAS or 15:25 Non-CAS) for MIS orders ONLY
+        # 1. Check Broker Cutoff (15:08 CAS pre-emption or 15:25 Non-CAS) for MIS orders ONLY
         if bracket.product_type == "MIS":
-            cutoff_time = dtime(15, 12) if is_cas_eligible else dtime(15, 25)
+            cutoff_time = dtime(15, 8) if is_cas_eligible else dtime(15, 25)
             if current_time_ist is not None and current_time_ist >= cutoff_time:
                 # Force MIS Market Squareoff at LTP
                 bracket.is_eod_squared_off = True

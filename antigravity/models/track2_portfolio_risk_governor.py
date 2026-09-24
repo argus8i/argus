@@ -103,6 +103,7 @@ class PortfolioRiskGovernor:
         sector_mapping: Optional[Mapping[str, str]] = None,
         max_concurrent_positions: Optional[int] = None,
         enforce_var_elm_gate: bool = False,
+        max_single_slot_notional_rs: Optional[float] = None,
     ):
         for val in [max_single_trade_risk_rs, max_aggregate_risk_rs, total_capital_allocation_rs]:
             if (
@@ -127,6 +128,11 @@ class PortfolioRiskGovernor:
         self.sector_mapping = dict(sector_mapping or DEFAULT_SECTOR_MAP)
         self.max_concurrent_positions = int(max_concurrent_positions) if max_concurrent_positions is not None else 3
         self.enforce_var_elm_gate = bool(enforce_var_elm_gate)
+        self.max_single_slot_notional_rs = (
+            round(float(max_single_slot_notional_rs), 2)
+            if max_single_slot_notional_rs is not None
+            else None
+        )
 
     @classmethod
     def calibrate_for_corpus(
@@ -137,6 +143,7 @@ class PortfolioRiskGovernor:
         cash_buffer_rs: float = 75000.0,
         max_positions_per_sector: int = 2,
         sector_mapping: Optional[Mapping[str, str]] = None,
+        enforce_slot_cap: bool = False,
     ) -> "PortfolioRiskGovernor":
         """
         Calibrates the PortfolioRiskGovernor specifically for a retail/prop corpus (e.g. Rs 2L - 3L).
@@ -146,7 +153,7 @@ class PortfolioRiskGovernor:
           - Max concurrent positions: 3
           - Aggregate open risk cap: 3 * Rs 1,500 = Rs 4,500 (1.80% of corpus)
           - Unencumbered Cash Buffer: Rs 75,000 (30.0% of corpus)
-          - Max active deployable notional: Rs 1,75,000 (Rs 58,333.33 per slot)
+          - Max active deployable notional: Rs 1,75,000 (Rs 58,333.33 per slot if enforce_slot_cap=True)
           - Mathematical Shortfall Proof: At max allowable VAR+ELM of 30.0%,
             max blocked delivery retention = 0.30 * Rs 1,75,000 = Rs 52,500 < Rs 75,000 cash buffer.
             Net margin surplus = +Rs 22,500. SEBI shortfall probability identically 0.00%.
@@ -157,6 +164,7 @@ class PortfolioRiskGovernor:
         
         deployable_capital = round(corpus_rs - cash_buffer_rs, 2)
         aggregate_risk_cap = round(risk_per_trade_rs * max_concurrent_positions, 2)
+        slot_cap = round(deployable_capital / max_concurrent_positions, 2) if enforce_slot_cap else None
 
         return cls(
             max_single_trade_risk_rs=risk_per_trade_rs,
@@ -166,6 +174,7 @@ class PortfolioRiskGovernor:
             sector_mapping=sector_mapping,
             max_concurrent_positions=max_concurrent_positions,
             enforce_var_elm_gate=True,
+            max_single_slot_notional_rs=slot_cap,
         )
 
     def resolve_sector(self, symbol: str) -> str:
@@ -319,6 +328,17 @@ class PortfolioRiskGovernor:
                 sym,
                 "SINGLE_TRADE_RISK_EXCEEDED",
                 f"Proposed risk Rs {proposed_risk:.2f} exceeds single trade ceiling Rs {self.max_single_trade_risk_rs:.2f}.",
+                sector=sector,
+                proposed_risk=proposed_risk,
+                proposed_notional=proposed_notional,
+            )
+
+        # 1c. Single Slot Notional Cap Check
+        if self.max_single_slot_notional_rs and proposed_notional > self.max_single_slot_notional_rs + 1e-4:
+            return self._rejected(
+                sym,
+                "SLOT_CAP_EXCEEDED",
+                f"Proposed notional Rs {proposed_notional:.2f} exceeds single slot cap Rs {self.max_single_slot_notional_rs:.2f}.",
                 sector=sector,
                 proposed_risk=proposed_risk,
                 proposed_notional=proposed_notional,

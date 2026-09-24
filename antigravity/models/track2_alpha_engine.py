@@ -363,6 +363,75 @@ class MultiTimeframeAlphaEngine:
                 "error": str(exc),
             }
 
+    @classmethod
+    def evaluate_candidate(
+        cls,
+        symbol: str,
+        candles_15m: Sequence[Mapping[str, Any]],
+        hist_median_volume_15m: float,
+        daily_ema20: float,
+        daily_ema50: float,
+        atr14_points: float,
+        market_regime_allows_orb: bool = True,
+        depth_snapshots: Optional[Sequence[Any]] = None,
+        risk_budget_rs: float = 1500.0,
+    ) -> AlphaEvaluationResult:
+        """
+        Adapts sequential 15m candle stream to evaluate_15m_orb.
+        Requires at least 2 completed bars:
+          - Bar 0 (09:15-09:30): Establishes OR High / OR Low
+          - Bar 1..N: Evaluates breakout on the latest completed bar
+        """
+        sym = str(symbol).strip().upper()
+        if not candles_15m or len(candles_15m) < 2:
+            return AlphaEvaluationResult(
+                symbol=sym,
+                decision="DATA_INVALID",
+                passed_all_gates=False,
+                rejection_reason="Insufficient candles (minimum 2 15m bars required for ORB)",
+                entry_price=None, stop_price=None, target_price=None,
+                shares=None, notional_value_rs=None, actual_risk_rs=None,
+                volume_multiple=None, min_volume_required=None,
+                extension_points=None, max_extension_allowed=None,
+                paper_instruction=None,
+                health_state=CandidateHealthState.RANGE_BOUND_CHOP.value,
+            )
+
+        opening_bar = candles_15m[0]
+        latest_bar = candles_15m[-1]
+
+        or_high = float(opening_bar.get("high", 0.0))
+        or_low = float(opening_bar.get("low", 0.0))
+        current_price = float(latest_bar.get("close", 0.0))
+        bucket_vol = int(latest_bar.get("volume", 0))
+
+        regime_snapshot = MarketRegimeSnapshot(
+            state=MarketRegimeState.BULLISH_EXPANSION if market_regime_allows_orb else MarketRegimeState.DISTRIBUTION_GATED,
+            nifty_ltp=current_price,
+            nifty_or_high=or_high,
+            nifty_or_low=or_low,
+            ad_ratio=1.5 if market_regime_allows_orb else 0.5,
+            advances=35 if market_regime_allows_orb else 15,
+            declines=15 if market_regime_allows_orb else 35,
+            allow_standard_orb=market_regime_allows_orb,
+            min_volume_multiple=2.5,
+            reason="Adaptive candidate evaluation",
+        )
+
+        return cls.evaluate_15m_orb(
+            symbol=sym,
+            current_price=current_price,
+            or_high=or_high,
+            or_low=or_low,
+            bucket_volume=bucket_vol,
+            historical_bucket_volume_median=int(hist_median_volume_15m) if hist_median_volume_15m > 0 else 1000,
+            atr14_points=atr14_points,
+            regime_snapshot=regime_snapshot,
+            daily_ema20=daily_ema20,
+            daily_ema50=daily_ema50,
+            risk_budget_rs=risk_budget_rs,
+        )
+
 
 # Canonical VECTOR Alias for ARGUS 8i // BEACON
 VectorAlphaEngine = MultiTimeframeAlphaEngine

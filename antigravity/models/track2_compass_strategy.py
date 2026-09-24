@@ -260,7 +260,7 @@ class CompassStrategy:
 
         # 6. Economic Friction Hurdle Check
         gross_gain = shares * (target_price - entry_price)
-        est_cost = (notional_rs + (shares * target_price)) * self.est_friction_pct
+        est_cost = round(notional_rs * self.est_friction_pct, 2)
         if gross_gain < 3.0 * est_cost:
             return CompassSignal(
                 symbol=symbol, sector=sector,

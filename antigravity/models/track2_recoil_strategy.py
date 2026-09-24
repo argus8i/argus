@@ -277,7 +277,7 @@ class RecoilStrategy:
         # 6. Economic Friction Hurdle (0.106% round trip)
         target_dist = abs(target_price - entry_price)
         gross_target_gain = round(shares * target_dist, 2)
-        estimated_friction = round(notional_val * 0.00106 * 2.0, 2)
+        estimated_friction = round(notional_val * 0.00106, 2)
         if gross_target_gain < 3.0 * estimated_friction:
             return RecoilSignal(
                 symbol=symbol,

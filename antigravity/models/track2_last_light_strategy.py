@@ -268,7 +268,7 @@ class LastLightStrategy:
         target1 = round(entry_price + (1.5 * risk_per_sh), 2)
         target2 = round(entry_price + (3.0 * risk_per_sh), 2)
         gross_target_gain = round(shares * 1.5 * risk_per_sh, 2)
-        estimated_friction = round(notional_val * 0.00106 * 2.0, 2)  # Entry + exit round trip
+        estimated_friction = round(notional_val * 0.00106, 2)  # Entry + exit round trip
         if gross_target_gain < 3.0 * estimated_friction:
             return LastLightSignal(
                 symbol=symbol,

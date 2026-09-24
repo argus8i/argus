@@ -57,6 +57,7 @@ class UnifiedTradeSignal:
     volume_multiple: float
     sector: str
     details: Dict[str, Any]
+    is_shadow: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -98,6 +99,12 @@ class MultiStrategyEngine:
         atr14_points: float,
         depth_snapshots: Optional[Sequence[Any]] = None,
         relative_strength: float = 0.0,
+        sector_candle_now: Optional[Mapping[str, Any]] = None,
+        sector_candle_4_bars_ago: Optional[Mapping[str, Any]] = None,
+        market_candle_now: Optional[Mapping[str, Any]] = None,
+        market_candle_4_bars_ago: Optional[Mapping[str, Any]] = None,
+        sector_breadth: float = 0.60,
+        stock_sector_beta: float = 1.0,
     ) -> List[UnifiedTradeSignal]:
         """
         Evaluates all strategies concurrently for a single candidate symbol.
@@ -165,6 +172,7 @@ class MultiStrategyEngine:
                         volume_multiple=round(vol_mult, 2),
                         sector=sector,
                         details=orb_res.to_dict(),
+                        is_shadow=False,
                     )
                 )
 
@@ -205,6 +213,7 @@ class MultiStrategyEngine:
                     volume_multiple=round(vol_mult, 2),
                     sector=sector,
                     details=vwap_res.to_dict(),
+                    is_shadow=True,
                 )
             )
 
@@ -247,6 +256,7 @@ class MultiStrategyEngine:
                         volume_multiple=round(vol_mult, 2),
                         sector=sector,
                         details=squeeze_res.to_dict(),
+                        is_shadow=True,
                     )
                 )
 
@@ -286,6 +296,7 @@ class MultiStrategyEngine:
                         volume_multiple=1.5,
                         sector=sector,
                         details=trap_res.to_dict(),
+                        is_shadow=True,
                     )
                 )
 
@@ -325,6 +336,7 @@ class MultiStrategyEngine:
                         volume_multiple=1.5,
                         sector=sector,
                         details=ll_res.to_dict(),
+                        is_shadow=True,
                     )
                 )
 
@@ -364,6 +376,60 @@ class MultiStrategyEngine:
                         volume_multiple=2.2,
                         sector=sector,
                         details=recoil_res.to_dict(),
+                        is_shadow=True,
+                    )
+                )
+
+        # -------------------------------------------------------------
+        # Strategy 7: COMPASS (Cross-Sectional Sector Leadership) [SHADOW]
+        # -------------------------------------------------------------
+        if (
+            len(candles_15m) >= 5
+            and sector_candle_now is not None
+            and sector_candle_4_bars_ago is not None
+            and market_candle_now is not None
+            and market_candle_4_bars_ago is not None
+        ):
+            compass_res = self.compass_engine.evaluate_setup(
+                symbol=symbol,
+                sector=sector,
+                candles_15m=candles_15m,
+                sector_candle_now=sector_candle_now,
+                sector_candle_4_bars_ago=sector_candle_4_bars_ago,
+                market_candle_now=market_candle_now,
+                market_candle_4_bars_ago=market_candle_4_bars_ago,
+                sector_breadth=sector_breadth,
+                stock_sector_beta=stock_sector_beta,
+                bucket_median_vol=hist_median_volume_15m,
+            )
+            if compass_res.passed_all_gates and compass_res.entry_price and compass_res.stop_price and compass_res.shares:
+                entry = compass_res.entry_price
+                stop = compass_res.stop_price
+                risk_per_sh = abs(entry - stop)
+                conviction = round(
+                    (0.35 * 0.80)
+                    + (0.30 * 1.0)
+                    + (0.20 * math.tanh((compass_res.residual_strength or 0.0) / 10.0))
+                    + (0.15 * max(0.0, norm_ofi)),
+                    3,
+                )
+                signals.append(
+                    UnifiedTradeSignal(
+                        symbol=symbol,
+                        strategy_type=StrategyType.COMPASS.value,
+                        conviction_score=conviction,
+                        entry_price=entry,
+                        stop_price=stop,
+                        target_tranche1=compass_res.target_price or round(entry + 1.5 * risk_per_sh, 2),
+                        target_tranche2=round(entry + 3.0 * risk_per_sh, 2),
+                        shares=compass_res.shares,
+                        notional_value_rs=compass_res.notional_value_rs or 0.0,
+                        actual_risk_rs=compass_res.actual_risk_rs or 0.0,
+                        risk_pct=compass_res.risk_pct or 0.0,
+                        volume_multiple=1.5,
+                        sector=sector,
+                        details=compass_res.to_dict(),
+                        is_shadow=True,
                     )
                 )
 
@@ -374,17 +440,21 @@ class MultiStrategyEngine:
         candidate_signals: Sequence[UnifiedTradeSignal],
         existing_sector_counts: Optional[Mapping[str, int]] = None,
         available_slots: Optional[int] = None,
+        allow_shadow: bool = True,
     ) -> List[UnifiedTradeSignal]:
         """
         Ranks all incoming signals across all strategies by conviction score,
         enforcing sector concentration limits (max 2 per sector) and slot availability.
+        If allow_shadow is False, filters out shadow-mode signals so only verified
+        baseline signals compete for capital.
         """
         slots = self.max_portfolio_slots if available_slots is None else min(self.max_portfolio_slots, available_slots)
         if slots <= 0 or not candidate_signals:
             return []
 
+        candidates = [s for s in candidate_signals if allow_shadow or not s.is_shadow]
         # Sort descending by conviction score
-        sorted_signals = sorted(candidate_signals, key=lambda s: s.conviction_score, reverse=True)
+        sorted_signals = sorted(candidates, key=lambda s: s.conviction_score, reverse=True)
 
         selected: List[UnifiedTradeSignal] = []
         sector_counts: Dict[str, int] = dict(existing_sector_counts or {})
