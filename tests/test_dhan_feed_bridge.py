@@ -183,6 +183,58 @@ def test_dhan_feed_bridge_stale_watchdog_freeze(tmp_path):
     assert hb_payload["data_valid"] is False
 
 
+def test_dhan_feed_bridge_candles_stale_watchdog_freeze(tmp_path):
+    """
+    Regression for the candle-path staleness gap: write_live_candles() must
+    invalidate data_valid when the feed has gone dark, exactly like its
+    sibling write_live_depth() already does (test_dhan_feed_bridge_stale_
+    watchdog_freeze above). Before this fix, a dead/frozen feed kept
+    reporting data_valid=True in live_candles_track2.json forever, as long
+    as the daemon process stayed alive and kept re-writing the same frozen
+    in-memory bars with a fresh local_write_time.
+    """
+    from datetime import timedelta
+    dummy_config = {
+        "client_id": "1100123456",
+        "access_token": "valid_token_string",
+    }
+    bridge = DhanFeedBridge(dummy_config, output_dir=tmp_path, test_mode=True)
+    bridge.is_connected = True
+
+    simulated_packet = {
+        "type": "Full Data",
+        "exchange_segment": 1,
+        "security_id": 12018,
+        "LTP": "42.25",
+        "volume": 2500000,
+        "open": "42.00",
+        "close": "41.50",
+        "high": "42.50",
+        "low": "41.80",
+    }
+    bridge.handle_message(None, simulated_packet)
+
+    # Initial write: ticks are fresh.
+    bridge.write_live_candles()
+    candles_path = tmp_path / "dhan_live_candles_test.json"
+    payload = json.loads(candles_path.read_text())
+    assert payload["data_valid"] is True
+
+    # Simulate the feed going dark for far longer than the 12.0s ceiling,
+    # with no new ticks arriving -- the in-memory bars never change, but the
+    # daemon process (and its periodic flush loop) is still alive.
+    bridge.last_tick_time = datetime.now(timezone.utc) - timedelta(hours=2)
+
+    bridge.write_live_candles()
+    stale_payload = json.loads(candles_path.read_text())
+    assert stale_payload["data_valid"] is False, (
+        "Frozen candle bars from a dead feed must not be reported as valid "
+        "just because the write loop is still running."
+    )
+    assert stale_payload["stats"]["is_stale"] is True
+    assert stale_payload["stats"]["tick_delta_sec"] >= 3600.0
+
+
 def test_dhan_feed_to_daily_paper_desk_session_valid_integration(tmp_path):
     """
     Codex Finding R07:
@@ -247,10 +299,14 @@ def test_dhan_feed_to_daily_paper_desk_session_valid_integration(tmp_path):
 
 
 def test_dhan_feed_bridge_dynamic_universe_loading(tmp_path):
-    """Verifies DhanFeedBridge dynamically loads symbols from dynamic_universe.json when present."""
+    """Verifies DhanFeedBridge dynamically loads symbols from a fresh, qualified dynamic_universe.json."""
+    from antigravity.models.session_manifest import IST
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
     dyn_file = tmp_path / "dynamic_universe.json"
     dyn_data = {
-        "session_date": "2026-09-24",
+        "session_date": today_str,
+        "qualification_eligible": True,
+        "universe_status": "PROSPECTIVE_QUALIFIED_BASKET",
         "symbols": ["TATAMOTORS", "RELIANCE", "INFY", "NATIONALUM"]
     }
     dyn_file.write_text(json.dumps(dyn_data), encoding="utf-8")
@@ -263,4 +319,44 @@ def test_dhan_feed_bridge_dynamic_universe_loading(tmp_path):
     assert "INFY" in bridge.symbols
     assert "NATIONALUM" in bridge.symbols
     assert "NIFTY50" in bridge.symbols
+
+
+def test_dhan_feed_bridge_rejects_stale_or_unqualified_dynamic_universe(tmp_path):
+    """
+    Regression: a dynamic_universe.json that is stale (wrong session_date) or
+    still quarantined (qualification_eligible is not True, e.g. the
+    MANUAL_UNVERIFIED_BASKET status track2_dynamic_universe_scanner.
+    freeze_universe() stamps under Red-Team Finding F9) must never be trusted
+    for live subscription -- the bridge must fall back to the fixed default
+    universe instead of silently subscribing to symbols that may since have
+    been delisted, exited F&O, or entered surveillance.
+    """
+    cfg = {"client_id": "test", "access_token": "test"}
+
+    # Case 1: stale session_date (yesterday), otherwise well-formed and "eligible".
+    stale_dir = tmp_path / "stale"
+    stale_dir.mkdir()
+    (stale_dir / "dynamic_universe.json").write_text(json.dumps({
+        "session_date": "2020-01-01",
+        "qualification_eligible": True,
+        "symbols": ["DELISTED_OR_ASM_FLAGGED_SYMBOL", "EXITED_FNO_SYMBOL"],
+    }), encoding="utf-8")
+    bridge_stale = DhanFeedBridge(config=cfg, symbols=None, output_dir=stale_dir, test_mode=True)
+    assert "DELISTED_OR_ASM_FLAGGED_SYMBOL" not in bridge_stale.symbols
+    assert set(bridge_stale.symbols) & set(DEFAULT_TRACK2_SYMBOLS)
+
+    # Case 2: today's date, but still quarantined as MANUAL_UNVERIFIED_BASKET.
+    from antigravity.models.session_manifest import IST
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
+    unqualified_dir = tmp_path / "unqualified"
+    unqualified_dir.mkdir()
+    (unqualified_dir / "dynamic_universe.json").write_text(json.dumps({
+        "session_date": today_str,
+        "qualification_eligible": False,
+        "universe_status": "MANUAL_UNVERIFIED_BASKET",
+        "symbols": ["UNVERIFIED_SYMBOL"],
+    }), encoding="utf-8")
+    bridge_unqualified = DhanFeedBridge(config=cfg, symbols=None, output_dir=unqualified_dir, test_mode=True)
+    assert "UNVERIFIED_SYMBOL" not in bridge_unqualified.symbols
+    assert set(bridge_unqualified.symbols) & set(DEFAULT_TRACK2_SYMBOLS)
 
