@@ -17,8 +17,8 @@ Classes
 - KITE_WEB_SESSION  the 32-session file from kite.zerodha.com/oms (plan rule 1.2.11: never refreshed; kept
                     as the P2 regression reference). QA_ONLY in the parquet layer.
 - UPSTOX_API_V2     Upstox V2 historical-candle API (broker's official endpoint, research/data/upstox_history.py;
-                    Yashu 25 Sep 2026). QA_ONLY until it passes the P3.9 Kite cross-check; then Yashu's
-                    instruction makes it strategy-eligible.
+                    Yashu 25 Sep 2026). Strategy-eligible: passed the Kite cross-check under Yashu's
+                    multi-broker rule (research/data/cross_source.py defaults).
 - HF_UPSTOX_MIRROR  third-party Hugging Face mirror of Upstox 1-minute data (proposed by Antigravity for P7).
                     QA_ONLY until Yashu approves it as a source and it passes the P3.9 cross-source check.
 - UNKNOWN           anything unlabelled. QA_ONLY (fail closed).
@@ -35,7 +35,10 @@ UPSTOX = "UPSTOX_API_V2"
 HF_UPSTOX = "HF_UPSTOX_MIRROR"
 UNKNOWN = "UNKNOWN"
 
-STRATEGY_SOURCES = frozenset({DHAN, SYNTHETIC})
+# UPSTOX_API_V2 promoted 25 Sep 2026 on Yashu's instruction after the Kite cross-check passed under his
+# multi-broker rule (max(2 ticks, 0.20%), >= 99.5% agreement per field, volume reported not gated):
+# research/notes/p3_upstox_report.md section 7.
+STRATEGY_SOURCES = frozenset({DHAN, SYNTHETIC, UPSTOX})
 ALL_SOURCES = frozenset({DHAN, SYNTHETIC, YAHOO, KITE, UPSTOX, HF_UPSTOX, UNKNOWN})
 
 

@@ -113,3 +113,43 @@ python -m research.data.upstox_history xcheck --reference shared/track2_liquid/h
 **Status:** `UPSTOX_API_V2` is still QA_ONLY and nothing has been ingested. Marking it passed needs two decisions that the tolerance change does not cover:
 - the volume tolerance;
 - what to do with the 18 remaining price outliers.
+
+## 7. Final gate under Yashu's rule, promotion and ingest verification (25 Sep 2026)
+
+### The rule
+Yashu's answers: volume is reported, not gated; each field must agree on at least 99.5% of bars.
+- **Stocks:** bar starts identical, and each OHLC field within max(2 ticks, 0.20%) on ≥ 99.5% of bars.
+- **Indices:** no mismatch at all (0.01%).
+- **Volume:** reported only.
+- **Implementation:** the defaults of `research/data/cross_source.py`. The plan's original rule remains available: `compare(..., price_tol_ticks=1, price_tol_pct=0, min_agreement=1.0, gate_volume=True)`.
+
+### Re-run
+```
+python -m research.data.upstox_history xcheck --reference shared/track2_liquid/historical_candles_track2.json --out-root research/outputs/p3/upstox_xcheck_final --report research/outputs/p3/upstox_cross_source_final.json
+```
+**Result: exit 0, PASSED.**
+
+| Check | Result |
+|---|---|
+| Stock field agreement | open 99.95%, high 99.93%, low 99.95%, close 99.87% |
+| Bar starts | identical |
+| NIFTY 50 | exact |
+| Volume outside 1% | 837 bars (reported, not gated) |
+
+**Promotion:** `UPSTOX_API_V2` is now in `STRATEGY_SOURCES` (`research/data/provenance.py`), on Yashu's instruction. The Hugging Face mirror, Yahoo, Kite and unlabelled data stay QA_ONLY.
+
+### Ingest: the 228-series history built by Antigravity
+Antigravity's `scripts/fast_upstox_ingest.py` calls `research.data.upstox_history.build`.
+
+| Check | Result |
+|---|---|
+| Raw integrity | all 13,251 manifest records HTTP 200; every file present; every body SHA-256 matches (13,014 one-minute months + 237 daily; 228 series). `research/outputs/p3/upstox_raw_integrity.json` |
+| Resampling | 97.18 M minutes. 108,000 identical duplicates (the cross-check windows overlapping the monthly ones), **0 conflicts**. 43,206 minutes outside 09:15–15:29 were dropped. 7,980 post-CAS auction bars were dropped. |
+| Validation | 228 series, 1,170 sessions (2022-01-03 to 2026-09-24), 259,815 series-sessions. **99.67% valid.** **209 of 210 stocks** have ≥ 95% valid sessions (worst: GVT&D 92.7%), so P3 acceptance line 1 **passes**. |
+| Invalid sessions | mainly special short sessions (4 and 7 bars across all symbols), plus NON_CONTIGUOUS 459, FIRST_BAR_NOT_0915 241, VOLUME_GAP 156 and OHLC_INCONSISTENT 19. They are excluded and listed per P3.8. |
+| Daily vs intraday | intraday range inside the daily bar on 97.1% of sessions; high/low equal within a tick 83.6%; intraday / daily volume median 0.997 |
+
+### Caveats that stay open
+- **Range bias:** Upstox is wider on 36% of bars, +1.1 bps on average. P7 must run the pre-registered range-shrink sensitivity, with high and low pulled in by 2 ticks.
+- **Survivorship:** only today's 210 F&O names were fetched (`FNO_MEMBERSHIP_CURRENT_LIST`).
+- **Corporate actions:** it is not verified whether Upstox daily bars are adjusted. Check against the NSE bhavcopy.

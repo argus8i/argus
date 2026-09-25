@@ -31,3 +31,6 @@
 | 2026-09-25 | P3 | Cross-source tolerance max(2 ticks, 0.20%) (Yashu) | done | (tolerance commit) | Upstox re-run still FAILS: 18 price fields, 837 volume bars > 1%; stays QA_ONLY pending volume/outlier decision |
 | 2026-09-25 | P7-prep | Design window 2022-01-03..2024-09-30 (Yashu); holdout unchanged | done | (tolerance commit) | prereg still DRAFT |
 | 2026-09-25 | P3 | P3.4 NSE download | stopped | – | 3rd stop (ConnectionError) at 2024-11-13; 1,144 announcement days on disk; awaiting Yashu's choice |
+| 2026-09-25 | P3 | Cross-check gate: >= 99.5% agreement per field, volume reported (Yashu) | done | (promotion commit) | Upstox PASSES (exit 0); UPSTOX_API_V2 promoted to STRATEGY_SOURCES |
+| 2026-09-25 | P3 | 228-series Upstox history (Antigravity fetch, upstox_history.build) | verified | – | 13,251 raw files hash-verified; 99.67% valid series-sessions; 209/210 stocks >= 95% valid; acceptance line 1 passes |
+| 2026-09-25 | P3 | NSE events download | reassigned to Antigravity | – | once a day, --interval 4 --max-requests 150, single process |

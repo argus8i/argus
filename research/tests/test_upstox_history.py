@@ -157,12 +157,16 @@ def test_fetch_resume_build_and_upstox_is_qa_only(tmp_path):
     entry, _ = U.build_entry("ABC", root=tmp_path)
     assert entry["source"] == "UPSTOX_API_V2" and len(entry["bars"]) == 50 and len(entry["daily_bars"]) == 2
     assert provenance.classify(entry) == provenance.UPSTOX
-    assert not provenance.strategy_eligible(provenance.UPSTOX)          # QA_ONLY: the Kite cross-check failed
+    # promoted 25 Sep 2026 after the Kite cross-check passed under Yashu's multi-broker rule
+    assert provenance.strategy_eligible(provenance.UPSTOX)
+    assert not provenance.strategy_eligible(provenance.HF_UPSTOX)       # the HF mirror stays QA_ONLY
     out = tmp_path / "hist"
     m = U.build(["ABC"], out_root=out, root=tmp_path, label="t")
     assert m["symbols"][0]["source_class"] == "UPSTOX_API_V2" and m["symbols"][0]["bars_out"] == 50
-    with pytest.raises(provenance.SourceNotAllowedError):
-        ParquetCandleStore(out)                                          # strategy mode refuses it
+    st = ParquetCandleStore(out)                                         # strategy mode opens it now
+    assert st.sources == {"ABC": "UPSTOX_API_V2"}
+    # 2026-07-01/02 are inside the locked holdout: invisible in strategy mode, visible in QA mode only
+    assert st.sessions("ABC") == []
     qa = ParquetCandleStore(out, mode="QA")
     assert [len(qa.bars("ABC", d)) for d in (d1, d2)] == [25, 25]       # pre-CAS: 25 bars
 
@@ -198,3 +202,48 @@ def test_cross_source_fails_on_a_missing_bar_not_only_on_offsets():
     res = compare(store(23), store(24))                                  # one bar missing, no offset
     assert res["start_mismatch_sessions"] == 1 and res["one_bar_offset_sessions"] == 0 and not res["passed"]
     assert not compare(CandleStore({}, {}, mode="QA"), store(24))["passed"]   # nothing compared is not a pass
+
+
+def _days_store(symbol, n_days, bump=None, vol=1000):
+    """n_days x 20 bars (09:15..14:00) at 100; bump = {(day_index, bar_index): (field, value)}."""
+    from research.backtest.bars import Bar, CandleStore
+
+    intraday = {}
+    for k in range(n_days):
+        d = date(2026, 8, 3) + timedelta(days=k)
+        bars = []
+        for j in range(20):
+            o, h, l, c = 100.0, 100.1, 99.9, 100.0
+            if bump and (k, j) in bump:
+                f, v = bump[(k, j)]
+                o, h, l, c = (v if f == "open" else o, v if f == "high" else h, v if f == "low" else l,
+                              v if f == "close" else c)
+            bars.append(Bar(symbol, datetime(d.year, d.month, d.day, 9, 15, tzinfo=IST) + timedelta(minutes=15 * j),
+                            15, o, h, l, c, vol))
+        intraday.setdefault(symbol, {})[d] = bars
+    return CandleStore(intraday, {}, mode="QA")
+
+
+def test_agreement_threshold_is_99_5_percent_per_field_and_volume_does_not_gate():
+    from research.data.cross_source import compare
+
+    ref = _days_store("ABC", 10)                                          # 200 bars
+    one = compare(_days_store("ABC", 10, bump={(0, 0): ("high", 101.0)}), ref)
+    assert one["stock_field_agreement"]["high"] == pytest.approx(0.995) and one["passed"]      # 1/200 = 0.5%
+    two = compare(_days_store("ABC", 10, bump={(0, 0): ("high", 101.0), (1, 1): ("high", 101.0)}), ref)
+    assert not two["passed"]                                                                    # 2/200 = 1%
+    vol = compare(_days_store("ABC", 10, vol=1500), ref)
+    assert vol["volume_mismatch_bars"] == 200 and vol["passed"]                                 # reported only
+    assert not compare(_days_store("ABC", 10, vol=1500), ref, gate_volume=True)["passed"]
+    strict = compare(_days_store("ABC", 10, bump={(0, 0): ("close", 100.05)}), ref,
+                     price_tol_ticks=1, price_tol_pct=0.0, min_agreement=1.0, gate_volume=True)
+    assert not strict["passed"]                                                                 # the plan's rule
+
+
+def test_index_series_tolerate_no_mismatch():
+    from research.data.cross_source import compare
+
+    ref = _days_store("NIFTY50", 10)
+    store = _days_store("IDX:NIFTY50", 10, bump={(0, 0): ("close", 100.05)})                   # 5 bps > 0.01%
+    res = compare(store, ref)
+    assert res["shared_symbols"] == ["IDX:NIFTY50"] and not res["passed"]

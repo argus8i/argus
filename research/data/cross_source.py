@@ -29,10 +29,17 @@ from research.data.store_parquet import ParquetCandleStore
 
 PRICE_TOL_TICKS = 2          # Yashu, 25 Sep 2026: multi-broker tolerance max(2 ticks, 0.20%) replaces
 PRICE_TOL_PCT = 0.002        # the plan's one tick (P3.9). Volume stays within 1%; indices within 0.01%.
+MIN_AGREEMENT = 0.995        # Yashu, 25 Sep 2026: each OHLC field of stocks within tolerance on >= 99.5% of bars
+GATE_VOLUME = False          # Yashu, 25 Sep 2026: volume mismatches are reported, not gated
 
 
 def compare(store: Any, reference: Any, vol_tol: float = 0.01, index_tol: float = 1e-4,
-            price_tol_ticks: int = PRICE_TOL_TICKS, price_tol_pct: float = PRICE_TOL_PCT) -> Dict[str, Any]:
+            price_tol_ticks: int = PRICE_TOL_TICKS, price_tol_pct: float = PRICE_TOL_PCT,
+            min_agreement: float = MIN_AGREEMENT, gate_volume: bool = GATE_VOLUME) -> Dict[str, Any]:
+    """Pass rule: at least one bar compared; identical bar starts in every shared session; for stocks, each
+    of open/high/low/close within tolerance on >= min_agreement of bars; index series with no mismatch at
+    all; volume within vol_tol on every bar only if gate_volume (otherwise reported). The plan's original
+    rule is compare(..., price_tol_ticks=1, price_tol_pct=0, min_agreement=1.0, gate_volume=True)."""
     ref_names = {(canonical_index(s) or s): s for s in reference.symbols}
     shared = sorted(set(ref_names) & set(store.symbols))
     mismatches: List[Dict[str, Any]] = []
@@ -57,12 +64,14 @@ def compare(store: Any, reference: Any, vol_tol: float = 0.01, index_tol: float 
             for t in sorted(set(a) & set(r)):
                 x, y = a[t], r[t]
                 counts["bars"] += 1
+                counts["stock_bars" if kind == "TRADABLE" else "index_bars"] += 1
                 for f in ("open", "high", "low", "close"):
                     px, py = getattr(x, f), getattr(y, f)
                     tol = (max(price_tol_ticks * tick_size(py), price_tol_pct * abs(py)) + 1e-9
                            if kind == "TRADABLE" else abs(py) * index_tol)
                     if abs(px - py) > tol:
                         counts[f"{f}_mismatch"] += 1
+                        counts[f"{'stock' if kind == 'TRADABLE' else 'index'}_{f}_mismatch"] += 1
                         mismatches.append({"symbol": sym, "session": day.isoformat(), "start": t.strftime("%H:%M"),
                                            "field": f, "store": px, "reference": py,
                                            "diff_bps": round((px - py) / py * 1e4, 2)})
@@ -73,9 +82,18 @@ def compare(store: Any, reference: Any, vol_tol: float = 0.01, index_tol: float 
                                            "field": "volume", "store": x.volume, "reference": y.volume,
                                            "ratio": round(x.volume / y.volume, 4)})
     bars = counts["bars"] or 1
+    fields = ("open", "high", "low", "close")
+    stock_agreement = {f: (1.0 - counts[f"stock_{f}_mismatch"] / counts["stock_bars"]) if counts["stock_bars"] else None
+                       for f in fields}
+    passed = (counts["bars"] > 0 and offsets == 0
+              and not any(m["field"] == "starts" for m in mismatches)
+              and all(a is None or a >= min_agreement - 1e-12 for a in stock_agreement.values())
+              and not any(counts[f"index_{f}_mismatch"] for f in fields)
+              and (counts["volume_mismatch"] == 0 or not gate_volume))
     return {
         "tolerances": {"price": f"max({price_tol_ticks} ticks, {price_tol_pct:.2%})", "volume": f"{vol_tol:.0%}",
-                       "index": f"{index_tol:.2%}"},
+                       "index": f"{index_tol:.2%}", "min_agreement": min_agreement, "gate_volume": gate_volume},
+        "stock_field_agreement": stock_agreement,
         "shared_symbols": shared,
         "shared_sessions": counts["sessions"],
         "shared_bars": counts["bars"],
@@ -85,12 +103,7 @@ def compare(store: Any, reference: Any, vol_tol: float = 0.01, index_tol: float 
         "price_mismatch_share": {f: counts[f"{f}_mismatch"] / bars for f in ("open", "high", "low", "close")},
         "volume_mismatch_bars": counts["volume_mismatch"],
         "volume_mismatch_share": counts["volume_mismatch"] / bars,
-        # plan P3.9: identical bar starts (any start mismatch fails, not only a one-bar offset), OHLC within
-        # one tick, volume within 1%; and there must be something to compare
-        "passed": counts["bars"] > 0 and offsets == 0
-                  and not any(m["field"] == "starts" for m in mismatches)
-                  and not any(counts[f"{f}_mismatch"] for f in ("open", "high", "low", "close"))
-                  and counts["volume_mismatch"] == 0,
+        "passed": passed,                                   # rule: see the docstring
         "mismatches": mismatches,
     }
 
