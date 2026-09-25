@@ -1,0 +1,87 @@
+{
+ "strategy_id": "RESID_REV",
+ "variant": "RESID_REV_NF",
+ "evidence_class": "E1",
+ "prereg_sha256": "eeec1a75130dbf209fb7420446b140bf147fce641e7020dba865f99f7e79170d",
+ "passed": false,
+ "reasons": [
+  "primary: day-clustered t -3.0252044422337 (threshold 2.0), mean net R -0.12366099307395532 (must be > 0), n 219 on 130 days -> FAIL"
+ ],
+ "primary": {
+  "signals": 219,
+  "signal_days": 130,
+  "mean_net_r": -0.12366099307395532,
+  "se_cluster_by_day": 0.04087690449860922,
+  "t_cluster": -3.0252044422337,
+  "mean_gross_r": -0.036438136803126756,
+  "mean_fee_r": 0.0751913155670271,
+  "mean_slip_r": 0.012031540703801481,
+  "portfolio": {
+   "trades": 0,
+   "net_pnl_rs": 0.0,
+   "mean_trade_net_r": null,
+   "win_rate": null,
+   "daily_pnl_sd_rs": 0.0,
+   "max_drawdown_rs": 0.0,
+   "days": 452,
+   "days_with_trades": 0,
+   "disposition_counts": {
+    "SHADOW_NOT_ALLOCATED": 220
+   }
+  }
+ },
+ "secondary": {
+  "slippage_2_ticks": {
+   "signals": 219,
+   "mean_net_r": -0.13505870983035712,
+   "t_cluster": -3.297033457756493,
+   "mean_gross_r": -0.0362661812101958,
+   "mean_fee_r": 0.07519061902876771,
+   "mean_slip_r": 0.023601909591393612
+  },
+  "r_basis_trigger": {
+   "signals": 219,
+   "mean_net_r": -0.19642694529580557,
+   "t_cluster": -3.12374624077041,
+   "mean_gross_r": -0.0593396107893759,
+   "mean_fee_r": 0.1181686580571541,
+   "mean_slip_r": 0.01891867644927561
+  },
+  "wick_pulled_in_2_ticks": {
+   "signals": 219,
+   "mean_net_r": -0.11764606306662567,
+   "t_cluster": -2.864412579294491,
+   "mean_gross_r": -0.03041924765974519,
+   "mean_fee_r": 0.07519527470307896,
+   "mean_slip_r": 0.012031540703801516
+  },
+  "orb_prod": {
+   "signals": 12331,
+   "mean_net_r": -0.04191246778597321,
+   "t_cluster": -4.6104379205356,
+   "mean_gross_r": 0.013165491636893137,
+   "mean_fee_r": 0.0475777743768636,
+   "mean_slip_r": 0.007500185046002751
+  },
+  "long_only": {
+   "n": 93,
+   "mean_net_r": -0.0711978771737764,
+   "se_cluster_by_day": 0.06944344183587954,
+   "t_cluster": -1.0252642336196878
+  },
+  "short_only": {
+   "n": 126,
+   "mean_net_r": -0.16238376909551594,
+   "se_cluster_by_day": 0.05120374327377407,
+   "t_cluster": -3.1713261319058077
+  }
+ },
+ "window": [
+  "2024-10-01",
+  "2026-07-31"
+ ],
+ "code_commit": "efc257606a4069a006dfb8a47fcf8cd33c6d80b6",
+ "code_identity": "d3f0d60efb8a04abab9c1506f9e24bf0ceecca751f26312f8517806a7a13488f",
+ "snapshot": "6040e0cf40909afefcf03da1fed00a10478ab98f0769ff07c95d08de9b9ece11",
+ "finalized_at": "2026-09-26T04:48:21+05:30"
+}

@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "updated_by": "research/decision/promotion.py (KILLED_ON_DESIGN ORB_PROD)",
-  "updated_at": "2026-09-26T01:36:20+05:30",
+  "updated_by": "research/decision/promotion.py (holdout RESID_REV)",
+  "updated_at": "2026-09-26T04:48:21+05:30",
   "strategies": {
     "ORB_PROD": {
       "status": "KILLED_ON_DESIGN",
@@ -10,9 +10,10 @@
       "expected_net_r": -0.06029769272775457
     },
     "RESID_REV": {
-      "status": "UNVERIFIED",
-      "evidence": "none",
-      "notes": "pre-registered lead (plan Appendix B)"
+      "status": "REJECTED",
+      "evidence": "E1_HOLDOUT",
+      "notes": "pre-registered lead (plan Appendix B)",
+      "prereg_sha256": "eeec1a75130dbf209fb7420446b140bf147fce641e7020dba865f99f7e79170d"
     },
     "ORB_SIMPLE": {
       "status": "UNVERIFIED",
