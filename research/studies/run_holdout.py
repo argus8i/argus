@@ -14,7 +14,8 @@ run       One part of the study. Refused unless:
             - the history is a sealed snapshot, sealed AFTER the lock (its universe table was built with the
               holdout visible), whose data files are byte-identical to the design snapshot named in the YAML
               (only reference/ tables may differ): the holdout reads exactly the data the design read;
-            - the code is committed (no uncommitted research/ changes).
+            - the research code is committed (no uncommitted research/**/*.py change); the code identity is
+              the blob hashes of those files, so notes, registries and markers can be committed meanwhile.
           z_star, hold_bars and the variant come from the locked YAML only; nothing is overridden.
           Calibration reads the sessions before the holdout (a store window from the design start), and the
           engine evaluates only holdout sessions.
@@ -63,6 +64,19 @@ class HoldoutRefused(RuntimeError):
 def _git(*args: str) -> str:
     return subprocess.run(["git", *args], cwd=paths.repo_root(), capture_output=True, text=True,
                           timeout=30).stdout.strip()
+
+
+PY_GLOB = ":(glob)research/**/*.py"
+
+
+def code_state() -> Dict[str, Any]:
+    """The code a run imports: the blob hashes of every tracked research/**/*.py file (identity), and any
+    uncommitted change to those files (dirty). Notes, registries, outputs and the holdout markers are not
+    code, so committing a report or writing a marker never changes the identity."""
+    dirty = [ln for ln in _git("status", "--porcelain", "--", PY_GLOB).splitlines() if ln.strip()]
+    blobs = _git("ls-files", "-s", "--", PY_GLOB)
+    return {"identity": hashlib.sha256(blobs.encode("utf-8")).hexdigest(), "dirty": dirty,
+            "head": _git("rev-parse", "HEAD"), "files": len(blobs.splitlines())}
 
 
 def _out_root() -> Path:
@@ -119,14 +133,15 @@ def preflight(spec_path: Path = SPEC) -> Dict[str, Any]:
     if mine != theirs:
         diff = sorted(set(mine.items()) ^ set(theirs.items()))[:5]
         raise HoldoutRefused(f"holdout data files differ from the design snapshot: {diff}")
-    dirty = _git("status", "--porcelain", "--", "research")
-    if dirty:
-        raise HoldoutRefused(f"uncommitted research/ changes: {dirty.splitlines()[:3]}")
-    return {"lock": status.lock, "snapshot": here, "design_snapshot": dinfo, "code_commit": _git("rev-parse", "HEAD")}
+    code = code_state()
+    if code["dirty"]:
+        raise HoldoutRefused(f"uncommitted research code: {code['dirty'][:3]}")
+    return {"lock": status.lock, "snapshot": here, "design_snapshot": dinfo, "code_commit": code["head"],
+            "code_identity": code["identity"]}
 
 
 def _started(pre: Mapping[str, Any]) -> None:
-    rec = {"lock": pre["lock"], "code_commit": pre["code_commit"], "snapshot": pre["snapshot"]["content_sha256"]}
+    rec = {"lock": pre["lock"], "code_identity": pre["code_identity"], "snapshot": pre["snapshot"]["content_sha256"]}
     if STARTED.exists():
         old = json.loads(STARTED.read_text(encoding="utf-8"))
         if {k: old.get(k) for k in rec} != rec:
@@ -227,7 +242,7 @@ def run_part(part: str, spec_path: Path = SPEC) -> Dict[str, Any]:
               "invalid_symbol_sessions_excluded": sum(1 for _, d in bad if h0 <= d <= h1), **summ,
               "by_side": sides, "portfolio": _portfolio_summary(res), "portfolio_a1_runner": book, "options": opts,
               "decision_reasons": dict(getattr(adapter, "reasons", {})), "universe_flags": list(universe.flags),
-              "lock": pre["lock"], "code_commit": pre["code_commit"],
+              "lock": pre["lock"], "code_commit": pre["code_commit"], "code_identity": pre["code_identity"],
               "snapshot": pre["snapshot"]["content_sha256"], "runtime_s": round(_time.perf_counter() - t0, 1)}
     (out_dir / "result.json").write_text(json.dumps(result, indent=1, default=str), encoding="utf-8")
     rows = rows_from_engine(res, run_id=f"holdout_{spec['id']}_{part}", mode="BACKTEST",
@@ -272,9 +287,9 @@ def finalize(spec_path: Path = SPEC, register_path: Optional[Path] = None) -> Di
         if not f.exists():
             raise HoldoutRefused(f"part {part} has not run")
         r = json.loads(f.read_text(encoding="utf-8"))
-        if (r["lock"] != pre["lock"] or r["code_commit"] != pre["code_commit"]
+        if (r["lock"] != pre["lock"] or r.get("code_identity") != pre["code_identity"]
                 or r["snapshot"] != pre["snapshot"]["content_sha256"]):
-            raise HoldoutRefused(f"part {part} ran under a different lock, commit or snapshot")
+            raise HoldoutRefused(f"part {part} ran under a different lock, code or snapshot")
         results[part] = r
     passed, reasons = primary_test(results["primary"], spec)
     secondary = {p: {k: results[p].get(k) for k in ("signals", "mean_net_r", "t_cluster", "mean_gross_r",
@@ -288,6 +303,7 @@ def finalize(spec_path: Path = SPEC, register_path: Optional[Path] = None) -> Di
                                                                   "se_cluster_by_day", "t_cluster", "mean_gross_r",
                                                                   "mean_fee_r", "mean_slip_r", "portfolio")},
               "secondary": secondary, "window": results["primary"]["window"], "code_commit": pre["code_commit"],
+              "code_identity": pre["code_identity"],
               "snapshot": pre["snapshot"]["content_sha256"],
               "finalized_at": datetime.now(IST).isoformat(timespec="seconds")}
     (_out_root() / "holdout_record.json").write_text(json.dumps(record, indent=1, default=str), encoding="utf-8")

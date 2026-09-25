@@ -44,3 +44,9 @@ def test_snapshot_comparison_ignores_only_reference_tables(tmp_path):
     c = tmp_path / "c"
     seal(c, {"bars_15m/X.parquet": "2", "reference/universe_daily.parquet": "u1", "events/fo_ban.parquet": "e"})
     assert rh._snapshot_files(a) != rh._snapshot_files(c)
+
+
+def test_code_state_identifies_code_by_blob_hashes():
+    st = rh.code_state()
+    assert len(st["identity"]) == 64 and st["files"] > 50 and len(st["head"]) == 40
+    assert rh.code_state()["identity"] == st["identity"]          # stable
