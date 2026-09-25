@@ -40,8 +40,9 @@ class DefaultAllocator(Allocator):
 # 3 slots, Rs 38,000 per position, Rs 1,14,000 aggregate ABSOLUTE notional across active positions plus
 # pending entry reservations (long and short are added, never netted). Standalone: the shadow runner (P8)
 # and the portfolio simulation call it with every candidate emitted at one bar close plus the book.
-# BacktestEngine does NOT call it (the engine still applies its own P2 slot/sector/cluster checks with
-# EngineConfig.slot_cap_rs = 58,333.33); see research/notes/p6_report.md.
+# BacktestEngine does NOT call it: the engine applies its own slot/sector/cluster checks with the same A1
+# limits (EngineConfig defaults from sizing.py since dff8c1c) but no VIX multiplier and no weekly clusters.
+# research/shadow/runner.py is the caller that applies this function bar by bar.
 import math
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, Optional, Set

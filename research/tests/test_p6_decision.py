@@ -404,3 +404,28 @@ def test_stress_run_reports_quantiles_and_the_band_scenario():
     assert (minus10["loss_rs"], minus10["within_budget"]) == (11_400.0, True)
     assert "p_loss_above_scenario_budget" in g
     assert "not a guaranteed maximum loss" in res["caveat"]
+
+
+# ================================================================== kill on design evidence (Yashu, 26 Sep 2026)
+def test_kill_on_design_needs_a_clearly_negative_design_record(tmp_path, reg):
+    rd = tmp_path / "records"
+    ok = {"strategy_id": "ORB_PROD", "evidence_class": "E1_CF", "window": ["2022-01-03", "2024-09-30"],
+          "snapshot_sha256": "7" * 64, "n": 14836, "mean_net_r": -0.059, "t_cluster": -7.3,
+          "result_file": "research/outputs/p7/orbprod_x/result.json"}
+    with pytest.raises(pr.TransitionError, match="not clearly negative"):
+        pr.kill_on_design("ORB_PROD", {**ok, "t_cluster": -1.5}, register_path=reg, records_dir=rd)
+    with pytest.raises(pr.TransitionError, match="not clearly negative"):
+        pr.kill_on_design("ORB_PROD", {**ok, "mean_net_r": 0.01}, register_path=reg, records_dir=rd)
+    with pytest.raises(pr.TransitionError, match="sealed snapshot"):
+        pr.kill_on_design("ORB_PROD", {**ok, "snapshot_sha256": None}, register_path=reg, records_dir=rd)
+    out = pr.kill_on_design("ORB_PROD", ok, register_path=reg, records_dir=rd)
+    st = pr.load_register(reg)["strategies"]["ORB_PROD"]
+    assert st["status"] == pr.KILLED_ON_DESIGN and out["to"] == pr.KILLED_ON_DESIGN
+    assert pr.KILLED_ON_DESIGN in pr.TERMINAL
+    assert (rd / out["record_file"].split("\\")[-1].split("/")[-1]).exists()
+    with pytest.raises(pr.TransitionError):                         # terminal: no second transition
+        pr.kill_on_design("ORB_PROD", ok, register_path=reg, records_dir=rd)
+    y, sha = _locked_prereg(tmp_path)
+    with pytest.raises(pr.TransitionError):                         # and no holdout transition either
+        pr.apply_holdout("ORB_PROD", {"strategy_id": "ORB_PROD", "prereg_sha256": sha, "evidence_class": "E1",
+                                      "passed": True}, y, register_path=reg, records_dir=rd)

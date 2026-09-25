@@ -7,6 +7,7 @@ research/tests/test_p1_evidence_hygiene.py).
 State machine
     UNVERIFIED --(lock-verified holdout record: pass)--> SHADOW
     UNVERIFIED --(lock-verified holdout record: fail)--> REJECTED                  terminal for this version
+    UNVERIFIED --(sealed design record: mean <= 0 and t <= -2)--> KILLED_ON_DESIGN   terminal (Yashu, 26 Sep)
     SHADOW     --(first look with n >= n_pre/2 and mean + 1.2816*SE < 0)--> KILLED   futility; terminal
     SHADOW     --(n reaches n_pre: ONE terminal test)--> PROMOTE_TO_PAPER if evaluate_gate passes and
                                                          LB95 > 0, else KILLED
@@ -46,7 +47,9 @@ REGISTER_PATH = Path(__file__).with_name("register.json")
 RECORDS_DIR = Path(__file__).with_name("records")
 
 UNVERIFIED, SHADOW, REJECTED, KILLED, PROMOTE = "UNVERIFIED", "SHADOW", "REJECTED", "KILLED", "PROMOTE_TO_PAPER"
-TERMINAL = frozenset({REJECTED, KILLED, PROMOTE})
+KILLED_ON_DESIGN = "KILLED_ON_DESIGN"
+TERMINAL = frozenset({REJECTED, KILLED, PROMOTE, KILLED_ON_DESIGN})
+KILL_T = -2.0                 # a design record must be at least this clearly negative to kill (Yashu, 26 Sep)
 ADMISSIBLE = ("E2", "E3")
 N_PRE = 111
 
@@ -166,6 +169,40 @@ def apply_holdout(strategy_id: str, record: Mapping[str, Any], prereg_yaml: Path
            "evidence": "E1 holdout study (can never promote)"}
     st.update({"status": new, "evidence": "E1_HOLDOUT", "prereg_sha256": lock.lock.get("yaml_sha256")})
     _write_register(reg, register_path, now, f"holdout {strategy_id}")
+    rec["record_file"] = str(_write_record(rec, records_dir))
+    return rec
+
+
+def kill_on_design(strategy_id: str, record: Mapping[str, Any], *, register_path: Path = REGISTER_PATH,
+                   records_dir: Path = RECORDS_DIR, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """UNVERIFIED -> KILLED_ON_DESIGN (terminal), on a design-set record that is clearly negative: mean net R
+    <= 0 AND day-clustered t <= KILL_T, computed on a sealed snapshot. Design evidence (E1_CF) can never
+    promote; it can only stop a strategy from taking slots (Yashu, 26 Sep 2026: do not curve-fit a strategy
+    that loses on the design set). A new idea needs a new version and a new pre-registration."""
+    now = now or datetime.now(IST)
+    reg = load_register(register_path)
+    st = reg["strategies"].get(strategy_id)
+    if st is None:
+        raise TransitionError(f"{strategy_id} is not in the register")
+    if st["status"] != UNVERIFIED:
+        raise TransitionError(f"{strategy_id}: a design kill starts from UNVERIFIED, not {st['status']}")
+    if record.get("strategy_id") != strategy_id or not record.get("snapshot_sha256"):
+        raise TransitionError(f"{strategy_id}: design record must cite the strategy and its sealed snapshot")
+    mean, t = record.get("mean_net_r"), record.get("t_cluster")
+    if not (isinstance(mean, (int, float)) and isinstance(t, (int, float)) and math.isfinite(mean)
+            and math.isfinite(t) and mean <= 0 and t <= KILL_T):
+        raise TransitionError(f"{strategy_id}: design record is not clearly negative (mean {mean}, t {t}; "
+                              f"needs mean <= 0 and t <= {KILL_T})")
+    rec = {"strategy_id": strategy_id, "at": now.isoformat(timespec="seconds"), "action": KILLED_ON_DESIGN,
+           "from": UNVERIFIED, "to": KILLED_ON_DESIGN,
+           "reasons": [f"design mean net R {mean:+.4f} (t {t:.2f}, n {record.get('n')}) on "
+                       f"{record.get('window')}; expected_net_r <= 0, so EXPLOIT allocates it no slots"],
+           "inputs": {k: record.get(k) for k in ("window", "snapshot_sha256", "n", "mean_net_r", "t_cluster",
+                                                  "mean_gross_r", "mean_fee_r", "mean_slip_r", "result_file",
+                                                  "evidence_class")},
+           "evidence": "E1_CF design-set record (can never promote)"}
+    st.update({"status": KILLED_ON_DESIGN, "evidence": "E1_CF_DESIGN", "expected_net_r": float(mean)})
+    _write_register(reg, register_path, now, f"{KILLED_ON_DESIGN} {strategy_id}")
     rec["record_file"] = str(_write_record(rec, records_dir))
     return rec
 
