@@ -18,13 +18,16 @@ Inputs
 - Loss severities: pass the empirical stop-loss and GAP_THROUGH_LIMIT loss distributions from the ledger
   (rupees per stopped position). Until they exist the defaults are ASSUMPTIONS: a normal stop loses the full
   Rs 1,500 risk budget (stop_limit basis; conservative), and 5% of stops are gap-throughs losing 2x that.
-- Band-hit scenario: every position hits a -10% price band, the SL-limit is unfilled and the exit is at the
-  band: 3 x 58,333.33 x 10% = Rs 17,500.
+- Deterministic scenarios (Adjusted A1, Yashu 25 Sep 2026): the whole book at the aggregate exposure cap
+  (3 x Rs 38,000 = Rs 1,14,000, absolute notional) moves -10%, -15% or -20% against every position, stops
+  unfilled, exit at the moved price, BEFORE COSTS:
+      -10%: Rs 11,400 (4.56% of the Rs 2,50,000 corpus) - within the Rs 12,000 "-10% scenario budget"
+      -15%: Rs 17,100 (6.84%)   -20%: Rs 22,800 (9.12%)  - both exceed that budget.
+  Band flexing does not guarantee an exit, so the move can be larger than the band that was in force.
 
-Outputs: P(k of 3 stopped), tail-loss quantiles (95/99/99.9%) in rupees and as a share of the corpus, and
-the comparison with the Rs 4,500 risk-to-stop budget and Yashu's tail-loss limit X = Rs 12,000 (decision 5;
-4.8% of a Rs 2,50,000 corpus). These are model quantiles, NOT a guaranteed maximum loss: gaps, halts and
-band locks can exceed any of them.
+Outputs: P(k of 3 stopped), tail-loss quantiles (95/99/99.9%) in rupees and as a share of the corpus, the
+comparison with the Rs 4,500 risk-to-stop budget and the Rs 12,000 -10% scenario budget, and the scenario
+table. These are model quantiles and scenario arithmetic, NOT a guaranteed maximum loss.
 No scipy: the t quantile is solved from the mixture by bisection; the chi2 expectation uses a trapezoid rule
 on a log grid.
 """
@@ -39,17 +42,21 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
+from research.decision.sizing import AGGREGATE_EXPOSURE_CAP_RS, MAX_SLOTS, RISK_BUDGET_RS, SLOT_CAP_RS
+
 P0_DEFAULT = 0.0125                     # DERIVED (A.4), see module docstring
 NUS = (3, 5, 8)
 RHOS = (0.30, 0.45, 0.60)
-N_POS = 3
+N_POS = MAX_SLOTS
 DRAWS = 1_000_000
-RISK_BUDGET_RS = 1500.0
 RISK_TO_STOP_BUDGET_RS = N_POS * RISK_BUDGET_RS          # Rs 4,500
-TAIL_LIMIT_RS = 12_000.0                # Yashu, decision 5
+SCENARIO_BUDGET_RS = 12_000.0           # the "-10% scenario budget" (Yashu, decision 5 / Adjusted A1)
 CORPUS_RS = 250_000.0                   # DERIVED: 12,000 is 4.8% of the corpus (decision 5)
-SLOT_CAP_RS = 58_333.33
 BAND = 0.10
+SCENARIO_SHOCKS = (0.10, 0.15, 0.20)
+VERDICT = ("Adjusted A1 satisfies the −10% scenario budget before costs. The −15% and −20% "
+           "scenarios exceed that budget. ₹12,000 is not a guaranteed maximum loss, and band flexing does "
+           "not guarantee an exit.")
 GAP_SHARE, GAP_MULT = 0.05, 2.0         # ASSUMPTIONS until the ledger has GAP_THROUGH_LIMIT data
 IST = timezone(timedelta(hours=5, minutes=30))
 _N = NormalDist()
@@ -134,8 +141,31 @@ def losses_rs(stopped: np.ndarray, severities_rs: Optional[Sequence[float]] = No
     return (stopped * sev).sum(axis=1)
 
 
-def band_hit_loss_rs(n_pos: int = N_POS, notional: float = SLOT_CAP_RS, band: float = BAND) -> float:
-    return n_pos * notional * band
+def gross_exposure_rs(n_pos: int = N_POS, notional: float = SLOT_CAP_RS,
+                      aggregate_cap: float = AGGREGATE_EXPOSURE_CAP_RS) -> float:
+    """Largest absolute notional the book can hold: min(n_pos x slot cap, aggregate cap)."""
+    return min(n_pos * notional, aggregate_cap)
+
+
+def band_hit_loss_rs(n_pos: int = N_POS, notional: float = SLOT_CAP_RS, band: float = BAND,
+                     aggregate_cap: float = AGGREGATE_EXPOSURE_CAP_RS) -> float:
+    """Before-cost loss if the whole book moves `band` against every position and exits at that price."""
+    for v in (n_pos, notional, band, aggregate_cap):
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(float(v)) or v < 0:
+            raise ValueError(f"invalid scenario input {v!r}")
+    return round(gross_exposure_rs(n_pos, notional, aggregate_cap) * band, 2)
+
+
+def scenario_table(shocks: Sequence[float] = SCENARIO_SHOCKS, budget_rs: float = SCENARIO_BUDGET_RS,
+                   corpus_rs: float = CORPUS_RS) -> List[Dict[str, Any]]:
+    """Deterministic scenario rows (before costs) against the -10% scenario budget."""
+    rows = []
+    for s in shocks:
+        loss = band_hit_loss_rs(band=s)
+        rows.append({"shock_pct": round(s * 100, 2), "exposure_rs": gross_exposure_rs(), "loss_rs": loss,
+                     "pct_corpus": round(loss / corpus_rs * 100, 2), "budget_rs": budget_rs,
+                     "within_budget": loss <= budget_rs + 1e-9, "headroom_rs": round(budget_rs - loss, 2)})
+    return rows
 
 
 def run(p0: float = P0_DEFAULT, nus: Sequence[float] = NUS, rhos: Sequence[float] = RHOS, draws: int = DRAWS,
@@ -152,17 +182,17 @@ def run(p0: float = P0_DEFAULT, nus: Sequence[float] = NUS, rhos: Sequence[float
                          "loss_quantiles_rs": q,
                          "loss_quantiles_pct_corpus": {kk: v / CORPUS_RS * 100 for kk, v in q.items()},
                          "p_loss_above_risk_budget": float(np.mean(loss > RISK_TO_STOP_BUDGET_RS)),
-                         "p_loss_above_tail_limit": float(np.mean(loss > TAIL_LIMIT_RS))})
-    band = band_hit_loss_rs()
+                         "p_loss_above_scenario_budget": float(np.mean(loss > SCENARIO_BUDGET_RS))})
     return {"model": "equicorrelated t-copula, one 15-minute bar (plan P6.7, A.17)", "p0": p0, "draws": draws,
             "seed": seed, "severities": "empirical" if severities_rs is not None else
             f"ASSUMPTION: Rs {RISK_BUDGET_RS:.0f} per stop, {GAP_SHARE:.0%} gap-throughs at {GAP_MULT:g}x",
-            "risk_to_stop_budget_rs": RISK_TO_STOP_BUDGET_RS, "tail_limit_rs": TAIL_LIMIT_RS, "corpus_rs": CORPUS_RS,
-            "grid": rows,
-            "band_hit_scenario": {"loss_rs": band, "pct_corpus": band / CORPUS_RS * 100,
-                                  "exceeds_tail_limit": band > TAIL_LIMIT_RS,
-                                  "note": "all 3 positions at a -10% band, SL-limit unfilled, exit at the band"},
-            "caveat": "Model quantiles, not a guaranteed maximum loss."}
+            "limits": {"max_slots": MAX_SLOTS, "slot_cap_rs": SLOT_CAP_RS,
+                       "aggregate_exposure_cap_rs": AGGREGATE_EXPOSURE_CAP_RS, "risk_budget_rs": RISK_BUDGET_RS},
+            "risk_to_stop_budget_rs": RISK_TO_STOP_BUDGET_RS, "scenario_budget_rs": SCENARIO_BUDGET_RS,
+            "corpus_rs": CORPUS_RS, "grid": rows,
+            "scenarios_before_costs": scenario_table(),
+            "verdict": VERDICT,
+            "caveat": "Model quantiles and scenario arithmetic, not a guaranteed maximum loss."}
 
 
 def main(argv: Optional[List[str]] = None) -> int:

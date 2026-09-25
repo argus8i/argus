@@ -81,7 +81,7 @@ def test_multiplier_cases():
 
 
 def test_base_and_final_qty():
-    assert base_qty(500.0, 495.0, 1e6) == 116                      # notional cap 58,333/500 binds (risk: 300)
+    assert base_qty(500.0, 495.0, 1e6) == 76                       # Adjusted A1 cap 38,000/500 binds (risk: 300)
     assert base_qty(100.0, 90.0, 1e6) == 150                       # risk binds
     assert base_qty(500.0, 495.0, 10_000) == 20                    # free cash binds
     assert base_qty(500.0, 500.0, 1e6) == 0 and base_qty(500.0, 495.0, 0) == 0
@@ -209,7 +209,7 @@ def test_weekly_clusters_use_only_prior_data_and_fail_closed_on_short_history():
 # ================================================================== P6.5 allocator
 def _cand(sym, **kw):
     base = dict(strategy_id="RESID_REV", symbol=sym, side="BUY", session=D0, priority=1, priority_score=3.0,
-                expected_net_r=0.1, se=0.05, risk_rs=1500.0, m=1.0, notional=50_000.0, cluster=f"c{sym}",
+                expected_net_r=0.1, se=0.05, risk_rs=1500.0, m=1.0, notional=35_000.0, cluster=f"c{sym}",
                 sector=f"s{sym}")
     base.update(kw)
     return Candidate(**base)
@@ -227,8 +227,8 @@ def test_renaming_symbols_does_not_change_the_result():
 
 @pytest.mark.parametrize("kw,open_,cash,reason", [
     ({}, [Position("X1", 10), Position("X2", 10), Position("X3", 10)], 1e6, "MAX_SLOTS"),
-    ({"notional": 60_000.0}, [], 1e6, "SLOT_CAP"),
-    ({}, [], 40_000.0, "NO_FREE_CASH"),
+    ({"notional": 38_000.01}, [], 1e6, "SLOT_CAP"),
+    ({}, [], 30_000.0, "NO_FREE_CASH"),
     ({"cluster": "c1"}, [Position("X1", 10, cluster="c1")], 1e6, "CLUSTER_LIMIT"),
     ({"sector": "bank"}, [Position("X1", 10, sector="bank"), Position("X2", 10, sector="bank")], 1e6, "SECTOR_LIMIT"),
     ({}, [Position("AAA", 10)], 1e6, "ALREADY_HELD"),
@@ -400,6 +400,7 @@ def test_stress_run_reports_quantiles_and_the_band_scenario():
     g = res["grid"][0]
     assert abs(sum(g["p_k"]) - 1.0) < 1e-9
     assert set(g["loss_quantiles_rs"]) == {"q95", "q99", "q99.9"}
-    assert res["band_hit_scenario"]["loss_rs"] == pytest.approx(17_500, abs=0.01)
-    assert res["band_hit_scenario"]["exceeds_tail_limit"] is True
+    minus10 = res["scenarios_before_costs"][0]                                 # Adjusted A1 (was Rs 17,500)
+    assert (minus10["loss_rs"], minus10["within_budget"]) == (11_400.0, True)
+    assert "p_loss_above_scenario_budget" in g
     assert "not a guaranteed maximum loss" in res["caveat"]

@@ -23,3 +23,5 @@
 | 2026-09-25 | P5 | Descriptive runs registered | done | (P5 commit) | T0022/T0023 (Yahoo post-CAS, not evidence) |
 | 2026-09-25 | P3 | P3.4 NSE events + F&O ban fetcher | done | b0c1e0a, 91a5707 | Keys verified on recorded responses; ex-dates use a labelled assumption (no broadcast time from the API); bulk 2021-10..2026-09 download running |
 | 2026-09-25 | P6 | Decision engine P6.1–P6.7 | done | (P6 commit) | 32 tests; false promotion 2.59%, power 0.801, futility 75.7%; band-hit scenario Rs 17,500 > X Rs 12,000 (decision needed); erratum E-P6.7 |
+| 2026-09-25 | P6 | Adjusted A1 (3 slots, Rs 38,000/position, Rs 1,14,000 aggregate incl. pending, Rs 1,500 risk) | done | (A1 commit) | research/decision only; engine, draft prereg and production still at Rs 58,333.33 (listed in p6_report.md); -10% scenario Rs 11,400 within the Rs 12,000 budget before costs |
+| 2026-09-25 | P3 | P3.4 bulk NSE download | stopped | – | 3 consecutive ReadTimeouts after 713 announcement days (Oct 2021 - Sep 2023); stop rule fired as designed; resumable |
