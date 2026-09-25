@@ -314,7 +314,10 @@ def test_e1_rows_can_never_promote():
 @pytest.fixture
 def reg(tmp_path):
     p = tmp_path / "register.json"
-    shutil.copy(pr.REGISTER_PATH, p)
+    reg = json.loads(pr.REGISTER_PATH.read_text(encoding="utf-8"))
+    for v in reg["strategies"].values():                       # the seeded state (plan P1.4)
+        v.update({"status": "UNVERIFIED", "evidence": "none"})
+    p.write_text(json.dumps(reg), encoding="utf-8")
     return p
 
 

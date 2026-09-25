@@ -28,7 +28,7 @@ def test_nothing_runs_without_a_valid_lock(tmp_path):
 
 def test_lock_is_refused_for_a_draft(tmp_path):
     y = tmp_path / "resid_rev_v1.yaml"
-    y.write_bytes((prereg_io.PREREG_DIR / "resid_rev_v1.yaml").read_bytes())
+    y.write_bytes((prereg_io.PREREG_DIR / "resid_rev_v1.yaml").read_bytes().replace(b"status: LOCKED", b"status: DRAFT"))
     with pytest.raises(rh.HoldoutRefused, match="not LOCKED"):
         rh.write_lock(y)
 

@@ -23,7 +23,9 @@ from research.studies import prereg_io
 IST = timezone(timedelta(hours=5, minutes=30))
 DAY = date(2026, 9, 10)
 PREV = date(2026, 9, 9)
-DRAFT = prereg_io.load(prereg_io.PREREG_DIR / "resid_rev_v1.yaml")
+# the DRAFT form of the (now LOCKED) pre-registration: same rules, z_star and hold_bars not yet chosen
+DRAFT = copy.deepcopy(prereg_io.load(prereg_io.PREREG_DIR / "resid_rev_v1.yaml"))
+DRAFT["status"], DRAFT["signal"]["z_star"], DRAFT["trade"]["hold_bars"] = "DRAFT", None, None
 FIXTURE = Path(__file__).resolve().parents[2] / "shared" / "track2_liquid" / "historical_candles_track2.json"   # Kite 32 sessions; hash-pinned in test_p2_regressions
 
 

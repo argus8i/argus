@@ -222,6 +222,7 @@ def test_lock_verification(tmp_path):
     # Write LF bytes explicitly: write_text() on Windows already emits CRLF, and converting that again
     # below would produce CR CR LF, which is a genuinely different file.
     lf_text = src.read_bytes().replace(b"\r\n", b"\n").replace(b"status: DRAFT", b"status: LOCKED")
+    assert b"status: LOCKED" in lf_text
     y.write_bytes(lf_text)
     lock = {"id": "RESID_REV_v1", "yaml_sha256": prereg_io.normalised_sha256(y), "commit": "a" * 40,
             "locked_at": "2026-10-01T10:00:00+05:30"}
@@ -239,7 +240,7 @@ def test_lock_verification(tmp_path):
     # any edit after locking invalidates it
     y.write_text(y.read_text(encoding="utf-8") + "\n# edited\n", encoding="utf-8")
     assert prereg_io.verify_lock(y).reason == "HASH_MISMATCH"
-    y.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    y.write_bytes(lf_text.replace(b"status: LOCKED", b"status: DRAFT"))
     assert prereg_io.verify_lock(y).reason == "STATUS_NOT_LOCKED"
     lock["commit"] = "not-a-commit"
     y.with_suffix(".lock").write_text(json.dumps(lock), encoding="utf-8")
@@ -255,8 +256,9 @@ def test_prereg_loader_matches_pyyaml_when_available():
 
 def test_prereg_loader_known_values_and_errors():
     spec = prereg_io.load(prereg_io.PREREG_DIR / "resid_rev_v1.yaml")
-    assert spec["id"] == "RESID_REV_v1" and spec["status"] == "DRAFT"
-    assert spec["signal"]["z_star"] is None and spec["trade"]["hold_bars"] is None
+    assert spec["id"] == "RESID_REV_v1" and spec["status"] == "LOCKED"          # P7.3, 26 Sep 2026
+    assert spec["signal"]["z_star"] == 3.0 and spec["trade"]["hold_bars"] == "EOD"
+    assert spec["holdout_variant"] == "RESID_REV_NF"
     assert spec["signal"]["rvol_band"] == [0.7, 1.5]
     assert spec["trade"]["targets"] == [{"retrace_of_E": 0.5, "fraction": 0.5}, {"retrace_of_E": 1.0, "fraction": 0.5}]
     assert spec["calibration"]["beta"]["clip"] == [0.3, 2.5]

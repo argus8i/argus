@@ -1,8 +1,9 @@
 # Pre-registration: RESID_REV v1 (plan Appendix B, copied verbatim on 2026-09-25).
-# Stays DRAFT until P7.3. Only P7.2 fills z_star and hold_bars, on the design set.
+# LOCKED 2026-09-26 (P7.3) under Yashu's overnight mandate of 26 Sep 2026; z_star and hold_bars set by P7.2 on
+# the sealed design snapshot. Nothing below may change; a new idea is a new version.
 # Parsed by research/studies/prereg_io.py (a strict YAML subset; PyYAML is not a project dependency).
 id: RESID_REV_v1
-status: DRAFT
+status: LOCKED
 hypothesis: >
   Mean net R per emitted signal (unconstrained per-signal simulation, identical fill rules for all
   signals, clamp misses counted as 0R, 1-tick slippage per side, DhanFeeEngine MIS fees,
@@ -11,10 +12,14 @@ primary_test: {statistic: day_clustered_t, threshold: 2.0, also_require: mean_ne
 secondary_tests:
   - {name: slippage_2_ticks, require: mean_net_r > 0}
   - {name: long_only, require: report_only}
+  - {name: short_only, require: report_only}
   - {name: r_basis_trigger, require: report_only}
+  - {name: wick_pulled_in_2_ticks, require: report_only}
+holdout_variant: RESID_REV_NF   # corporate actions and post-Nov-2024 announcements are not on disk (NSE 403); Yashu 26 Sep
 variants_registered: [RESID_REV_NF]      # run only if the announcements history is unavailable (P3.4)
 data:
-  bars: {interval_min: 15, source: dhan_v2_charts_intraday, timestamps: bar_start_IST, slots_used: "returns 1..23"}
+  bars: {interval_min: 15, source: upstox_v2_1minute_resampled, timestamps: bar_start_IST, slots_used: "returns 1..23"}
+  snapshot: {name: p7_design_20260926, content_sha256: 72a444d7aec15d979b54a36e54afb8108df4b1cf1a0105ef76cb63a7c320059d}
   design: ["2022-01-03", "2024-09-30"]      # Yashu 25 Sep 2026 (decision 2 domain): intraday history from Jan 2022
   holdout: ["2024-10-01", "2026-07-31"]
   excluded: {from: "2026-08-03", reason: "post-CAS regime and audited sessions; descriptive only"}
@@ -35,7 +40,7 @@ calibration:
   market_filter: {index: NIFTY50, percentile: 80, lookback_sessions: 60}
 signal:
   decision_window_bar_close: ["10:00", "13:30"]   # t = 2..16
-  z_star: null                     # P7.2b: 95th pct of per-stock-day max|Z| on design set (Gaussian ref 2.59)
+  z_star: 3.0                      # P7.2b: p95 2.998 of 107,323 design stock-days (T0028); Gaussian ref 2.59
   turn_confirmation: true          # e[t] * E[t] < 0
   rvol_band: [0.7, 1.5]
   news:
@@ -53,7 +58,7 @@ trade:
   targets: [{retrace_of_E: 0.5, fraction: 0.5}, {retrace_of_E: 1.0, fraction: 0.5}]
   breakeven_after_t1: {enabled: true, reference: entry_fill_price}
   min_t1_distance_pct: 0.40
-  hold_bars: null                  # P7.2c: chosen from {4, 8, EOD}; h_eff = min(h, 22 - t) (Appendix A.9)
+  hold_bars: EOD                   # P7.2c: highest day-clustered t (Yashu rule): EOD -0.89 > 8 -1.00 > 4 -1.83 (T0030-T0032)
   policy_exit: "15:05 (SessionPolicy)"
   gap_through_limit: {model: escalate_at_open, slippage_ticks: 1, count_separately: true}
 engine: {var_elm_rate: 0.20, allow_shorts: true, r_basis: stop_limit}
@@ -63,3 +68,4 @@ costs: {fees: DhanFeeEngine_MIS, slippage_ticks_per_side: 1, sensitivity_ticks: 
 sizing: {risk_budget_rs: 1500, max_slots: 3, slot_cap_rs: 38000.00, aggregate_exposure_cap_rs: 114000.00, aggregate_includes: [filled, pending_entries], exposure_measure: absolute_notional, slot_cap_price: worst_admissible_entry, vix_multiplier: portfolio_simulation_only}
 diagnostics_logged_not_gated: [phi_ar1_intraday, is_expiry_day, vix_level, vix_tercile, factor_used, factor_weight, beta]
 trials_registry: research/evidence/trials_registry.csv
+p7_2_selection: {rule: highest_day_clustered_t_of_mean_net_r, rule_source: Yashu_2026-09-26, plan_rule_highest_mean_net_r_would_pick: 8, h4: {net: -0.0590, t: -1.83}, h8: {net: -0.0381, t: -1.00}, EOD: {net: -0.0382, t: -0.89}, wick_pull_2_ticks_changes_choice: false}

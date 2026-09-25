@@ -9,10 +9,17 @@ REGISTER = RESEARCH / "decision" / "register.json"
 ALLOWED_WRITER = RESEARCH / "decision" / "promotion.py"
 
 
-def test_register_starts_all_unverified():
+def test_every_register_status_is_backed_by_a_decision_record():
+    """The register was seeded all UNVERIFIED (plan P1.4); any other status must have been written by
+    promotion.py together with a DecisionRecord naming that strategy and transition."""
     reg = json.loads(REGISTER.read_text(encoding="utf-8"))
     assert reg["strategies"]
-    assert all(v["status"] == "UNVERIFIED" and v["evidence"] == "none" for v in reg["strategies"].values())
+    records = [json.loads(p.read_text(encoding="utf-8")) for p in (RESEARCH / "decision" / "records").glob("*.json")]
+    for name, v in reg["strategies"].items():
+        if v["status"] == "UNVERIFIED":
+            assert v["evidence"] == "none", name
+        else:
+            assert any(r["strategy_id"] == name and r.get("to") == v["status"] for r in records), name
 
 
 def test_only_promotion_py_references_the_register_outside_tests():
