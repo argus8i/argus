@@ -150,6 +150,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Build the point-in-time universe table (plan P3.5)")
     ap.add_argument("--root", default=None)
     ap.add_argument("--fno", default=str(paths.shared_input("fno_lot_sizes.json")))
+    ap.add_argument("--no-ban-history", action="store_true",
+                    help="build without the F&O ban history and label the table FO_BAN_HISTORY_MISSING "
+                         "(default: use events/fo_ban*.parquet when present; uncovered sessions FO_BAN_UNKNOWN)")
     args = ap.parse_args(argv)
     import pandas as pd
     from collections import Counter
@@ -158,7 +161,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     store = ParquetCandleStore(args.root)            # STRATEGY mode: holdout sessions stay hidden
     banned = known = None
-    if (paths.history_dir() / "events" / "fo_ban_days.parquet").exists():
+    if not args.no_ban_history and (paths.history_dir() / "events" / "fo_ban_days.parquet").exists():
         from research.data.nse_events import load_fo_ban
 
         banned, known = load_fo_ban()                # plan P3.4 archives; unknown days are FO_BAN_UNKNOWN
