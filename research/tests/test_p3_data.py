@@ -387,3 +387,19 @@ def test_universe_uses_point_in_time_membership_exclusions_and_duplicate_guard()
     r2 = {(x["symbol"], x["session"]): x["reason"] for x in rows2}
     assert r2[("OLD", days[23])] == r2[("NEW", days[23])] == "DUPLICATE_SERIES"                # same series twice
     assert r2[("HDFC", days[23])] == r2[("BANK", days[23])] == "DUPLICATE_SERIES"              # no exclusion given
+
+
+def test_merger_successor_mappings_are_wrong_company(tmp_path):
+    import json as _json
+
+    from research.data.universe_build import WRONG_COMPANY_SERIES, wrong_company_from_resolution
+
+    p = tmp_path / "res.json"
+    p.write_text(_json.dumps({
+        "HDFC": {"resolution_method": "CORPORATE_MERGER_SUCCESSOR_ISIN", "primary_isin": "INE001A01036",
+                 "instrument_key": "NSE_EQ|INE040A01034", "mapped_current_symbol": "HDFCBANK"},
+        "CADILAHC": {"resolution_method": "UPSTOX_MASTER_ISIN_RENAME", "primary_isin": "INE010B01027",
+                     "instrument_key": "NSE_EQ|INE010B01027", "mapped_current_symbol": "ZYDUSLIFE"}}), encoding="utf-8")
+    out = wrong_company_from_resolution(p)
+    assert set(out) == {"HDFC"}                                   # a same-ISIN rename is not excluded
+    assert {"HDFC", "MINDTREE", "IDFC", "GSPL", "PEL"} <= set(WRONG_COMPANY_SERIES)

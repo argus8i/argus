@@ -130,7 +130,23 @@ class TableUniverse:
 WRONG_COMPANY_SERIES: Dict[str, str] = {
     "HDFC": "HDFC Ltd (INE001A01036) merged into HDFC Bank 2023-07; its file holds HDFCBANK prices",
     "MINDTREE": "Mindtree (INE018I01017) merged into LTI 2022-11; its file holds LTI/LTIM prices",
+    "IDFC": "IDFC Ltd (INE043D01016) merged into IDFC First Bank; its file holds IDFCFIRSTB prices",
+    "GSPL": "Gujarat State Petronet (INE246F01010) mapped to Gujarat Gas (INE844O01030); wrong company",
+    "PEL": "Piramal Enterprises (INE140A01024) mapped to Piramal Finance (INE202B01038); wrong company",
 }
+
+
+def wrong_company_from_resolution(path: Path | str) -> Dict[str, str]:
+    """Every symbol a resolver mapped to a merger successor's instrument key (method
+    CORPORATE_MERGER_SUCCESSOR_ISIN, or any key that does not contain the symbol's own ISIN outside a
+    documented rename) is a different company's series."""
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    out = {}
+    for sym, v in raw.items():
+        if v.get("resolution_method") == "CORPORATE_MERGER_SUCCESSOR_ISIN":
+            out[str(sym).upper()] = (f"{v.get('primary_isin')} mapped to successor {v.get('instrument_key')} "
+                                     f"({v.get('mapped_current_symbol')}); wrong company")
+    return out
 
 
 def load_fno_membership(path: Path | str) -> Dict[str, Set[date]]:
@@ -226,7 +242,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         mpath = (paths.history_dir() / "bhavcopy" / "fno_point_in_time_2022_2026.parquet"
                  if args.pit_membership == "DEFAULT" else Path(args.pit_membership))
         membership = load_fno_membership(mpath)
-        excluded = WRONG_COMPANY_SERIES
+        excluded = dict(WRONG_COMPANY_SERIES)
+        res_path = paths.history_dir() / "bhavcopy" / "historical_fno_upstox_resolution.json"
+        if res_path.exists():
+            excluded.update(wrong_company_from_resolution(res_path))
         keys = {}
         man = paths.history_dir() / "raw" / "upstox" / "manifest.jsonl"
         for line in man.read_text(encoding="utf-8").splitlines():
