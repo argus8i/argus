@@ -14,3 +14,10 @@
 | 2026-09-25 | P2 | Regression 2 (audit production-code ORB) | done | (P2 commit) | n = 41, −0.0026R (audit −0.003R) |
 | 2026-09-25 | P2 | Runtime | done | – | NoOp benchmark 0.136 → 0.017 s/session; the 30-min target on real data is unverified until P5 |
 | 2026-09-25 | P2 | Full suite | done | – | 347 passed; report `research/notes/p2_report.md`. STOP: awaiting "continue" and a pyarrow decision |
+| 2026-09-25 | P3 | Data layer code (P3.1, P3.5–P3.9) | done | fd288e2 | Adopted from an unidentified session; provenance QA_ONLY enforcement added |
+| 2026-09-25 | P3 | P3.2 instruments, P3.3 dhan_history | deferred | – | Data-source decision pending (Antigravity proposes an HF Upstox mirror; not yet approved) |
+| 2026-09-25 | P3 | P3.4 nse_events | not started | – | Decision 7 approved; RESID_REV_NF only until built |
+| 2026-09-25 | P3 | Acceptance | **FAIL** | – | Yahoo fails the P3.9 cross-check; 0 design-set sessions. Report `research/notes/p3_data_report.md` |
+| 2026-09-25 | P4 | Features and point-in-time calibration | done | 823aaa2 | Synthetic known-answer and look-ahead tests |
+| 2026-09-25 | P5 | ORB_PROD, RESID_REV v1, ORB_SIMPLE rename | done | (P5 commit) | Synthetic tests; ORB_PROD matches the desk on sampled days; next-trading-day rule made fail-closed |
+| 2026-09-25 | P5 | Descriptive runs registered | done | (P5 commit) | T0022/T0023 (Yahoo post-CAS, not evidence) |
