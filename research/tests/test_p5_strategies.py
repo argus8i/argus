@@ -359,3 +359,33 @@ def test_candidate_recorded_once_per_stock_day_before_the_stop_rules():
     first = dict(cd)
     a.evaluate(_ctx(stock_rets=UP))
     assert a.candidates[key] == first
+
+
+def test_one_day_engine_run_matches_the_full_run_for_that_day():
+    """The shadow runner runs the engine for one live day. That day's decisions must equal the full
+    run's: sessions are independent and every input is read point-in-time from the history."""
+    from research.backtest.engine import BacktestEngine, EngineConfig
+    from research.backtest.universe import PointInTimeUniverse
+    from research.features.calibration import CalibrationConfig, CalibrationProvider
+    from research.features.events import NoEventsData
+    from research.tests.synthetic import SyntheticSpec, make_store, sessions
+
+    cfg = CalibrationConfig.from_prereg(DRAFT)
+    fmap = {s: "IDX:NIFTYMETAL" for s in SyntheticSpec().stocks}
+    store = make_store(overrides={("AAA", 66): {2: 0.985, 3: 0.985, 4: 0.99}})
+    days = sessions()
+    uni = PointInTimeUniverse.assumed_static(list("AAA BBB CCC DDD EEE FFF".split()), days[0], days[-1])
+
+    def run(only=None):
+        a = ResidRevAdapter(filled(z_star=2.0), variant="RESID_REV_NF")
+        eng = BacktestEngine(store, uni, [a], EngineConfig(var_elm_rate=0.2, allow_shorts=True),
+                             calibration_provider=CalibrationProvider(store, fmap, cfg), events_provider=NoEventsData())
+        return eng.run(only_dates=only)
+
+    day = days[66]
+    key = lambda s: (s.symbol, s.signal_time, s.side, s.entry_ref, s.stop_loss, tuple(s.targets),
+                     s.max_bars, s.disposition, s.counterfactual_net_r)
+    full = sorted(key(s) for s in run().signals if s.signal_time.date() == day)
+    one = run([day])
+    assert one.dates == [day]
+    assert full and sorted(key(s) for s in one.signals) == full

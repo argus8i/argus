@@ -34,7 +34,7 @@ import math
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from research.backtest.bars import IST, Bar, CandleStore, round_to_tick, tick_size
 from research.backtest.cost_model import ProductType
@@ -194,12 +194,18 @@ class BacktestEngine:
         self._sim_cfg = self.config.sim_config()
 
     # ------------------------------------------------------------------ run
-    def run(self) -> EngineResult:
+    def run(self, only_dates: Optional[Iterable[date]] = None) -> EngineResult:
+        """Run every session in the store, or only `only_dates` (the shadow runner's single live day).
+        Sessions are independent (MIS: flat every day; calibration and adapters read the point-in-time
+        history), so a one-day run gives that day's decisions exactly as a full run does."""
         symbols = self.store.symbols
         tradables = [s for s in symbols if self.store.kind(s) == "TRADABLE"]
         indices = [s for s in symbols if self.store.kind(s) == "INDEX"]
         session_sets = {s: set(self.store.sessions(s)) for s in symbols}
         all_dates = sorted({d for s in tradables for d in session_sets[s]})
+        if only_dates is not None:
+            keep = set(only_dates)
+            all_dates = [d for d in all_dates if d in keep]
 
         trades: List[Trade] = []
         signals: List[SignalIntent] = []
