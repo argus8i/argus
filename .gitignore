@@ -36,3 +36,9 @@ antigravity/logs/live_depth_ticks.csv
 # Local scratch and OS metadata
 scratch/
 desktop.ini
+
+# Track 2 research data and outputs: generated, never committed (execution plan rule 1.2.6)
+shared/track2_liquid/history/
+research/outputs/
+# Pre-registration locks must be committed (plan P7.3), despite the global *.lock rule above
+!research/studies/prereg/*.lock
