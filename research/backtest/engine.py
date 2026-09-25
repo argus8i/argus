@@ -34,7 +34,7 @@ import math
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from research.backtest.bars import IST, Bar, CandleStore
 from research.backtest.cost_model import ProductType
@@ -165,7 +165,12 @@ class BacktestEngine:
         sectors: Optional[Mapping[str, str]] = None,
         clusters: Optional[Mapping[date, Mapping[str, str]]] = None,
         allocator: Optional[Allocator] = None,
+        calibration_provider: Optional[Any] = None,
+        events_provider: Optional[Any] = None,
     ) -> None:
+        from research.data.holdout import assert_not_qa
+
+        assert_not_qa(store, "BacktestEngine")      # plan P3.7: QA data never reaches strategy code
         self.store = store
         self.universe = universe
         self.adapters = list(adapters)
@@ -174,6 +179,10 @@ class BacktestEngine:
         self.clusters = clusters
         self.policy = self.config.policy
         self.allocator = allocator or DefaultAllocator(seed=self.config.allocation_seed)
+        # plan P4: point-in-time calibration (research/features/calibration.py) and events
+        # (research/features/events.py) reach adapters through StrategyContext
+        self.calibration_provider = calibration_provider
+        self.events_provider = events_provider
         self._sim_cfg = self.config.sim_config()
 
     # ------------------------------------------------------------------ run
@@ -232,6 +241,7 @@ class BacktestEngine:
             if self.sectors.get(s):
                 by_sector[self.sectors[s]].append(s)
         day_clusters = (self.clusters or {}).get(day, {})
+        session_cal = self.calibration_provider.session(day) if self.calibration_provider is not None else None
 
         active: List[Trade] = []
         session_trades: List[Trade] = []
@@ -255,7 +265,8 @@ class BacktestEngine:
                          for p in by_sector.get(sector, []) if p != s} if sector else {}
                 ctx = StrategyContext(symbol=s, decision_time=decision_time, current=bars_by[s][i],
                                       bars=bars_by[s][: i + 1], daily_bars=daily_cache[s], nifty_bars=nifty_now,
-                                      peers=peers, sector=sector, store=view, index_bars=idx_now, bar_index=i)
+                                      peers=peers, sector=sector, store=view, index_bars=idx_now, bar_index=i,
+                                      calibration=session_cal, events=self.events_provider)
                 for order, adapter in enumerate(self.adapters):
                     decision = adapter.evaluate(ctx)
                     counts[adapter.name][decision.action] += 1

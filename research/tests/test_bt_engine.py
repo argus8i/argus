@@ -199,12 +199,12 @@ def test_orb_adapter_fails_closed_without_baseline_or_trend_history():
                 "NIFTY50": _session("NIFTY50", px=24000.0)}
     res = BacktestEngine(_store(sessions), _universe(), [OrbAdapter()], EngineConfig(var_elm_rate=0.2), SECTORS).run()
     assert res.trades == []
-    assert res.decision_counts["ORB_MOMENTUM"]["DATA_INVALID"] > 0
+    assert res.decision_counts["ORB_SIMPLE"]["DATA_INVALID"] > 0
 
 
 def test_default_adapters_are_orb_active_and_rest_shadow():
     ads = default_adapters()
-    assert {a.name: a.is_shadow for a in ads} == {"ORB_MOMENTUM": False, "VWAP_RECLAIM": True, "VOL_SQUEEZE": True,
+    assert {a.name: a.is_shadow for a in ads} == {"ORB_SIMPLE": False, "VWAP_RECLAIM": True, "VOL_SQUEEZE": True,
                                                   "TRAPDOOR": True, "LAST_LIGHT": True, "RECOIL": True, "COMPASS": True}
 
 

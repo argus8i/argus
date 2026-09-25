@@ -1,0 +1,12 @@
+# Pre-registration: ORB_PROD v1 (plan Appendix B, verbatim). Baseline only: no parameter is chosen.
+id: ORB_PROD_v1
+definition: >
+  Production live path imported read-only: track2_orb_signal_adapter logic ->
+  LiquidMomentumEngine.evaluate_15m_orb_breakout (volume vs slot median >= regime multiple; 3.5x in practice
+  because production passes no breadth; extension <= 0.5*ATR14; MarketRegimeFilter on the NIFTY opening range)
+  -> calculate_position_size (stop = max(OR low, entry - 1.5*ATR14); SL-L offset 0.5%).
+  Eligible bars 09:30-14:30; first qualifying bar per symbol-day.
+exits: {two_tranche: [1.5R, 3.0R], breakeven_after_t1: entry_fill_price, policy_exit: "15:05"}
+split: same as RESID_REV_v1
+purpose: baseline R statistics and daily P&L series; no parameters are chosen
+record: git blob hashes of every imported production file

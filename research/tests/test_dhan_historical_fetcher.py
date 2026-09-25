@@ -149,6 +149,10 @@ def test_dhan_historical_fetcher_chunking_and_export(tmp_path: Path):
     out_store = tmp_path / "test_store.json"
     fetcher.export_canonical_store({"RELIANCE": res}, out_store, start, end)
     assert out_store.is_file()
+    from research.data import provenance
+
+    exported = json.loads(out_store.read_text(encoding="utf-8"))["symbols"]["RELIANCE"]
+    assert provenance.classify(exported) == provenance.DHAN      # strategy-eligible after ingest
 
     # Load with CandleStore to verify complete compatibility with backtester
     store = CandleStore.from_historical_json(out_store)

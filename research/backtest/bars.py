@@ -155,13 +155,20 @@ class CandleStore:
     """Session-indexed 15m bars and daily bars per symbol."""
 
     def __init__(self, intraday: Mapping[str, Mapping[date, List[Bar]]], daily: Mapping[str, List[DailyBar]],
-                 issues: Mapping[str, int] | None = None):
+                 issues: Mapping[str, int] | None = None, mode: str = "STRATEGY"):
         self._intraday = {s: dict(v) for s, v in intraday.items()}
         self._daily = {s: list(v) for s, v in daily.items()}
         self._issues = dict(issues or {})
+        self.mode = mode          # "QA" stores are refused by the engine (research/data/holdout.py)
 
     @classmethod
-    def from_historical_json(cls, path: Path | str) -> "CandleStore":
+    def from_historical_json(cls, path: Path | str, guard=None, mode: str = "STRATEGY") -> "CandleStore":
+        """Load the canonical candle JSON. Every load passes through a HoldoutGuard (plan P3.7): in
+        STRATEGY mode, holdout-dated bars are dropped unless the pre-registration is locked; mode="QA"
+        keeps everything and marks the store so strategy code refuses it."""
+        from research.data.holdout import default_guard
+
+        guard = guard or default_guard(mode=mode)
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
         symbols = raw.get("symbols")
         if not isinstance(symbols, dict) or not symbols:
@@ -192,7 +199,12 @@ class CandleStore:
                 except (KeyError, TypeError, ValueError):
                     issues["invalid_bars"] += 1
             daily[sym] = sorted(dl, key=lambda x: x.day)
-        return cls(intraday, daily, issues)
+        hidden = {d for v in intraday.values() for d in v if guard.hidden(d)}
+        if hidden:
+            intraday = {s: {d: b for d, b in v.items() if not guard.hidden(d)} for s, v in intraday.items()}
+        daily = {s: [d for d in v if not guard.hidden(d.day)] for s, v in daily.items()}
+        issues["holdout_hidden_sessions"] = len(hidden)
+        return cls(intraday, daily, issues, mode=guard.mode)
 
     @property
     def symbols(self) -> List[str]:

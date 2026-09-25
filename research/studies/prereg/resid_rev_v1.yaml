@@ -1,0 +1,63 @@
+# Pre-registration: RESID_REV v1 (plan Appendix B, copied verbatim on 2026-09-25).
+# Stays DRAFT until P7.3. Only P7.2 fills z_star and hold_bars, on the design set.
+# Parsed by research/studies/prereg_io.py (a strict YAML subset; PyYAML is not a project dependency).
+id: RESID_REV_v1
+status: DRAFT
+hypothesis: >
+  Mean net R per emitted signal (unconstrained per-signal simulation, identical fill rules for all
+  signals, clamp misses counted as 0R, 1-tick slippage per side, DhanFeeEngine MIS fees,
+  r_basis stop_limit) is greater than 0 on the holdout.
+primary_test: {statistic: day_clustered_t, threshold: 2.0, also_require: mean_net_r > 0}
+secondary_tests:
+  - {name: slippage_2_ticks, require: mean_net_r > 0}
+  - {name: long_only, require: report_only}
+  - {name: r_basis_trigger, require: report_only}
+variants_registered: [RESID_REV_NF]      # run only if the announcements history is unavailable (P3.4)
+data:
+  bars: {interval_min: 15, source: dhan_v2_charts_intraday, timestamps: bar_start_IST, slots_used: "returns 1..23"}
+  design: [first_available, "2024-09-30"]
+  holdout: ["2024-10-01", "2026-07-31"]
+  excluded: {from: "2026-08-03", reason: "post-CAS regime and audited sessions; descriptive only"}
+universe:
+  track2_point_in_time: true
+  min_price: 10
+  dtv20_cr: 30
+  exclude: [fo_ban]
+  exclude_if_history_available: [asm, gsm]
+  mcap_band: {range_cr: [4000, 75000], apply_only_if: lagged_shares_history_available}
+factor: {primary: mapped_sectoral_index, fallback: NIFTY50, use_nifty_if_stock_weight_above: 0.10}
+calibration:
+  beta: {lookback_sessions: 60, bars: "1..23", shrink_n0_pairs: 300, prior: 1.0, clip: [0.3, 2.5]}
+  resid_var: {lookback_sessions: 60, winsor_pct: 99, min_valid: 40}
+  shape: {universe: true, lookback_sessions: 60, normalise_mean: 1, bars: "1..23"}
+  price_var_by_slot: {lookback_sessions: 60, min_valid: 40, winsor_pct: 99}
+  rvol: {lookback_sessions: 20, min_valid: 15}
+  market_filter: {index: NIFTY50, percentile: 80, lookback_sessions: 60}
+signal:
+  decision_window_bar_close: ["10:00", "13:30"]   # t = 2..16
+  z_star: null                     # P7.2b: 95th pct of per-stock-day max|Z| on design set (Gaussian ref 2.59)
+  turn_confirmation: true          # e[t] * E[t] < 0
+  rvol_band: [0.7, 1.5]
+  news:
+    any_filing_since: prev_trading_day_15_30   # dissemination timestamp <= decision time
+    scheduled: [results, board_meeting]        # today or next trading day, keyed by intimation timestamp
+    ex_date_today: block
+    unknown: block
+  market_filter: "|ZM[t]| <= 80th percentile of |ZM| at the same bar, prior 60 sessions"
+  one_emitted_signal_per_symbol_day: true      # failed evaluations do not consume the day
+  side: "SELL if E[t] > 0 else BUY"
+  shorts: allowed
+trade:
+  entry: {rule: next_bar_open, slippage_ticks: 1, clamp_bps_adverse: 10}
+  stop: {sigma_hold_multiple: 1.0, floor_pct: 0.8, skip_if_above_pct: 2.0, sl_limit_offset_pct: 0.5}
+  targets: [{retrace_of_E: 0.5, fraction: 0.5}, {retrace_of_E: 1.0, fraction: 0.5}]
+  breakeven_after_t1: {enabled: true, reference: entry_fill_price}
+  min_t1_distance_pct: 0.40
+  hold_bars: null                  # P7.2c: chosen from {4, 8, EOD}; h_eff = min(h, 22 - t) (Appendix A.9)
+  policy_exit: "15:05 (SessionPolicy)"
+  gap_through_limit: {model: escalate_at_open, slippage_ticks: 1, count_separately: true}
+engine: {var_elm_rate: 0.20, allow_shorts: true, r_basis: stop_limit}
+costs: {fees: DhanFeeEngine_MIS, slippage_ticks_per_side: 1, sensitivity_ticks: [0, 2, 3]}
+sizing: {risk_budget_rs: 1500, slot_cap_rs: 58333.33, vix_multiplier: portfolio_simulation_only}
+diagnostics_logged_not_gated: [phi_ar1_intraday, is_expiry_day, vix_level, vix_tercile, factor_used, factor_weight, beta]
+trials_registry: research/evidence/trials_registry.csv

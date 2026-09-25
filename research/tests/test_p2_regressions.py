@@ -1,6 +1,7 @@
 """P2 regression tests against the 24-Sep audit (plan P2, "Regression test 1/2"; research/evidence/MEASURED_FACTS.md).
 
-Both run the new engine on shared/track2_liquid/historical_candles_track2.json in audit mode:
+Both run the new engine on the Kite 32-session file shared/track2_liquid/historical_candles_track2.json,
+pinned by hash, in audit mode:
 entry at the signal close, trigger-basis R, no slippage ticks, flat cost 0.106% of entry notional,
 two-tranche 1.5R/3R with breakeven, flat at the open of the 15:00 bar.
 """
@@ -17,8 +18,21 @@ from research.backtest.strategies import Decision, SignalIntent, StrategyAdapter
 from research.backtest.universe import PointInTimeUniverse
 from research.studies.signal_sim import simulate_signal
 
+# The Kite 32-session file, pinned by its git blob content (as at cdc0665 / 39d87e5). Commit a8264e9 once
+# overwrote it with Yahoo data and 130af95 restored it; the pin makes any future overwrite fail loudly
+# instead of silently changing the regression numbers. (A committed copy was not used: at 1.5 MB it
+# exceeds the plan's 200 KB fixture limit, rule 1.2.6.)
 DATA = Path(__file__).resolve().parents[2] / "shared" / "track2_liquid" / "historical_candles_track2.json"
-pytestmark = pytest.mark.skipif(not DATA.exists(), reason="repo 32-session file missing")
+DATA_SHA256 = "b66be4a5e5235e2a72c8b6b25f73ae912291294d753aaf488aea3bb1308afec7"   # LF-normalised
+
+
+def test_data_is_the_pinned_kite_file():
+    """The file must be the exact Kite file the audit used (hash over LF-normalised bytes, so a Windows
+    checkout with autocrlf passes too). A missing or replaced file fails; it is never skipped."""
+    import hashlib
+
+    assert DATA.exists(), f"pinned Kite file missing: {DATA}"
+    assert hashlib.sha256(DATA.read_bytes().replace(b"\r\n", b"\n")).hexdigest() == DATA_SHA256
 
 AUDIT_CFG = EngineConfig(var_elm_rate=0.20, entry_mode="signal_close", entry_slippage_ticks=0, stop_slippage_ticks=0,
                          exit_slippage_ticks=0, r_basis="trigger", cost_mode="flat_pct_of_entry_notional",

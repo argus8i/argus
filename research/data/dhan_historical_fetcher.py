@@ -429,6 +429,8 @@ class DhanHistoricalFetcher:
             store_dict["symbols"][sym] = {
                 "bars": res.get("bars", []),
                 "daily_bars": res.get("daily_bars", []),
+                # provenance class read by research/data/ingest_json.py (research/data/provenance.py)
+                "source": "DHAN_API_V2",
             }
 
         out_path.parent.mkdir(parents=True, exist_ok=True)

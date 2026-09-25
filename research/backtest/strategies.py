@@ -25,6 +25,9 @@ class PointInTimeView:
     """
 
     def __init__(self, store: CandleStore, session: date, decision_time: datetime) -> None:
+        from research.data.holdout import assert_not_qa
+
+        assert_not_qa(store, "PointInTimeView")
         self._store = store
         self.session = session
         self.decision_time = decision_time
@@ -135,8 +138,10 @@ class StrategyAdapter:
 
 
 class OrbAdapter(StrategyAdapter):
-    """15-minute Opening Range Breakout (ORB) adapter."""
-    name: str = "ORB_MOMENTUM"
+    """ORB_SIMPLE (plan P5.3): the simplified 15-minute ORB kept for comparison only. It is NOT the
+    production rule set; the production-equivalent baseline is research/strategies/orb_prod.py (ORB_PROD).
+    Renamed from ORB_MOMENTUM so no report can confuse the two."""
+    name: str = "ORB_SIMPLE"
 
     def __init__(self, is_shadow: bool = False, min_baseline_bars: int = 20) -> None:
         self.is_shadow = is_shadow
@@ -306,6 +311,9 @@ class CasReversalAdapter(StrategyAdapter):
         if len(ctx.daily_bars) < 20:
             return Decision(self.name, ctx.symbol, "DATA_INVALID", reason="MISSING_BASELINE")
         return Decision(self.name, ctx.symbol, "NO_PATTERN")
+
+
+OrbSimpleAdapter = OrbAdapter
 
 
 def default_adapters() -> List[StrategyAdapter]:
