@@ -42,6 +42,10 @@ def run_study(
             a.min_baseline_bars = min_baseline_sessions
 
     cfg = config or EngineConfig()
+    if cfg.var_elm_rate is None:
+        # plan D2: without a margin rate every intent is silently rejected and the study becomes
+        # counterfactual-only. Research uses 0.20 (ASSUMPTION: MIS margin on F&O stocks); state it.
+        raise ValueError("run_study needs an explicit EngineConfig.var_elm_rate (research default 0.20)")
     engine = BacktestEngine(
         store=store,
         universe=universe,
@@ -83,6 +87,12 @@ def run_study(
         "total_trades": len(res.trades),
         "total_signals": len(res.signals),
         "decision_counts": res.decision_counts,
+        "disposition_counts": res.disposition_counts,
+        "rms_exits": res.rms_exits,
+        "gap_through_limit_exits": res.gap_through_limit_exits,
+        "engine_config": {"var_elm_rate": cfg.var_elm_rate, "r_basis": cfg.r_basis,
+                          "allow_shorts": cfg.allow_shorts, "stop_limit_offset_pct": cfg.stop_limit_offset_pct,
+                          "entry_mode": cfg.entry_mode, "cost_mode": cfg.cost_mode},
         "pnl_by_date": {d.isoformat(): pnl for d, pnl in res.daily_pnl.items()},
     }
     (out_path / "summary.json").write_text(

@@ -35,7 +35,10 @@ _TICK_TABLE = ((250.0, 0.01), (1000.0, 0.05), (5000.0, 0.10), (10000.0, 0.50), (
 
 
 def is_index_symbol(symbol: str) -> bool:
-    return "NIFTY" in symbol.upper()
+    """True only for registered indices or IDX:-prefixed names (plan D5). The old substring test
+    ("NIFTY" in name) treated INDIA VIX as a stock."""
+    from research.data.indices import is_index
+    return is_index(symbol)
 
 
 def tick_size(price: float) -> float:
@@ -194,6 +197,10 @@ class CandleStore:
     @property
     def symbols(self) -> List[str]:
         return sorted(self._intraday)
+
+    def kind(self, symbol: str) -> str:
+        """INDEX or TRADABLE (plan D5). The engine never evaluates strategies on an INDEX series."""
+        return "INDEX" if is_index_symbol(symbol) else "TRADABLE"
 
     def sessions(self, symbol: str) -> List[date]:
         return sorted(self._intraday.get(symbol, {}))

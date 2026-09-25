@@ -7,10 +7,47 @@ Each adapter wraps strategy evaluation inside a StrategyContext that guarantees 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from datetime import date, datetime
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from research.backtest.bars import Bar, CandleStore, DailyBar
+
+
+class LookAheadError(RuntimeError):
+    """Raised when strategy code asks for data that was not available at the decision time."""
+
+
+class PointInTimeView:
+    """Read-only view of a CandleStore as of one decision (plan D17).
+
+    Only sessions strictly before the current one are reachable. Bars of the current session reach
+    strategies through StrategyContext.bars, which the engine cuts at the decision time.
+    """
+
+    def __init__(self, store: CandleStore, session: date, decision_time: datetime) -> None:
+        self._store = store
+        self.session = session
+        self.decision_time = decision_time
+
+    @property
+    def symbols(self) -> List[str]:
+        return self._store.symbols
+
+    def sessions(self, symbol: str) -> List[date]:
+        return [d for d in self._store.sessions(symbol) if d < self.session]
+
+    def bars(self, symbol: str, day: date) -> List[Bar]:
+        if day >= self.session:
+            raise LookAheadError(f"bars for {symbol} on {day} are not closed at {self.decision_time}")
+        return self._store.bars(symbol, day)
+
+    def daily_before(self, symbol: str, day: date) -> List[DailyBar]:
+        if day > self.session:
+            raise LookAheadError(f"daily bars before {day} include sessions after {self.session}")
+        return self._store.daily_before(symbol, day)
+
+    def daily(self, symbol: str) -> List[DailyBar]:
+        return self._store.daily_before(symbol, self.session)
 
 
 @dataclass(frozen=True)
@@ -23,7 +60,12 @@ class StrategyContext:
     nifty_bars: Sequence[Bar] = field(default_factory=list)
     peers: Mapping[str, Sequence[Bar]] = field(default_factory=dict)
     sector: str = ""
-    store: Optional[CandleStore] = None
+    store: Optional[Any] = None                  # PointInTimeView in the engine (plan D17), never a raw store
+    # plan D13: richer point-in-time inputs for new adapters
+    index_bars: Mapping[str, Sequence[Bar]] = field(default_factory=dict)
+    calibration: Optional[Any] = None
+    events: Optional[Any] = None
+    bar_index: int = -1
 
 
 @dataclass
@@ -39,6 +81,16 @@ class SignalIntent:
     entry_ref: float = 0.0
     disposition: str = "PENDING"
     counterfactual_net_r: Optional[float] = None
+    # plan D13
+    diagnostics: Dict[str, Any] = field(default_factory=dict)
+    priority_score: float = 0.0
+    r_basis: Optional[str] = None
+    # counterfactual outcome from the shared per-signal simulation (plan D8, D9, D15)
+    counterfactual_exit_reason: str = ""
+    counterfactual_evidence_class: str = "E1_CF"
+    counterfactual_fee_estimated: bool = False
+    qty_planned: int = 0
+    trade_id: Optional[str] = None
 
     @classmethod
     def from_ctx(
