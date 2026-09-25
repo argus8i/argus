@@ -360,3 +360,30 @@ def test_history_defaults_to_the_main_checkout_from_a_worktree(tmp_path, monkeyp
     assert paths.history_dir() == main / "shared" / "track2_liquid" / "history"
     monkeypatch.setenv("TRACK2_HISTORY_DIR", str(tmp_path / "h"))
     assert paths.history_dir() == tmp_path / "h"
+
+
+# ------------------------------------------------------------------ point-in-time membership, exclusions, duplicates
+def test_universe_uses_point_in_time_membership_exclusions_and_duplicate_guard():
+    from research.backtest.bars import Bar, CandleStore, DailyBar
+    from research.data.universe_build import build
+
+    IST_ = timezone(timedelta(hours=5, minutes=30))
+    days = [date(2022, 3, 1) + timedelta(days=k) for k in range(30)]
+    intraday, daily = {}, {}
+    for s in ("OLD", "NEW", "HDFC", "BANK"):
+        intraday[s] = {d: [Bar(s, datetime.combine(d, session_shape.slot_start(0), IST_), 15, 100, 101, 99, 100, 10)]
+                       for d in days[22:]}
+        daily[s] = [DailyBar(s, d, 100, 101, 99, 100, 4_000_000) for d in days]     # Rs 40 Cr/day
+    store = CandleStore(intraday, daily)
+    membership = {"OLD": set(days[22:25]), "NEW": set(days[25:]), "HDFC": set(days[22:]), "BANK": set(days[22:])}
+    keys = {"OLD": "K1", "NEW": "K1", "HDFC": "K2", "BANK": "K2"}                    # OLD->NEW is a rename
+    rows, flags = build(store, [], membership=membership, excluded={"HDFC": "wrong company"}, series_keys=keys)
+    r = {(x["symbol"], x["session"]): x["reason"] for x in rows}
+    assert "FNO_MEMBERSHIP_POINT_IN_TIME" in flags and "FNO_MEMBERSHIP_CURRENT_LIST" not in flags
+    assert r[("OLD", days[23])] == "ELIGIBLE" and r[("OLD", days[26])] == "NOT_FNO_MEMBER"       # renamed away
+    assert r[("NEW", days[23])] == "NOT_FNO_MEMBER" and r[("NEW", days[26])] == "ELIGIBLE"
+    assert r[("HDFC", days[23])] == "WRONG_COMPANY_SERIES" and r[("BANK", days[23])] == "ELIGIBLE"
+    rows2, _ = build(store, [], membership={**membership, "NEW": set(days[22:])}, series_keys=keys)
+    r2 = {(x["symbol"], x["session"]): x["reason"] for x in rows2}
+    assert r2[("OLD", days[23])] == r2[("NEW", days[23])] == "DUPLICATE_SERIES"                # same series twice
+    assert r2[("HDFC", days[23])] == r2[("BANK", days[23])] == "DUPLICATE_SERIES"              # no exclusion given

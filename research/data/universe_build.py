@@ -124,25 +124,77 @@ class TableUniverse:
         return cls(table=table, flags=flags, note=str(path))
 
 
+# Symbols whose only available intraday series belongs to a DIFFERENT company (the resolver mapped a merged,
+# delisted ISIN to the acquirer's instrument key; Upstox refuses the delisted ISINs themselves, MEASURED
+# 25 Sep 2026: UDAPI100011). They are never eligible.
+WRONG_COMPANY_SERIES: Dict[str, str] = {
+    "HDFC": "HDFC Ltd (INE001A01036) merged into HDFC Bank 2023-07; its file holds HDFCBANK prices",
+    "MINDTREE": "Mindtree (INE018I01017) merged into LTI 2022-11; its file holds LTI/LTIM prices",
+}
+
+
+def load_fno_membership(path: Path | str) -> Dict[str, Set[date]]:
+    """symbol -> sessions on which it had stock futures listed (point-in-time F&O membership, derived from
+    the NSE F&O bhavcopy: `session`, `symbol`, `has_fut`)."""
+    import pandas as pd
+
+    df = pd.read_parquet(path, columns=["session", "symbol", "has_fut"])
+    out: Dict[str, Set[date]] = {}
+    for s, d, f in zip(df["symbol"], df["session"], df["has_fut"]):
+        if bool(f):
+            out.setdefault(str(s).upper(), set()).add(date.fromisoformat(str(d)[:10]))
+    return out
+
+
 def build(store, fno_symbols: Sequence[str], banned: Optional[Mapping[str, Set[date]]] = None,
           surveillance: Optional[Mapping[str, Set[date]]] = None,
-          ban_known: Optional[Set[date]] = None) -> Tuple[List[Dict[str, object]], List[str]]:
-    flags = ["FNO_MEMBERSHIP_CURRENT_LIST", "MCAP_BAND_NOT_APPLIED"]
+          ban_known: Optional[Set[date]] = None,
+          membership: Optional[Mapping[str, Set[date]]] = None,
+          excluded: Optional[Mapping[str, str]] = None,
+          series_keys: Optional[Mapping[str, str]] = None) -> Tuple[List[Dict[str, object]], List[str]]:
+    """membership (point-in-time) replaces the static fno_symbols list when given. excluded: symbol -> reason
+    (never eligible, reason WRONG_COMPANY_SERIES). series_keys: symbol -> source instrument key; two symbols
+    eligible on the same session with the same key would be one price series counted twice, so all of them
+    are marked DUPLICATE_SERIES (fail closed)."""
+    flags = ["FNO_MEMBERSHIP_POINT_IN_TIME" if membership is not None else "FNO_MEMBERSHIP_CURRENT_LIST",
+             "MCAP_BAND_NOT_APPLIED"]
     if banned is None:
         flags.append("FO_BAN_HISTORY_MISSING")
     if surveillance is None:
         flags.append("SURVEILLANCE_HISTORY_MISSING")
     members = set(fno_symbols)
+    excluded = dict(excluded or {})
     rows: List[Dict[str, object]] = []
     for sym in store.symbols:
         if store.kind(sym) != "TRADABLE":
             continue
         daily = [(d.day, d.close, d.volume) for d in store.daily(sym)]
-        for r in eligibility(daily, store.sessions(sym), sym in members,
-                             (banned or {}).get(sym, set()) if banned is not None else None,
-                             (surveillance or {}).get(sym) if surveillance is not None else None,
-                             ban_known=ban_known):
+        days = store.sessions(sym)
+        if membership is not None:
+            mdays = membership.get(sym.upper(), set())
+            parts = [eligibility(daily, [d], d in mdays,
+                                 (banned or {}).get(sym, set()) if banned is not None else None,
+                                 (surveillance or {}).get(sym) if surveillance is not None else None,
+                                 ban_known=ban_known)[0] for d in days]
+        else:
+            parts = eligibility(daily, days, sym in members,
+                                (banned or {}).get(sym, set()) if banned is not None else None,
+                                (surveillance or {}).get(sym) if surveillance is not None else None,
+                                ban_known=ban_known)
+        for r in parts:
+            if sym in excluded:
+                r = {**r, "eligible": False, "reason": "WRONG_COMPANY_SERIES"}
             rows.append({"symbol": sym, **r})
+    if series_keys:
+        by_day_key: Dict[Tuple[object, str], List[int]] = {}
+        for i, r in enumerate(rows):
+            key = series_keys.get(str(r["symbol"]))
+            if r["eligible"] and key:
+                by_day_key.setdefault((r["session"], key), []).append(i)
+        for idx in by_day_key.values():
+            if len(idx) > 1:
+                for i in idx:
+                    rows[i] = {**rows[i], "eligible": False, "reason": "DUPLICATE_SERIES"}
     return rows, flags
 
 
@@ -153,6 +205,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--no-ban-history", action="store_true",
                     help="build without the F&O ban history and label the table FO_BAN_HISTORY_MISSING "
                          "(default: use events/fo_ban*.parquet when present; uncovered sessions FO_BAN_UNKNOWN)")
+    ap.add_argument("--pit-membership", nargs="?", const="DEFAULT", default=None,
+                    help="point-in-time F&O membership parquet (default: <history>/bhavcopy/"
+                         "fno_point_in_time_2022_2026.parquet); also applies WRONG_COMPANY_SERIES and "
+                         "DUPLICATE_SERIES using the Upstox manifest's instrument keys")
     args = ap.parse_args(argv)
     import pandas as pd
     from collections import Counter
@@ -165,7 +221,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         from research.data.nse_events import load_fo_ban
 
         banned, known = load_fo_ban()                # plan P3.4 archives; unknown days are FO_BAN_UNKNOWN
-    rows, flags = build(store, load_fno_symbols(args.fno), banned=banned, ban_known=known)
+    membership = excluded = keys = None
+    if args.pit_membership:
+        mpath = (paths.history_dir() / "bhavcopy" / "fno_point_in_time_2022_2026.parquet"
+                 if args.pit_membership == "DEFAULT" else Path(args.pit_membership))
+        membership = load_fno_membership(mpath)
+        excluded = WRONG_COMPANY_SERIES
+        keys = {}
+        man = paths.history_dir() / "raw" / "upstox" / "manifest.jsonl"
+        for line in man.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                rec = json.loads(line)
+                keys.setdefault(str(rec["symbol"]), str(rec["instrument_key"]))
+    rows, flags = build(store, load_fno_symbols(args.fno), banned=banned, ban_known=known,
+                        membership=membership, excluded=excluded, series_keys=keys)
     out = paths.ensure(paths.reference_dir()) / "universe_daily.parquet"
     df = pd.DataFrame(rows)
     df["session"] = df["session"].astype(str)
