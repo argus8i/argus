@@ -134,6 +134,34 @@ def test_client_backs_off_on_429_then_succeeds():
     assert max(clk.slept) >= 4.0
 
 
+class _Resetting(_Session):
+    """Raises ConnectionResetError for the first `n` API calls (what NSE did on 25 Sep after 119 requests)."""
+
+    def __init__(self, n, script=()):
+        super().__init__(script)
+        self.n = n
+
+    def get(self, url, params=None, timeout=None):
+        if url != ne.BASE + "/" and self.n > 0:
+            self.n -= 1
+            raise ConnectionResetError(10054, "forcibly closed by the remote host")
+        return super().get(url, params, timeout)
+
+
+def test_connection_reset_cools_down_and_retries():
+    clk = _Clock()
+    c = ne.NseClient(session=_Resetting(1, [_Resp(200, b"[]")]), sleep=clk.sleep, clock=clk.now)
+    assert c.get(ne.BASE + "/api/corporate-announcements") == (200, b"[]")
+    assert 30.0 in clk.slept                                   # cool-down, not the 2 s pace
+
+
+def test_repeated_connection_resets_stop_the_run():
+    clk = _Clock()
+    c = ne.NseClient(session=_Resetting(10), sleep=clk.sleep, clock=clk.now)
+    with pytest.raises(ne.NseBlocked, match="transport"):
+        c.get(ne.BASE + "/api/corporate-announcements")
+
+
 # ------------------------------------------------------------------ fetch, resume, build, load
 def test_fetch_resume_build_and_point_in_time_tables(tmp_path):
     ann = json.dumps(_fx("nse_announcements_20260924.json")).encode()

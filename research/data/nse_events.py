@@ -75,7 +75,9 @@ class NseBlocked(RuntimeError):
 class NseClient:
     def __init__(self, session: Any = None, min_interval: float = MIN_INTERVAL_S, max_retries: int = 3,
                  block_after: int = 3, sleep: Callable[[float], None] = time.sleep,
-                 clock: Callable[[], float] = time.monotonic, timeout: float = 60.0) -> None:
+                 clock: Callable[[], float] = time.monotonic, timeout: float = 60.0,
+                 reset_cooldown_s: float = 30.0) -> None:
+        self.reset_cooldown_s = reset_cooldown_s
         if min_interval < MIN_INTERVAL_S:
             raise ValueError(f"min_interval below the approved {MIN_INTERVAL_S}s")
         if session is None:
@@ -112,7 +114,23 @@ class NseClient:
         backoff = self.min_interval
         code, content = 0, b""
         for attempt in range(self.max_retries + 1):
-            r = self._raw_get(url, params)
+            try:
+                r = self._raw_get(url, params)
+            except (OSError, IOError) as exc:        # requests' ConnectionError/Timeout subclass OSError
+                # A reset connection can be throttling: treated like 401/403 (counts toward the stop),
+                # followed by a long cool-down and a fresh warm-up.
+                self._blocked_run += 1
+                if self._blocked_run >= self.block_after:
+                    raise NseBlocked(f"{self._blocked_run} consecutive transport failures "
+                                     f"({type(exc).__name__}; last: {url})") from exc
+                self.sleep(self.reset_cooldown_s * self._blocked_run)
+                self.warmed = False
+                if url.startswith(BASE):
+                    try:
+                        self.warm_up()
+                    except (OSError, IOError):
+                        pass
+                continue
             code, content = int(r.status_code), bytes(r.content)
             if code in (401, 403):
                 self._blocked_run += 1
@@ -458,12 +476,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     f.add_argument("--to", dest="end", required=True)
     f.add_argument("--kinds", default=",".join(ALL_KINDS))
     f.add_argument("--max-requests", type=int, default=None)
+    f.add_argument("--interval", type=float, default=MIN_INTERVAL_S,
+                   help=f"seconds between requests (>= {MIN_INTERVAL_S}, the approved ceiling rate)")
     sub.add_parser("build")
     args = ap.parse_args(argv)
     if args.cmd == "fetch":
         try:
             stats = fetch(args.kinds.split(","), date.fromisoformat(args.start), date.fromisoformat(args.end),
-                          max_requests=args.max_requests)
+                          client=NseClient(min_interval=args.interval), max_requests=args.max_requests)
         except NseBlocked as exc:
             print(f"STOPPED: {exc}. Report it; RESID_REV runs as RESID_REV_NF (plan P3.4).")
             return 2
