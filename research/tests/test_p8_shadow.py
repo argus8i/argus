@@ -205,3 +205,24 @@ def test_dhan_feed_refuses():
 
     with pytest.raises(NotImplementedError, match="paid Dhan Data API"):
         DhanIntradayFeed()
+
+
+# ------------------------------------------------------------------ reconciliation
+def test_reconcile_counts_progress_and_drop_reasons(tmp_path):
+    from research.decision.ledger import Ledger
+    from research.shadow.reconcile import summarise, to_markdown
+    from research.shadow.runner import ledger_rows
+
+    store = _WithVix(make_store())
+    rep, rows = ShadowRunner(store, SECTORS, clusters=CLUSTERS).process_session(
+        DAY, [_sig(s, store, 5) for s in ("AAA", "BBB", "CCC", "DDD")])
+    Ledger(tmp_path / "l.db").append(ledger_rows(rows, run_id=f"shadow_{DAY}", mode="SHADOW",
+                                                 strategy_version={"RESID_REV": "v"}))
+    (tmp_path / f"{DAY.isoformat()}.json").write_text(__import__("json").dumps({"allocation": rep.as_dict()}))
+    s = summarise(tmp_path / "l.db", tmp_path)
+    assert s["sessions_observed"] == 1 and s["signals"] == 4 and s["admissible_e2_e3"] == 0
+    day = s["sessions"][0]
+    assert day["allocated"] == 3 and day["dispositions"].get("MAX_SLOTS") == 1
+    assert 0 < day["peak_exposure_share_of_cap"] <= 1.0 and day["book_flat"] is True
+    assert s["progress"]["rule1_sessions"] == "1/60" and s["progress"]["plan_n_pre_admissible"] == "0/111"
+    assert "Paper/research only" in to_markdown(s)

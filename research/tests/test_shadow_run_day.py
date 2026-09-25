@@ -219,3 +219,25 @@ def test_a_signal_journaled_late_is_never_admissible(tmp_path):
     assert set(summ["status"]) == {"SHADOW_LATE"}
     assert all(r["evidence_class"] == "E1_CF" and r["disposition"].startswith("SHADOW_LATE:")
                for r in Ledger(tmp_path / "ledger.db").rows(mode="SHADOW"))
+
+
+def test_close_allocates_through_the_shadow_runner(tmp_path):
+    import dataclasses
+
+    from research.decision.ledger import Ledger
+    from research.shadow.runner import RunnerConfig
+    from research.tests.synthetic import make_store, sessions
+
+    store = make_store(overrides={("AAA", 66): {2: 0.985, 3: 0.985, 4: 0.99}})
+    day = sessions()[66]
+    inp = dataclasses.replace(_replay_inputs(store), runner_config=RunnerConfig(use_vix=False),
+                              sectors={"AAA": "METAL"}, clusters=lambda st, d: {"AAA": "C1"})
+    raw = rd.live_file_from_history(store, day, store.symbols, UPSTOX)
+    j = rd.Journal(tmp_path / "j.jsonl")
+    rd.replay(inp, raw, day, j)
+    summ = rd.close_day(inp, rd.load_live(raw, day, datetime.combine(day, time(15, 45), IST)), j,
+                        tmp_path / "ledger.db", {"RESID_REV_NF": "t"}, clock=lambda: datetime.combine(day, time(15, 45), IST))
+    rows = Ledger(tmp_path / "ledger.db").rows(mode="SHADOW")
+    assert summ["allocation"]["book_flat"] and summ["allocation"]["signals"] == len(rows) >= 1
+    assert all(r["disposition"] == "ALLOCATED" or r["disposition"].startswith("DROPPED:") for r in rows)
+    assert any(r["allocated"] and r["evidence_class"] == "E1" and r["vix_multiplier"] == 1.0 for r in rows)

@@ -357,6 +357,10 @@ class DayInputs:
     universe: Optional[Any] = None             # a fixed universe (replay); else built from universe_inputs
     notes: Dict[str, str] = field(default_factory=dict)
     history_from: date = POST_CAS_START
+    # allocation at close (research/shadow/runner.py); None keeps the engine's own allocation rows
+    runner_config: Optional[Any] = None
+    sectors: Mapping[str, str] = field(default_factory=dict)
+    clusters: Optional[Callable[[Any, date], Mapping[str, str]]] = None     # (store, day) -> symbol -> cluster
 
 
 def evaluate_day(inp: DayInputs, live: LiveDay) -> Tuple[Any, Any, LiveDayStore]:
@@ -429,12 +433,25 @@ def close_day(inp: DayInputs, live: LiveDay, journal: Journal, ledger_path: Path
     ledger = Ledger(ledger_path)
     if any(r["run_id"] == run_id for r in ledger.rows(mode="SHADOW")):
         raise ShadowError(f"ALREADY_CLOSED: {run_id} is in {ledger_path}")
-    res, universe, _ = evaluate_day(inp, live)
+    res, universe, store = evaluate_day(inp, live)
     status, withdrawn = reconcile(res.signals, journal.verify())
-    rows = rows_from_engine(res, run_id=run_id, mode="SHADOW", strategy_version=strategy_version,
-                            data_hash=live.file_sha256, code_commit=code_commit)
-    for row, s in zip(rows, res.signals):
-        st = status[signal_key(s)]
+    session_report: Optional[Dict[str, Any]] = None
+    if inp.runner_config is not None:
+        from research.shadow.runner import ShadowRunner, ledger_rows
+
+        cl = inp.clusters(store, live.day) if inp.clusters else {}
+        runner = ShadowRunner(store, inp.sectors, config=inp.runner_config, clusters=lambda d: cl)
+        srep, rrows = runner.process_session(live.day, res.signals)
+        session_report = srep.as_dict()
+        rows = ledger_rows(rrows, run_id=run_id, mode="SHADOW", strategy_version=strategy_version,
+                           data_hash=live.file_sha256, code_commit=code_commit)
+    else:
+        rows = rows_from_engine(res, run_id=run_id, mode="SHADOW", strategy_version=strategy_version,
+                                data_hash=live.file_sha256, code_commit=code_commit)
+    for row in rows:
+        ts = row["decision_ts"]
+        st = status[(row["strategy_id"], row["symbol"], (ts if isinstance(ts, datetime) else
+                                                           datetime.fromisoformat(str(ts))).astimezone(IST).isoformat())]
         if st != "PROSPECTIVE":                  # not proven prospective: never admissible
             row["disposition"] = f"{st}:{row['disposition']}"
             row["evidence_class"] = "E1_CF"
@@ -442,7 +459,7 @@ def close_day(inp: DayInputs, live: LiveDay, journal: Journal, ledger_path: Path
         ledger.append(rows)
     summary = {"session": live.day.isoformat(), "signals": len(rows), "status": dict(Counter(status.values())),
                "withdrawn": len(withdrawn), "universe_flags": list(getattr(universe, "flags", ())),
-               "decision_counts": res.decision_counts, "dropped": live.dropped}
+               "decision_counts": res.decision_counts, "dropped": live.dropped, "allocation": session_report}
     journal.append([{"kind": "CLOSE", "written_at": clock().isoformat(), "live_file_sha256": live.file_sha256,
                      **summary}])
     return {**summary, "rows": rows, "withdrawn_rows": withdrawn}
@@ -518,19 +535,31 @@ def production_inputs() -> Tuple[DayInputs, Dict[str, str]]:
         if lock.valid:
             from research.strategies.resid_rev import ResidRevAdapter
 
-            out.append(ResidRevAdapter(spec, variant="RESID_REV", mode="EMIT", is_shadow=True))
+            out.append(ResidRevAdapter(spec, variant=str(spec.get("holdout_variant") or "RESID_REV"), mode="EMIT",
+                                       is_shadow=True))
         return out
 
     events: Any = NoEventsData()
     cal: Callable[[Any], Any] = lambda store: None
+    from research.data.sector_map import load_sector_map
     if lock.valid:
         from research.data.nse_events import load_table_events
 
         versions["RESID_REV"] = "resid_rev_v1:" + str(lock.lock["yaml_sha256"])[:16]
+        versions["RESID_REV_NF"] = versions["RESID_REV"]
         sector_map = load_sector_map()
         cal = lambda store: CalibrationProvider(store, sector_map, CalibrationConfig.from_prereg(spec))
-        events = load_table_events()
-    return DayInputs(history, default_universe_inputs(), adapters, cal, events, notes=notes), versions
+        if str(spec.get("holdout_variant") or "RESID_REV") == "RESID_REV":
+            events = load_table_events()
+    from research.decision.clusters import weekly_clusters
+    from research.shadow.runner import RunnerConfig
+
+    def clusters(store: Any, day: date) -> Mapping[str, str]:
+        tradables = [s for s in store.symbols if store.kind(s) == "TRADABLE"]
+        return weekly_clusters(store, tradables, [day]).get(day, {})
+
+    return DayInputs(history, default_universe_inputs(), adapters, cal, events, notes=notes,
+                     runner_config=RunnerConfig(), sectors=load_sector_map(), clusters=clusters), versions
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -566,6 +595,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             summ = close_day(inp, load_live(raw, day, now), journal, root / "shadow_ledger.db", versions)
             rep = write_report(summ, paths.shared_input("shadow_reports") / f"{day.isoformat()}.md")
+            (rep.with_suffix(".json")).write_text(json.dumps({k: v for k, v in summ.items() if k != "rows"},
+                                                             indent=1, default=str), encoding="utf-8")
             print(json.dumps({k: v for k, v in summ.items() if k not in ("rows", "withdrawn_rows")}, indent=1,
                              default=str))
             print(f"report: {rep}")
