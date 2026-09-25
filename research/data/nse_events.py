@@ -44,6 +44,7 @@ import argparse
 import gzip
 import hashlib
 import json
+import re
 import time
 from collections import Counter, defaultdict
 from datetime import date, datetime, time as dtime, timedelta, timezone
@@ -230,6 +231,9 @@ def parse_corporate_actions(payload: Any) -> Tuple[List[Dict[str, Any]], Counter
     return out, issues
 
 
+_BAN_HEADER_DATE = re.compile(r"(\d{2}-[A-Za-z]{3}-\d{4})")
+
+
 def parse_ban_csv(text: str) -> Tuple[Optional[date], List[str]]:
     """'Securities in Ban For Trade Date 24-SEP-2026:' then 'n,SYMBOL' lines."""
     trade_date, syms = None, []
@@ -238,8 +242,9 @@ def parse_ban_csv(text: str) -> Tuple[Optional[date], List[str]]:
         if not line:
             continue
         if line.lower().startswith("securities in ban"):
-            tail = line.rstrip(":").split()[-1]
-            trade_date = _nse_date(tail.title())
+            # 'Securities in Ban For Trade Date 24-SEP-2026:' or, in the older archive, '...-2021: NIL'
+            m = _BAN_HEADER_DATE.search(line)
+            trade_date = _nse_date(m.group(1).title()) if m else None
             continue
         parts = [p.strip() for p in line.split(",")]
         if len(parts) >= 2 and parts[0].isdigit() and parts[1]:
@@ -365,8 +370,12 @@ def build(root: Optional[Path] = None, out: Optional[Path] = None) -> Dict[str, 
         if kind == BAN:
             tdate, syms = parse_ban_csv(body.decode("utf-8", "replace"))
             wdate = date.fromisoformat(wkey[:10])
-            if tdate is not None and tdate != wdate:
+            if tdate is None:                      # error page or truncated body: the day stays unknown
+                issues["BAN_FILE_NO_DATE"] += 1
+                continue
+            if tdate != wdate:
                 issues["BAN_FILE_DATE_MISMATCH"] += 1
+                continue
             tables[BAN] += [{"trade_date": wdate.isoformat(), "symbol": s} for s in syms]
             tables["fo_ban_days"].append({"trade_date": wdate.isoformat()})
         else:

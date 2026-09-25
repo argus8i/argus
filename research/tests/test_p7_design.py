@@ -34,3 +34,13 @@ def test_zstar_is_the_95th_percentile_rounded_to_2dp():
     assert out["n_stock_days"] == 1000 and out["z_star"] == round(out["z_star_raw"], 2)
     assert out["z_star_raw"] == pytest.approx(9.5005, abs=1e-3) and out["gaussian_reference"] == 2.59
     assert zstar_from({})["z_star"] is None
+
+
+def test_design_runs_refuse_live_history_by_default(tmp_path, monkeypatch, capsys):
+    from research.studies import p7_design
+
+    monkeypatch.setenv("TRACK2_HISTORY_DIR", str(tmp_path))       # a folder without SNAPSHOT.json
+    monkeypatch.setenv("TRACK2_OUTPUTS_DIR", str(tmp_path / "out"))
+    assert p7_design.main(["zstar"]) == 2
+    assert "REFUSED" in capsys.readouterr().out
+    assert not (tmp_path / "out").exists()                           # nothing written

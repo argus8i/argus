@@ -63,6 +63,33 @@ def test_ban_csv():
     d, syms = ne.parse_ban_csv((FIX / "nse_fo_secban_24092026.csv").read_text(encoding="utf-8"))
     assert d == date(2026, 9, 24) and syms == ["KAYNES", "LICHSGFIN", "MANAPPURAM", "SAIL"]
     assert ne.parse_ban_csv("Securities in Ban For Trade Date 01-OCT-2026:\n") == (date(2026, 10, 1), [])
+    # the 2021-2024 archive writes the empty list on the header line as "NIL"
+    assert ne.parse_ban_csv("Securities in Ban For Trade Date 01-OCT-2021: NIL\n") == (date(2021, 10, 1), [])
+    assert ne.parse_ban_csv("Securities in Ban For Trade Date 01-OCT-2021: NIL\r\n") == (date(2021, 10, 1), [])
+    assert ne.parse_ban_csv("<html>Access Denied</html>") == (None, [])
+
+
+def test_ban_file_without_a_readable_date_is_not_known(tmp_path):
+    """A body whose header has no trade date (an error page, a truncated file) must not make the day
+    'known, nothing banned': the day stays FO_BAN_UNKNOWN."""
+    import gzip
+    import hashlib
+
+    base = tmp_path / "raw" / "nse"
+    (base / "fo_ban").mkdir(parents=True)
+    good = b"Securities in Ban For Trade Date 01-OCT-2021: NIL\n"
+    bad = b"<html>Access Denied</html>"
+    lines = []
+    for day, body in (("2021-10-01", good), ("2021-10-04", bad)):
+        f = f"fo_ban/{day}_{day}.csv.gz"
+        (base / f).write_bytes(gzip.compress(body))
+        lines.append(json.dumps({"kind": "fo_ban", "window": f"{day}_{day}", "status": 200, "file": f,
+                                 "bytes": len(body), "body_sha256": hashlib.sha256(body).hexdigest()}))
+    (base / "manifest.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    cov = ne.build(root=tmp_path)
+    _, known = ne.load_fo_ban(tmp_path)
+    assert known == {date(2021, 10, 1)}
+    assert cov["parse_issues"].get("BAN_FILE_NO_DATE") == 1
 
 
 # ------------------------------------------------------------------ windows and hashing

@@ -249,7 +249,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="P7.2 design-set tasks")
     ap.add_argument("task", choices=["zstar", "orbprod"])
     ap.add_argument("--limit-sessions", type=int, default=None, help="first N design sessions only (timing)")
+    ap.add_argument("--allow-live-history", action="store_true",
+                    help="run on the live (mutable) shared history instead of a sealed snapshot; trials only")
     args = ap.parse_args(argv)
+    from research.data import snapshot
+
+    # fail closed: a design result must come from a sealed snapshot other agents cannot rewrite mid-run
+    inputs = snapshot.describe()
+    if inputs["kind"] != "SEALED_SNAPSHOT" and not args.allow_live_history:
+        print(f"REFUSED: {paths.history_dir()} is not a sealed snapshot. Set TRACK2_HISTORY_DIR to one "
+              "(python -m research.data.snapshot), or pass --allow-live-history for a trial run.")
+        return 2
+    universe_sha_start = _sha256_file(paths.reference_dir() / "universe_daily.parquet")
     started = datetime.now(IST)
     out_dir = paths.ensure(paths.outputs_dir() / "p7" / f"{args.task}_{started:%Y%m%d_%H%M%S}")
     from research.studies import prereg_io
@@ -266,7 +277,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     (out_dir / "result.json").write_text(json.dumps(res, indent=1, default=str), encoding="utf-8")
     (out_dir / "manifest.json").write_text(json.dumps(manifest(args.task, spec_path,
                                                                {"limit_sessions": args.limit_sessions,
-                                                                "seed": 20260925}, started),
+                                                                "seed": 20260925,
+                                                                "history_inputs": inputs,
+                                                                "history_inputs_after_run": snapshot.describe(),
+                                                                "universe_table_sha256_at_start":
+                                                                    universe_sha_start}, started),
                                                       indent=1, default=str), encoding="utf-8")
     brief = {k: v for k, v in res.items() if k not in ("daily_cf_r", "production_manifest")}
     print(json.dumps(brief, indent=1, default=str))
