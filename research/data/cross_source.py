@@ -77,7 +77,11 @@ def compare(store: Any, reference: Any, vol_tol: float = 0.01, index_tol: float 
         "price_mismatch_share": {f: counts[f"{f}_mismatch"] / bars for f in ("open", "high", "low", "close")},
         "volume_mismatch_bars": counts["volume_mismatch"],
         "volume_mismatch_share": counts["volume_mismatch"] / bars,
-        "passed": offsets == 0 and not any(counts[f"{f}_mismatch"] for f in ("open", "high", "low", "close"))
+        # plan P3.9: identical bar starts (any start mismatch fails, not only a one-bar offset), OHLC within
+        # one tick, volume within 1%; and there must be something to compare
+        "passed": counts["bars"] > 0 and offsets == 0
+                  and not any(m["field"] == "starts" for m in mismatches)
+                  and not any(counts[f"{f}_mismatch"] for f in ("open", "high", "low", "close"))
                   and counts["volume_mismatch"] == 0,
         "mismatches": mismatches,
     }

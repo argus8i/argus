@@ -16,6 +16,9 @@ Classes
                     pre-open auction (measured against Kite, Claude outputs/2026-09-25_p3_hold_data_audit.md).
 - KITE_WEB_SESSION  the 32-session file from kite.zerodha.com/oms (plan rule 1.2.11: never refreshed; kept
                     as the P2 regression reference). QA_ONLY in the parquet layer.
+- UPSTOX_API_V2     Upstox V2 historical-candle API (broker's official endpoint, research/data/upstox_history.py;
+                    Yashu 25 Sep 2026). QA_ONLY until it passes the P3.9 Kite cross-check; then Yashu's
+                    instruction makes it strategy-eligible.
 - HF_UPSTOX_MIRROR  third-party Hugging Face mirror of Upstox 1-minute data (proposed by Antigravity for P7).
                     QA_ONLY until Yashu approves it as a source and it passes the P3.9 cross-source check.
 - UNKNOWN           anything unlabelled. QA_ONLY (fail closed).
@@ -28,11 +31,12 @@ DHAN = "DHAN_API_V2"
 SYNTHETIC = "SYNTHETIC"
 YAHOO = "YAHOO_CHART_V8"
 KITE = "KITE_WEB_SESSION"
+UPSTOX = "UPSTOX_API_V2"
 HF_UPSTOX = "HF_UPSTOX_MIRROR"
 UNKNOWN = "UNKNOWN"
 
 STRATEGY_SOURCES = frozenset({DHAN, SYNTHETIC})
-ALL_SOURCES = frozenset({DHAN, SYNTHETIC, YAHOO, KITE, HF_UPSTOX, UNKNOWN})
+ALL_SOURCES = frozenset({DHAN, SYNTHETIC, YAHOO, KITE, UPSTOX, HF_UPSTOX, UNKNOWN})
 
 
 class SourceNotAllowedError(PermissionError):
@@ -52,6 +56,8 @@ def classify(entry: Mapping[str, Any]) -> str:
         return KITE
     if up.startswith("DHAN") or "api.dhan.co" in url:
         return DHAN
+    if "api.upstox.com" in url and "huggingface.co" not in url:
+        return UPSTOX
     if "UPSTOX" in up or "huggingface.co" in url:
         return HF_UPSTOX
     return UNKNOWN
