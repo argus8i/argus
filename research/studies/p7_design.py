@@ -11,8 +11,11 @@ Tasks implemented here:
           news and market filters. Computed by running the pre-registered ResidRevAdapter in SCAN mode through
           BacktestEngine, so the Z arithmetic is the adapter's own. No returns are used. Frozen to 2 dp.
 - orbprod (P7.2.1) ORB_PROD R statistics and daily series on the design window (no parameters).
-The holding-period study (P7.2c) needs the news filter (board meetings / corporate actions) and waits for
-those NSE events.
+- hold    (P7.2c) one full-rule RESID_REV run at hold_bars h in {4, 8, EOD}, with z* taken from a zstar
+          result computed on the same sealed snapshot. Reports mean net R (unconstrained per-signal
+          counterfactuals) and the event study of the residual reversion curve at h in {1, 2, 4, 8, EOD}
+          over the first h-independent candidate of each stock-day. The news filter needs board meetings
+          and corporate actions for the whole window; until they are on disk the run is RESID_REV_NF.
 
 Data-quality exclusions (P7.2.4, decided on design data only; research/data/validate.py table):
 - special sessions: a design date whose session is structurally invalid for >= 50% of symbols
@@ -215,17 +218,13 @@ def run_zstar(limit_sessions: Optional[int] = None) -> Tuple[Dict[str, Any], Dic
     return out, scan
 
 
-def run_orbprod(limit_sessions: Optional[int] = None) -> Dict[str, Any]:
-    from research.backtest.engine import BacktestEngine, EngineConfig
+def _cf_summary(signals: Sequence[Any]) -> Dict[str, Any]:
+    """Unconstrained per-signal counterfactual statistics (plan D8, D15): every emitted signal simulated
+    with identical fill rules; SE clustered by session (CR1). Also the gross / fee / slippage split and a
+    per-signal table (written to signals.parquet by main)."""
     from research.decision.stats import clustered_se
-    from research.strategies.orb_prod import OrbProdAdapter
 
-    t0 = _time.perf_counter()
-    spec, spec_path, store, universe, sector_map, (start, end), special, bad = _setup(limit_sessions)
-    adapter = OrbProdAdapter()
-    cfg = EngineConfig(var_elm_rate=0.20, stop_limit_offset_pct=0.005, r_basis="stop_limit")
-    res = BacktestEngine(store, universe, [adapter], cfg).run()
-    sig = [s for s in res.signals if s.counterfactual_net_r is not None and math.isfinite(s.counterfactual_net_r)]
+    sig = [s for s in signals if s.counterfactual_net_r is not None and math.isfinite(s.counterfactual_net_r)]
     net = np.array([s.counterfactual_net_r for s in sig])
     by_day: Dict[str, float] = defaultdict(float)
     for s in sig:
@@ -241,25 +240,155 @@ def run_orbprod(limit_sessions: Optional[int] = None) -> Dict[str, Any]:
               "net_r": s.counterfactual_net_r, "gross_r": s.counterfactual_gross_r,
               "fee_r": s.counterfactual_fee_r, "slip_r": s.counterfactual_slip_r,
               "exit_reason": s.counterfactual_exit_reason, "disposition": s.disposition} for s in sig]
-    return {"strategy": "ORB_PROD", "design_window": [start.isoformat(), end.isoformat()],
-            "sessions_run": len(res.dates), "signals": int(net.size), "signal_days": len(by_day),
+    return {"signals": int(net.size), "signal_days": len(by_day),
             "mean_net_r": float(net.mean()) if net.size else None,
             "mean_gross_r": _mean("counterfactual_gross_r"), "mean_fee_r": _mean("counterfactual_fee_r"),
-            "mean_slip_r": _mean("counterfactual_slip_r"), "signals_table": table,
+            "mean_slip_r": _mean("counterfactual_slip_r"),
             "sd_net_r": float(net.std(ddof=1)) if net.size > 1 else None,
             "se_cluster_by_day": se if math.isfinite(se) else None,
             "t_cluster": float(net.mean() / se) if net.size > 1 and math.isfinite(se) and se > 0 else None,
             "exit_reasons": dict(Counter(s.counterfactual_exit_reason for s in sig)),
-            "decision_reasons": dict(adapter.reasons), "daily_cf_r": dict(sorted(by_day.items())),
+            "daily_cf_r": dict(sorted(by_day.items())), "signals_table": table}
+
+
+def run_orbprod(limit_sessions: Optional[int] = None) -> Dict[str, Any]:
+    from research.backtest.engine import BacktestEngine, EngineConfig
+    from research.strategies.orb_prod import OrbProdAdapter
+
+    t0 = _time.perf_counter()
+    spec, spec_path, store, universe, sector_map, (start, end), special, bad = _setup(limit_sessions)
+    adapter = OrbProdAdapter()
+    cfg = EngineConfig(var_elm_rate=0.20, stop_limit_offset_pct=0.005, r_basis="stop_limit")
+    res = BacktestEngine(store, universe, [adapter], cfg).run()
+    return {"strategy": "ORB_PROD", "design_window": [start.isoformat(), end.isoformat()],
+            "sessions_run": len(res.dates), **_cf_summary(res.signals),
+            "decision_reasons": dict(adapter.reasons),
             "r_basis": "stop_limit", "evidence_class": "E1_CF (never admissible)",
             "universe_flags": list(universe.flags), "data_source": "UPSTOX_API_V2",
             "production_manifest": adapter.manifest(), "runtime_s": round(_time.perf_counter() - t0, 1),
             "label": "DESIGN_SET_BASELINE"}
 
 
+EVENT_HOLDS: Tuple[Any, ...] = (1, 2, 4, 8, "EOD")
+HOLD_CHOICES: Tuple[Any, ...] = (4, 8, "EOD")
+LAST_HELD_SLOT = 22          # plan A.9: bar 22 (14:30-14:45) is the last bar fully held
+
+
+def event_rows(store: Any, candidates: Mapping[Tuple[str, date], Mapping[str, Any]],
+               holds: Sequence[Any] = EVENT_HOLDS) -> List[Dict[str, Any]]:
+    """Residual reversion after each candidate, h_eff = min(h, 22 - t) bars (EOD: 22 - t), from the close
+    of the signal bar t to the close of bar t + h_eff:
+      reversion_bps   = -sign(E) * [ln(C[j]/C[t]) - beta * ln(F[j]/F[t])] * 1e4   (residual move back)
+      retrace_frac    = that residual reversion / |E[t]|                        (share of the move undone)
+      trade_gross_bps = sg * ln(C[j] / O[t+1]) * 1e4        (gross, from the next bar's open; no costs)
+    F is the factor the adapter actually used for that stock-day."""
+    from research.features.session_cache import slot_series
+
+    out: List[Dict[str, Any]] = []
+    for (sym, day), cd in sorted(candidates.items()):
+        bars = store.bars(sym, day)
+        cl, op = slot_series(bars), slot_series(bars, "open")
+        fcl = slot_series(store.bars(cd["factor_used"], day))
+        t, beta, E, sg = int(cd["slot"]), float(cd["beta"]), float(cd["E"]), int(cd["sg"])
+        for h in holds:
+            he = (LAST_HELD_SLOT - t) if h == "EOD" else min(int(h), LAST_HELD_SLOT - t)
+            if he <= 0:
+                continue
+            j = t + he
+            vals = (cl[t], cl[j], fcl[t], fcl[j], op[t + 1])
+            if not all(np.isfinite(v) and v > 0 for v in vals) or E == 0:
+                continue
+            resid = math.log(cl[j] / cl[t]) - beta * math.log(fcl[j] / fcl[t])
+            rev = -math.copysign(1.0, E) * resid
+            out.append({"symbol": sym, "day": day.isoformat(), "h": str(h), "h_eff": he, "slot": t,
+                        "reversion_bps": 1e4 * rev, "retrace_frac": rev / abs(E),
+                        "trade_gross_bps": 1e4 * sg * math.log(cl[j] / op[t + 1])})
+    return out
+
+
+def event_summary(rows: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    from research.decision.stats import clustered_se
+
+    out: Dict[str, Any] = {}
+    for h in EVENT_HOLDS:
+        rs = [r for r in rows if r["h"] == str(h)]
+        if not rs:
+            continue
+        days = [r["day"] for r in rs]
+        stats: Dict[str, Any] = {"n": len(rs), "days": len(set(days)),
+                                 "mean_h_eff": float(np.mean([r["h_eff"] for r in rs]))}
+        for k in ("reversion_bps", "retrace_frac", "trade_gross_bps"):
+            v = np.array([r[k] for r in rs], dtype=float)
+            se = clustered_se(list(v), days) if v.size > 1 else math.nan
+            stats[k] = {"mean": float(v.mean()), "median": float(np.median(v)),
+                        "se_cluster_by_day": se if math.isfinite(se) else None,
+                        "t_cluster": float(v.mean() / se) if math.isfinite(se) and se > 0 else None}
+        out[str(h)] = stats
+    return out
+
+
+def _zstar_on_same_data(zstar_result: Path) -> float:
+    """z* from a zstar run, accepted only if that run read the sealed snapshot this run reads."""
+    from research.data import snapshot
+
+    zdir = Path(zstar_result).parent
+    res = json.loads(Path(zstar_result).read_text(encoding="utf-8"))
+    man = json.loads((zdir / "manifest.json").read_text(encoding="utf-8"))
+    here = snapshot.describe()
+    theirs = man.get("history_inputs") or {}
+    if here.get("kind") != "SEALED_SNAPSHOT" or theirs.get("content_sha256") != here.get("content_sha256"):
+        raise SystemExit(f"REFUSED: {zstar_result} was not computed on this sealed snapshot "
+                         f"({theirs.get('content_sha256')} vs {here.get('content_sha256')})")
+    if man.get("limit_sessions"):
+        raise SystemExit(f"REFUSED: {zstar_result} is a limited trial run (limit_sessions={man['limit_sessions']})")
+    return float(res["z_star"])
+
+
+def run_hold(hold: Any, variant: str, z_star: float, limit_sessions: Optional[int] = None) -> Dict[str, Any]:
+    import copy
+
+    from research.backtest.engine import BacktestEngine, EngineConfig
+    from research.features.calibration import CalibrationConfig, CalibrationProvider
+    from research.features.events import NoEventsData
+    from research.strategies.resid_rev import ResidRevAdapter
+
+    t0 = _time.perf_counter()
+    spec, spec_path, store, universe, sector_map, (start, end), special, bad = _setup(limit_sessions)
+    spec_h = copy.deepcopy(spec)                   # in memory only: the YAML stays DRAFT until P7.3
+    spec_h["signal"]["z_star"] = float(z_star)
+    spec_h["trade"]["hold_bars"] = hold
+    if variant == "RESID_REV":
+        from research.data.nse_events import load_table_events
+
+        events = load_table_events()
+    else:
+        events = NoEventsData()
+    adapter = ResidRevAdapter(spec_h, variant=variant, mode="EMIT",
+                              trading_days=store.sessions("IDX:NIFTY50"))
+    universe_symbols = sorted({k[0] for k in universe.table})
+    provider = CalibrationProvider(store, sector_map, CalibrationConfig.from_prereg(spec_h), symbols=universe_symbols)
+    eng_cfg = spec_h["engine"]
+    cfg = EngineConfig(var_elm_rate=float(eng_cfg["var_elm_rate"]), allow_shorts=bool(eng_cfg["allow_shorts"]),
+                       r_basis=str(eng_cfg["r_basis"]), stop_limit_offset_pct=0.005)
+    res = BacktestEngine(store, universe, [adapter], cfg, calibration_provider=provider,
+                         events_provider=events).run()
+    ev_rows = event_rows(store, adapter.candidates)
+    return {"strategy": variant, "hold_bars": hold, "z_star": float(z_star),
+            "design_window": [start.isoformat(), end.isoformat()], "sessions_run": len(res.dates),
+            **_cf_summary(res.signals), "decision_reasons": dict(adapter.reasons),
+            "candidates": len(adapter.candidates), "event_study": event_summary(ev_rows), "event_table": ev_rows,
+            "events_coverage": getattr(events, "coverage", "NONE"),
+            "r_basis": str(eng_cfg["r_basis"]), "evidence_class": "E1_CF (design set; selection of h)",
+            "universe_flags": list(universe.flags), "data_source": "UPSTOX_API_V2",
+            "runtime_s": round(_time.perf_counter() - t0, 1), "label": "DESIGN_SET_HOLD_CHOICE"}
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="P7.2 design-set tasks")
-    ap.add_argument("task", choices=["zstar", "orbprod"])
+    ap.add_argument("task", choices=["zstar", "orbprod", "hold"])
+    ap.add_argument("--hold", choices=["4", "8", "EOD"], default=None, help="hold task: h")
+    ap.add_argument("--variant", choices=["RESID_REV", "RESID_REV_NF"], default="RESID_REV_NF")
+    ap.add_argument("--zstar-result", default=None, help="hold task: result.json of a zstar run on this snapshot")
     ap.add_argument("--limit-sessions", type=int, default=None, help="first N design sessions only (timing)")
     ap.add_argument("--allow-live-history", action="store_true",
                     help="run on the live (mutable) shared history instead of a sealed snapshot; trials only")
@@ -284,11 +413,22 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         pd.DataFrame([{"symbol": s, "session": d.isoformat(), "max_abs_z": v} for (s, d), v in scan.items()]) \
             .to_parquet(out_dir / "scan_max.parquet", index=False)
-    else:
+    elif args.task == "orbprod":
         import pandas as pd
 
         res = run_orbprod(args.limit_sessions)
         pd.DataFrame(res.pop("signals_table")).to_parquet(out_dir / "signals.parquet", index=False)
+    else:
+        import pandas as pd
+
+        if args.hold is None or args.zstar_result is None:
+            print("REFUSED: the hold task needs --hold and --zstar-result")
+            return 2
+        z = _zstar_on_same_data(Path(args.zstar_result))
+        res = run_hold(args.hold if args.hold == "EOD" else int(args.hold), args.variant, z, args.limit_sessions)
+        res["zstar_result"] = str(args.zstar_result)
+        pd.DataFrame(res.pop("signals_table")).to_parquet(out_dir / "signals.parquet", index=False)
+        pd.DataFrame(res.pop("event_table")).to_parquet(out_dir / "event_study.parquet", index=False)
     (out_dir / "result.json").write_text(json.dumps(res, indent=1, default=str), encoding="utf-8")
     (out_dir / "manifest.json").write_text(json.dumps(manifest(args.task, spec_path,
                                                                {"limit_sessions": args.limit_sessions,

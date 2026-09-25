@@ -87,6 +87,9 @@ class ResidRevAdapter(StrategyAdapter):
         self.scan_max: Dict[Tuple[str, date], float] = {}
         self.keep_log = keep_log
         self.log: List[Tuple[str, str, str, float]] = []
+        # P7.2c event study: the first evaluation per stock-day that passes every filter that does not depend
+        # on the holding period (all filters up to MARKET_FILTER), so every h run shares one sample
+        self.candidates: Dict[Tuple[str, date], Dict[str, Any]] = {}
 
     # ------------------------------------------------------------------ helpers
     def _no(self, ctx: StrategyContext, action: str, reason: str, z: float = float("nan")) -> Decision:
@@ -190,6 +193,9 @@ class ResidRevAdapter(StrategyAdapter):
         sg = -1 if E > 0 else 1
         side = "BUY" if sg > 0 else "SELL"
         p0 = float(closes[t])
+        if key not in self.candidates:
+            self.candidates[key] = {"symbol": ctx.symbol, "day": day, "slot": t, "sg": sg, "E": float(E),
+                                    "Z": float(Z), "beta": float(c.beta), "factor_used": factor_used, "p0": p0}
         toward, away = ("down", "down") if sg > 0 else ("up", "up")   # BUY: targets above -> round down; stop below -> down
         targets = [(round_to_tick(p0 * math.exp(sg * k * abs(E)), toward), frac) for k, frac in self.targets]
         h_eff = (LAST_HELD_SLOT - t) if self.hold == "EOD" else min(int(self.hold), LAST_HELD_SLOT - t)

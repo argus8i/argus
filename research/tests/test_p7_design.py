@@ -44,3 +44,60 @@ def test_design_runs_refuse_live_history_by_default(tmp_path, monkeypatch, capsy
     assert p7_design.main(["zstar"]) == 2
     assert "REFUSED" in capsys.readouterr().out
     assert not (tmp_path / "out").exists()                           # nothing written
+
+
+class _Bar:
+    def __init__(self, day, slot, o, c):
+        from datetime import datetime, timedelta, timezone
+        ist = timezone(timedelta(hours=5, minutes=30))
+        self.start = datetime(day.year, day.month, day.day, 9, 15, tzinfo=ist) + timedelta(minutes=15 * slot)
+        self.open, self.close = o, c
+
+
+class _Store:
+    def __init__(self, series):
+        self.series = series
+
+    def bars(self, sym, day):
+        return [_Bar(day, s, o, c) for s, (o, c) in sorted(self.series[sym].items())]
+
+
+def test_event_rows_residual_reversion_and_h_eff():
+    import math
+
+    from research.studies.p7_design import event_rows, event_summary
+
+    d = date(2023, 5, 10)
+    stock = {s: (100.0, 100.0) for s in range(24)}
+    stock.update({5: (100.0, 100.0), 6: (99.8, 99.0), 22: (96.0, 96.0)})
+    factor = {s: (1000.0, 1000.0) for s in range(24)}
+    factor[22] = (1000.0, 1010.0)                               # factor +1% by bar 22
+    store = _Store({"AAA": stock, "IDX:F": factor})
+    cand = {("AAA", d): {"slot": 5, "beta": 1.5, "E": 0.02, "sg": -1, "factor_used": "IDX:F"}}
+    rows = {r["h"]: r for r in event_rows(store, cand)}
+    # h = 1: residual = ln(99/100) - 1.5 * 0; the stock was UP (E > 0), so reversion = +1.005%
+    assert rows["1"]["h_eff"] == 1
+    assert rows["1"]["reversion_bps"] == pytest.approx(-1e4 * math.log(0.99))
+    assert rows["1"]["retrace_frac"] == pytest.approx(-math.log(0.99) / 0.02)
+    assert rows["1"]["trade_gross_bps"] == pytest.approx(-1e4 * math.log(99.0 / 99.8))   # short from next open
+    # EOD: h_eff = 22 - 5; the factor move is taken out with beta
+    assert rows["EOD"]["h_eff"] == 17
+    resid = math.log(96 / 100) - 1.5 * math.log(1010 / 1000)
+    assert rows["EOD"]["reversion_bps"] == pytest.approx(-1e4 * resid)
+    # a late signal clips h to the last fully held bar
+    late = {("AAA", d): dict(cand[("AAA", d)], slot=16)}
+    lrows = {r["h"]: r for r in event_rows(store, late)}
+    assert lrows["8"]["h_eff"] == 6 and lrows["EOD"]["h_eff"] == 6
+    summ = event_summary(event_rows(store, cand))
+    assert summ["1"]["n"] == 1 and summ["1"]["reversion_bps"]["mean"] == pytest.approx(rows["1"]["reversion_bps"])
+
+
+def test_event_rows_skip_missing_bars():
+    from research.studies.p7_design import event_rows
+
+    d = date(2023, 5, 10)
+    stock = {s: (100.0, 100.0) for s in range(24) if s != 9}      # bar 9 missing
+    store = _Store({"AAA": stock, "IDX:F": {s: (1.0, 1.0) for s in range(24)}})
+    cand = {("AAA", d): {"slot": 5, "beta": 1.0, "E": -0.01, "sg": 1, "factor_used": "IDX:F"}}
+    hs = {r["h"] for r in event_rows(store, cand)}
+    assert "4" not in hs and {"1", "2", "8", "EOD"} <= hs

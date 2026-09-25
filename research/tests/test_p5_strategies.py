@@ -345,3 +345,17 @@ def test_orb_simple_rename():
 
     assert OrbAdapter.name == "ORB_SIMPLE" and OrbSimpleAdapter is OrbAdapter
     assert "ORB_MOMENTUM" not in {a.name for a in default_adapters()}
+
+
+def test_candidate_recorded_once_per_stock_day_before_the_stop_rules():
+    """P7.2c event study: the first evaluation that passes every h-independent filter is recorded, whatever
+    the stop rules then decide, and later evaluations of the same stock-day do not replace it."""
+    a = ResidRevAdapter(filled())
+    d = a.evaluate(_ctx(stock_rets=UP))
+    assert d.action == "SIGNAL"
+    (key, cd), = a.candidates.items()
+    assert cd["sg"] == -1 and cd["E"] > 0 and math.isclose(cd["Z"], d.intent.diagnostics["Z"])
+    assert cd["factor_used"] == d.intent.diagnostics["factor_used"] and cd["slot"] == d.intent.diagnostics["slot"]
+    first = dict(cd)
+    a.evaluate(_ctx(stock_rets=UP))
+    assert a.candidates[key] == first
