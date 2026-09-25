@@ -247,9 +247,11 @@ def _cf_summary(signals: Sequence[Any]) -> Dict[str, Any]:
         return float(v.mean()) if v.size else None
 
     table = [{"symbol": s.symbol, "signal_time": s.signal_time.isoformat(), "side": s.side,
+              "entry_ref": s.entry_ref, "stop_loss": s.stop_loss, "max_bars": s.max_bars,
               "net_r": s.counterfactual_net_r, "gross_r": s.counterfactual_gross_r,
               "fee_r": s.counterfactual_fee_r, "slip_r": s.counterfactual_slip_r,
-              "exit_reason": s.counterfactual_exit_reason, "disposition": s.disposition} for s in sig]
+              "exit_reason": s.counterfactual_exit_reason, "disposition": s.disposition,
+              "diagnostics": json.dumps(s.diagnostics or {}, default=str, sort_keys=True)} for s in sig]
     return {"signals": int(net.size), "signal_days": len(by_day),
             "mean_net_r": float(net.mean()) if net.size else None,
             "mean_gross_r": _mean("counterfactual_gross_r"), "mean_fee_r": _mean("counterfactual_fee_r"),
@@ -259,6 +261,58 @@ def _cf_summary(signals: Sequence[Any]) -> Dict[str, Any]:
             "t_cluster": float(net.mean() / se) if net.size > 1 and math.isfinite(se) and se > 0 else None,
             "exit_reasons": dict(Counter(s.counterfactual_exit_reason for s in sig)),
             "daily_cf_r": dict(sorted(by_day.items())), "signals_table": table}
+
+
+def _portfolio_summary(res: Any) -> Dict[str, Any]:
+    """The engine's allocated trades (Adjusted A1 slots, aggregate cap, sector/cluster limits as configured):
+    what a 3-slot book would actually have held, as opposed to the unconstrained per-signal statistics."""
+    trades = [t for t in res.trades if math.isfinite(getattr(t, "net_r", math.nan))]
+    daily = np.array([res.daily_pnl[d] for d in res.dates], dtype=float) if res.dates else np.zeros(0)
+    eq = np.cumsum(daily) if daily.size else np.zeros(0)
+    dd = float(np.max(np.maximum.accumulate(eq) - eq)) if eq.size else 0.0
+    net_r = np.array([t.net_r for t in trades], dtype=float)
+    return {"trades": len(trades), "net_pnl_rs": float(daily.sum()), "mean_trade_net_r": float(net_r.mean())
+            if net_r.size else None, "win_rate": float(np.mean(net_r > 0)) if net_r.size else None,
+            "daily_pnl_sd_rs": float(daily.std(ddof=1)) if daily.size > 1 else None,
+            "max_drawdown_rs": dd, "days": len(res.dates), "days_with_trades": int(np.sum(daily != 0)),
+            "disposition_counts": dict(res.disposition_counts)}
+
+
+class WickPulledStore:
+    """Sensitivity (Codex 26 Sep; Upstox ranges are wider than Kite's on 36% of bars): every 15-minute high is
+    pulled DOWN and every low pulled UP by `ticks` ticks, never past the bar's open/close. Closes (and so every
+    Z, z* and signal) are unchanged; only fills that depend on a high/low touch can change."""
+
+    def __init__(self, store: Any, ticks: int) -> None:
+        self._s, self.ticks = store, int(ticks)
+        self.mode = getattr(store, "mode", "STRATEGY")
+
+    def __getattr__(self, k: str) -> Any:
+        return getattr(self._s, k)
+
+    @property
+    def symbols(self) -> List[str]:
+        return self._s.symbols
+
+    def _pull(self, b: Any) -> Any:
+        import dataclasses
+
+        from research.backtest.bars import tick_size
+
+        body_hi, body_lo = max(b.open, b.close), min(b.open, b.close)
+        hi = max(body_hi, round(b.high - self.ticks * tick_size(b.high), 2))
+        lo = min(body_lo, round(b.low + self.ticks * tick_size(b.low), 2))
+        return dataclasses.replace(b, high=hi, low=lo)
+
+    def bars(self, symbol: str, day: date):
+        return [self._pull(b) for b in self._s.bars(symbol, day)]
+
+    def session_arrays(self, symbol: str, day: date):
+        arr = self._s.session_arrays(symbol, day) if hasattr(self._s, "session_arrays") else None
+        if arr is None:
+            return None
+        bs = self.bars(symbol, day)
+        return {**arr, "high": np.array([b.high for b in bs]), "low": np.array([b.low for b in bs])}
 
 
 def run_orbprod(limit_sessions: Optional[int] = None) -> Dict[str, Any]:
@@ -354,7 +408,8 @@ def _zstar_on_same_data(zstar_result: Path) -> float:
     return float(res["z_star"])
 
 
-def run_hold(hold: Any, variant: str, z_star: float, limit_sessions: Optional[int] = None) -> Dict[str, Any]:
+def run_hold(hold: Any, variant: str, z_star: float, limit_sessions: Optional[int] = None, *,
+             slippage_ticks: int = 1, r_basis: Optional[str] = None, wick_ticks: int = 0) -> Dict[str, Any]:
     import copy
 
     from research.backtest.engine import BacktestEngine, EngineConfig
@@ -364,6 +419,8 @@ def run_hold(hold: Any, variant: str, z_star: float, limit_sessions: Optional[in
 
     t0 = _time.perf_counter()
     spec, spec_path, store, universe, sector_map, (start, end), special, bad = _setup(limit_sessions)
+    if wick_ticks:
+        store = WickPulledStore(store, wick_ticks)
     spec_h = copy.deepcopy(spec)                   # in memory only: the YAML stays DRAFT until P7.3
     spec_h["signal"]["z_star"] = float(z_star)
     spec_h["trade"]["hold_bars"] = hold
@@ -378,8 +435,10 @@ def run_hold(hold: Any, variant: str, z_star: float, limit_sessions: Optional[in
     universe_symbols = sorted({k[0] for k in universe.table})
     provider = CalibrationProvider(store, sector_map, CalibrationConfig.from_prereg(spec_h), symbols=universe_symbols)
     eng_cfg = spec_h["engine"]
+    basis = r_basis or str(eng_cfg["r_basis"])
     cfg = EngineConfig(var_elm_rate=float(eng_cfg["var_elm_rate"]), allow_shorts=bool(eng_cfg["allow_shorts"]),
-                       r_basis=str(eng_cfg["r_basis"]), stop_limit_offset_pct=0.005)
+                       r_basis=basis, stop_limit_offset_pct=0.005, entry_slippage_ticks=slippage_ticks,
+                       stop_slippage_ticks=slippage_ticks, exit_slippage_ticks=slippage_ticks)
     res = BacktestEngine(store, universe, [adapter], cfg, calibration_provider=provider,
                          events_provider=events).run()
     ev_rows = event_rows(store, adapter.candidates)
@@ -388,7 +447,8 @@ def run_hold(hold: Any, variant: str, z_star: float, limit_sessions: Optional[in
             **_cf_summary(res.signals), "decision_reasons": dict(adapter.reasons),
             "candidates": len(adapter.candidates), "event_study": event_summary(ev_rows), "event_table": ev_rows,
             "events_coverage": getattr(events, "coverage", "NONE"),
-            "r_basis": str(eng_cfg["r_basis"]), "evidence_class": "E1_CF (design set; selection of h)",
+            "portfolio": _portfolio_summary(res), "slippage_ticks": slippage_ticks, "wick_pull_ticks": wick_ticks,
+            "r_basis": basis, "evidence_class": "E1_CF (design set; selection of h)",
             "universe_flags": list(universe.flags), "data_source": "UPSTOX_API_V2",
             "runtime_s": round(_time.perf_counter() - t0, 1), "label": "DESIGN_SET_HOLD_CHOICE"}
 
@@ -399,6 +459,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--hold", choices=["4", "8", "EOD"], default=None, help="hold task: h")
     ap.add_argument("--variant", choices=["RESID_REV", "RESID_REV_NF"], default="RESID_REV_NF")
     ap.add_argument("--zstar-result", default=None, help="hold task: result.json of a zstar run on this snapshot")
+    ap.add_argument("--slippage-ticks", type=int, default=1, help="hold task: ticks per side (sensitivity: 2)")
+    ap.add_argument("--r-basis", choices=["stop_limit", "trigger"], default=None)
+    ap.add_argument("--wick-pull-ticks", type=int, default=0, help="hold task: pull highs/lows in (sensitivity: 2)")
     ap.add_argument("--limit-sessions", type=int, default=None, help="first N design sessions only (timing)")
     ap.add_argument("--allow-live-history", action="store_true",
                     help="run on the live (mutable) shared history instead of a sealed snapshot; trials only")
@@ -437,7 +500,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             print("REFUSED: the hold task needs --hold and --zstar-result")
             return 2
         z = _zstar_on_same_data(Path(args.zstar_result))
-        res = run_hold(args.hold if args.hold == "EOD" else int(args.hold), args.variant, z, args.limit_sessions)
+        res = run_hold(args.hold if args.hold == "EOD" else int(args.hold), args.variant, z, args.limit_sessions,
+                       slippage_ticks=args.slippage_ticks, r_basis=args.r_basis, wick_ticks=args.wick_pull_ticks)
         res["zstar_result"] = str(args.zstar_result)
         pd.DataFrame(res.pop("signals_table")).to_parquet(out_dir / "signals.parquet", index=False)
         pd.DataFrame(res.pop("event_table")).to_parquet(out_dir / "event_study.parquet", index=False)

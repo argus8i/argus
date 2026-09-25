@@ -101,3 +101,19 @@ def test_event_rows_skip_missing_bars():
     cand = {("AAA", d): {"slot": 5, "beta": 1.0, "E": -0.01, "sg": 1, "factor_used": "IDX:F"}}
     hs = {r["h"] for r in event_rows(store, cand)}
     assert "4" not in hs and {"1", "2", "8", "EOD"} <= hs
+
+
+def test_wick_pulled_store_moves_highs_and_lows_in_but_never_past_the_body():
+    from datetime import datetime, timedelta, timezone
+
+    from research.backtest.bars import Bar
+    from research.studies.p7_design import WickPulledStore
+
+    ist = timezone(timedelta(hours=5, minutes=30))
+    t = datetime(2023, 5, 10, 9, 15, tzinfo=ist)
+    wide = Bar("A", t, 15, 500.0, 501.0, 499.0, 500.5, 10)          # tick 0.05 at these prices
+    tight = Bar("A", t + timedelta(minutes=15), 15, 500.0, 500.05, 499.95, 500.0, 10)
+    base = type("S", (), {"symbols": ["A"], "bars": lambda self, s, d: [wide, tight]})()
+    got = WickPulledStore(base, 2).bars("A", t.date())
+    assert (got[0].high, got[0].low, got[0].open, got[0].close) == (500.9, 499.1, 500.0, 500.5)
+    assert (got[1].high, got[1].low) == (500.0, 500.0)             # clipped at the body
