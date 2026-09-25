@@ -117,3 +117,22 @@ def test_wick_pulled_store_moves_highs_and_lows_in_but_never_past_the_body():
     got = WickPulledStore(base, 2).bars("A", t.date())
     assert (got[0].high, got[0].low, got[0].open, got[0].close) == (500.9, 499.1, 500.0, 500.5)
     assert (got[1].high, got[1].low) == (500.0, 500.0)             # clipped at the body
+
+
+def test_run_dirs_are_unique_per_task_options_and_process(tmp_path, monkeypatch):
+    """Three runs started in the same second once shared one output folder and overwrote each other."""
+    import argparse
+    from datetime import datetime
+
+    from research.studies import p7_design
+
+    monkeypatch.setenv("TRACK2_OUTPUTS_DIR", str(tmp_path))
+    t = datetime(2026, 9, 26, 0, 52, 25)
+    mk = lambda **kw: argparse.Namespace(**{"task": "hold", "hold": "4", "variant": "RESID_REV_NF",
+                                            "slippage_ticks": 1, "r_basis": None, "wick_pull_ticks": 0, **kw})
+    a = p7_design.run_dir(mk(), t)
+    b = p7_design.run_dir(mk(hold="8"), t)
+    c = p7_design.run_dir(mk(wick_pull_ticks=2), t)
+    assert len({a, b, c}) == 3 and "h4" in a.name and "h8" in b.name and "wick2" in c.name
+    with pytest.raises(FileExistsError):
+        p7_design.run_dir(mk(), t)                                 # same task, options, second and pid

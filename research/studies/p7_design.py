@@ -453,6 +453,26 @@ def run_hold(hold: Any, variant: str, z_star: float, limit_sessions: Optional[in
             "runtime_s": round(_time.perf_counter() - t0, 1), "label": "DESIGN_SET_HOLD_CHOICE"}
 
 
+def run_dir(args: Any, started: datetime) -> Path:
+    """A new folder per run: task, options, start second and process id. Never reused (exist_ok=False)."""
+    import os
+
+    parts = [args.task]
+    if args.task == "hold":
+        parts.append(f"h{args.hold}")
+        if getattr(args, "variant", "RESID_REV_NF") != "RESID_REV_NF":
+            parts.append(args.variant)
+        if getattr(args, "slippage_ticks", 1) != 1:
+            parts.append(f"slip{args.slippage_ticks}")
+        if getattr(args, "r_basis", None):
+            parts.append(args.r_basis)
+        if getattr(args, "wick_pull_ticks", 0):
+            parts.append(f"wick{args.wick_pull_ticks}")
+    d = paths.outputs_dir() / "p7" / f"{'_'.join(parts)}_{started:%Y%m%d_%H%M%S}_{os.getpid()}"
+    d.mkdir(parents=True, exist_ok=False)
+    return d
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="P7.2 design-set tasks")
     ap.add_argument("task", choices=["zstar", "orbprod", "hold"])
@@ -478,7 +498,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # the code a run imports is the code at its start: record it now, not when the manifest is written
     code_at_start = {"git_commit_at_start": _git_commit(), "git_dirty_research_at_start": _git_dirty_research()}
     started = datetime.now(IST)
-    out_dir = paths.ensure(paths.outputs_dir() / "p7" / f"{args.task}_{started:%Y%m%d_%H%M%S}")
+    out_dir = run_dir(args, started)
     from research.studies import prereg_io
 
     spec_path = prereg_io.PREREG_DIR / "resid_rev_v1.yaml"
