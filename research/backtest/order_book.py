@@ -22,6 +22,8 @@ class ExecutionState(str, Enum):
     PARTIAL = "PARTIAL"
     FILLED = "FILLED"
     LOCKED_NO_LIQUIDITY = "LOCKED_NO_LIQUIDITY"
+    # AGENTS.md Rule 4 name. Side-aware: a BUY is locked when offers are zero, a SELL when bids are zero.
+    LOCKED_NO_BID = "LOCKED_NO_LIQUIDITY"
     CANCELLED = "CANCELLED"
     REJECTED = "REJECTED"
 
@@ -38,6 +40,9 @@ class FillRecord:
     fill_shares: int
     turnover: float
     liquidity_flag: str  # "MAKER" or "TAKER"
+    # QUEUE_DEPLETION (prints at our price cleared the queue ahead), TRADE_THROUGH (a print beyond our
+    # price: every resting order at our price must have filled), TAKER_DISPLAYED_DEPTH, TAKER_LADDER.
+    evidence: str = "QUEUE_DEPLETION"
 
 
 @dataclass
@@ -60,6 +65,9 @@ class SimulatedOrder:
     fills: List[FillRecord] = field(default_factory=list)
     cumulative_volume_processed: int = 0
     is_terminal: bool = False
+    # False until the order has survived one event unfilled. A crossing contra quote on arrival means
+    # we take liquidity (TAKER at their price); after resting, it means a contra order met us (MAKER at ours).
+    has_rested: bool = False
 
     def __post_init__(self):
         self.remaining_shares = self.total_shares
@@ -130,10 +138,30 @@ class L2QueueSimulator:
         best_bid: float,
         best_ask: float,
         cancellations_ahead: int = 0,
+        last_trade_price: Optional[float] = None,
+    ) -> SimulatedOrder:
+        """Apply one market event, then mark a still-live order as resting (see SimulatedOrder.has_rested)."""
+        L2QueueSimulator._apply_event(order, timestamp, trade_volume, bid_depth, ask_depth, best_bid, best_ask,
+                                      cancellations_ahead, last_trade_price)
+        if not order.is_terminal:
+            order.has_rested = True
+        return order
+
+    @staticmethod
+    def _apply_event(
+        order: SimulatedOrder,
+        timestamp: str,
+        trade_volume: int,
+        bid_depth: int,
+        ask_depth: int,
+        best_bid: float,
+        best_ask: float,
+        cancellations_ahead: int = 0,
+        last_trade_price: Optional[float] = None,
     ) -> SimulatedOrder:
         """
         Process an incoming market tick/event through the FIFO queue state machine.
-        
+
         Args:
             order: The active SimulatedOrder.
             timestamp: Event timestamp.
@@ -158,27 +186,40 @@ class L2QueueSimulator:
         if cancellations_ahead > 0:
             order.queue_rank_ahead = max(0, order.queue_rank_ahead - cancellations_ahead)
 
-        # 3. Check price executability
-        # Passive limit buy matches if market trades at or below order price
-        is_executable_price = False
+        is_buy = order.side == OrderSide.BUY
         execution_price = order.order_price
 
-        if order.side == OrderSide.BUY:
-            if best_ask <= order.order_price:
-                # Immediate cross / aggressive fill
-                is_executable_price = True
-                execution_price = best_ask
-            elif best_bid == order.order_price:
-                # Passive resting order at best bid
-                is_executable_price = True
-        else:
-            if best_bid >= order.order_price:
-                is_executable_price = True
-                execution_price = best_bid
-            elif best_ask == order.order_price:
-                is_executable_price = True
+        # 3a. Marketable: the order crosses the displayed contra quote, so it takes liquidity now
+        #     and never joins the queue. Approximation: all displayed contra depth at the best price.
+        crossed = (0 < best_ask <= order.order_price) if is_buy else (best_bid >= order.order_price > 0)
+        if crossed:
+            take = min(order.remaining_shares, int(contra_depth))
+            if take > 0:
+                if order.has_rested:
+                    L2QueueSimulator._record_fill(order, timestamp, order.order_price, take, "MAKER", "CONTRA_CROSSED")
+                else:
+                    take_px = best_ask if is_buy else best_bid
+                    L2QueueSimulator._record_fill(order, timestamp, take_px, take, "TAKER", "TAKER_DISPLAYED_DEPTH")
+            return order
 
-        if not is_executable_price or trade_volume <= 0:
+        # 3b. Trade-through: a print strictly beyond our price proves every resting order at our
+        #     price was matched first (price-time priority), so the whole remainder filled.
+        if last_trade_price is not None and (
+            (is_buy and last_trade_price < order.order_price) or (not is_buy and last_trade_price > order.order_price)
+        ):
+            L2QueueSimulator._record_fill(order, timestamp, order.order_price, order.remaining_shares,
+                                          "MAKER", "TRADE_THROUGH")
+            return order
+
+        # 3c. The displayed best is now worse than our price with no print through it: the orders that
+        #     were ahead of us cancelled or were matched, so we are alone at the top. Only prints at our
+        #     price can fill us from here.
+        if (is_buy and best_bid < order.order_price) or (not is_buy and best_ask > order.order_price):
+            order.queue_rank_ahead = 0
+        elif (is_buy and best_bid > order.order_price) or (not is_buy and best_ask < order.order_price):
+            return order          # market moved away; our price is behind the best, nothing trades there
+
+        if trade_volume <= 0:
             return order
 
         # 4. Usable volume turnover application
@@ -200,21 +241,48 @@ class L2QueueSimulator:
         if excess_vol > 0:
             fillable_shares = min(order.remaining_shares, excess_vol)
             if fillable_shares > 0:
-                fill_record = FillRecord(
-                    timestamp=timestamp,
-                    fill_price=execution_price,
-                    fill_shares=fillable_shares,
-                    turnover=round(fillable_shares * execution_price, 2),
-                    liquidity_flag="TAKER" if execution_price != order.order_price else "MAKER",
-                )
-                order.fills.append(fill_record)
-                order.filled_shares += fillable_shares
-                order.remaining_shares -= fillable_shares
+                L2QueueSimulator._record_fill(order, timestamp, execution_price, fillable_shares,
+                                              "MAKER", "QUEUE_DEPLETION")
+        return order
 
-                if order.remaining_shares == 0:
-                    order.state = ExecutionState.FILLED
-                    order.is_terminal = True
-                else:
-                    order.state = ExecutionState.PARTIAL
+    @staticmethod
+    def _record_fill(order: SimulatedOrder, timestamp: str, price: float, shares: int,
+                     liquidity_flag: str, evidence: str) -> None:
+        order.fills.append(FillRecord(timestamp=timestamp, fill_price=price, fill_shares=shares,
+                                      turnover=round(shares * price, 2), liquidity_flag=liquidity_flag,
+                                      evidence=evidence))
+        order.filled_shares += shares
+        order.remaining_shares -= shares
+        if order.remaining_shares == 0:
+            order.state = ExecutionState.FILLED
+            order.is_terminal = True
+        else:
+            order.state = ExecutionState.PARTIAL
 
+    @staticmethod
+    def execute_marketable_limit(
+        order: SimulatedOrder,
+        contra_levels: List[Tuple[float, int]],
+        timestamp: str,
+    ) -> SimulatedOrder:
+        """
+        Exact taker execution: walk the displayed contra ladder (asks for a BUY, bids for a SELL)
+        level by level, never beyond the order's limit. Whatever is left unfilled is the caller's to
+        cancel (IOC) or rest. An empty contra side is a lock: fill probability is zero.
+        """
+        if order.is_terminal:
+            return order
+        if not contra_levels or sum(q for _, q in contra_levels) <= 0:
+            order.state = ExecutionState.LOCKED_NO_LIQUIDITY
+            return order
+        is_buy = order.side == OrderSide.BUY
+        ladder = sorted(contra_levels, key=lambda x: x[0], reverse=not is_buy)
+        for price, qty in ladder:
+            if order.remaining_shares == 0:
+                break
+            if (is_buy and price > order.order_price + 1e-9) or (not is_buy and price < order.order_price - 1e-9):
+                break
+            take = min(order.remaining_shares, int(qty))
+            if take > 0:
+                L2QueueSimulator._record_fill(order, timestamp, price, take, "TAKER", "TAKER_LADDER")
         return order

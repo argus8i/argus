@@ -102,7 +102,44 @@ class DhanFeeEngine:
             raise ValueError(f"Price ({price}) and shares ({shares}) must be strictly positive.")
 
         turnover = round(price * shares, 2)
+        return cls._charges(side, price, shares, turnover, product, is_auto_squareoff)
 
+    @classmethod
+    def calculate_order(
+        cls,
+        side: OrderSide,
+        fills,
+        product: ProductType = ProductType.MIS,
+        is_auto_squareoff: bool = False,
+    ) -> FeeBreakdown:
+        """
+        Charges for ONE order that may have executed in several partial fills.
+        Brokerage is charged per executed order, so the Rs 20 cap applies once across all fills;
+        statutory charges apply to the order's total turnover. Pass each distinct order separately.
+        """
+        fills = list(fills)
+        if not fills:
+            raise ValueError("An order needs at least one fill.")
+        shares = 0
+        turnover = 0.0
+        for price, qty in fills:
+            if price <= 0.0 or int(qty) != qty or qty <= 0:
+                raise ValueError(f"Invalid fill ({price}, {qty}).")
+            shares += int(qty)
+            turnover += price * qty
+        turnover = round(turnover, 2)
+        return cls._charges(side, round(turnover / shares, 4), shares, turnover, product, is_auto_squareoff)
+
+    @classmethod
+    def _charges(
+        cls,
+        side: OrderSide,
+        price: float,
+        shares: int,
+        turnover: float,
+        product: ProductType,
+        is_auto_squareoff: bool,
+    ) -> FeeBreakdown:
         # 1. Brokerage
         if product == ProductType.MIS:
             brokerage = round(min(cls.BROKERAGE_MAX_CAP, turnover * cls.BROKERAGE_RATE_MIS), 2)
