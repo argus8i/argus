@@ -138,7 +138,7 @@ class PairSize:
 
 
 def size_pair(price_y: float, price_x: float, beta: float, spread_sigma: float, z_entry: float = 2.0,
-              z_stop: float = 3.2, risk_budget_rs: float = 1500.0, slot_cap_rs: float = 58333.33,
+              z_stop: float = 3.2, risk_budget_rs: float = 1500.0, slot_cap_rs: float = 38000.00,
               cost_rate: float = 0.00106) -> PairSize:
     """One unit = 1 share of y against |beta| shares of x. Loss to the stop per unit is
     (z_stop - z_entry) * sigma plus round-trip costs on both legs. Both legs share one slot."""

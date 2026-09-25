@@ -58,6 +58,8 @@ trade:
   gap_through_limit: {model: escalate_at_open, slippage_ticks: 1, count_separately: true}
 engine: {var_elm_rate: 0.20, allow_shorts: true, r_basis: stop_limit}
 costs: {fees: DhanFeeEngine_MIS, slippage_ticks_per_side: 1, sensitivity_ticks: [0, 2, 3]}
-sizing: {risk_budget_rs: 1500, slot_cap_rs: 58333.33, vix_multiplier: portfolio_simulation_only}
+# Amended 2026-09-25 while DRAFT: Adjusted A1 (Yashu) replaces slot_cap_rs 58333.33. Slot cap applied at the
+# worst admissible entry price; aggregate = absolute notional of filled positions plus pending entries.
+sizing: {risk_budget_rs: 1500, max_slots: 3, slot_cap_rs: 38000.00, aggregate_exposure_cap_rs: 114000.00, aggregate_includes: [filled, pending_entries], exposure_measure: absolute_notional, slot_cap_price: worst_admissible_entry, vix_multiplier: portfolio_simulation_only}
 diagnostics_logged_not_gated: [phi_ar1_intraday, is_expiry_day, vix_level, vix_tercile, factor_used, factor_weight, beta]
 trials_registry: research/evidence/trials_registry.csv

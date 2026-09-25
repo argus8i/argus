@@ -200,3 +200,89 @@ def test_scenario_table_and_verdict():
 def test_scenario_inputs_fail_closed(bad):
     with pytest.raises(ValueError):
         stress.band_hit_loss_rs(band=bad)
+
+
+# ---------------------------------------------------------------------------------------------------------
+# Adjusted A1 in the backtest engine (P7 must test the same sizing). Engine books a trade at the decision
+# bar and fills it at the next open: an unfilled trade counts at its reservation, a filled one at its fill.
+from research.backtest.engine import BacktestEngine, EngineConfig
+from research.tests.test_bt_engine import Scripted, _session, _store, _universe
+
+SYMS = ("AAA", "BBB", "CCC", "DDD")
+SECT = {s: f"S{k}" for k, s in enumerate(SYMS)}
+BUY = {"stop": 99.0, "targets": ((101.5, 0.5), (103.0, 0.5))}
+SELL = {"side": "SELL", "stop": 101.0, "targets": ((98.5, 0.5), (97.0, 0.5))}
+
+
+def _engine_run(script, **cfg):
+    sessions = {s: _session(s) for s in SYMS}
+    eng = BacktestEngine(_store(sessions), _universe(SYMS), [Scripted(script)],
+                         EngineConfig(var_elm_rate=0.20, **cfg), SECT)
+    return eng.run()
+
+
+def test_engine_defaults_are_adjusted_a1():
+    c = EngineConfig()
+    assert (c.max_slots, c.slot_cap_rs, c.aggregate_exposure_cap_rs, c.risk_budget_rs) == (3, 38000.0, 114000.0,
+                                                                                           1500.0)
+    assert c.slot_cap_on_worst_entry is True
+
+
+def test_engine_three_full_positions_fit_under_the_aggregate_cap():
+    res = _engine_run({(s, "09:45"): BUY for s in SYMS[:3]})
+    assert len(res.trades) == 3
+    for t in res.trades:
+        assert t.qty * t.entry_price <= SLOT_CAP_RS and t.reserved_notional_rs <= SLOT_CAP_RS
+    assert sum(t.qty * t.entry_price for t in res.trades) <= AGGREGATE_EXPOSURE_CAP_RS
+
+
+def test_engine_pending_same_bar_entries_count_toward_the_cap():
+    res = _engine_run({(s, "09:45"): BUY for s in SYMS[:3]}, aggregate_exposure_cap_rs=100_000.0)
+    assert len(res.trades) == 2
+    assert res.disposition_counts.get("REJECTED_GOVERNOR_AGGREGATE_EXPOSURE_CAP") == 1
+
+
+def test_engine_counts_filled_trades_at_fill_notional_and_unfilled_at_reservation():
+    one = _engine_run({("AAA", "09:45"): BUY}).trades[0]
+    fill_a, reserve_a = one.qty * one.entry_price, one.reserved_notional_rs
+    assert fill_a < reserve_a                                        # fill 100.01 < worst admissible 100.11
+    cap = fill_a + reserve_a + 5.0                                   # between fill+reserve and 2 x reserve
+    assert cap < 2 * reserve_a
+    later = _engine_run({("AAA", "09:45"): BUY, ("BBB", "10:15"): BUY}, aggregate_exposure_cap_rs=cap)
+    assert len(later.trades) == 2                                    # AAA filled by 10:15: counted at fill
+    same_bar = _engine_run({("AAA", "09:45"): BUY, ("BBB", "09:45"): BUY}, aggregate_exposure_cap_rs=cap)
+    assert len(same_bar.trades) == 1                                 # AAA still pending: counted at reservation
+    assert same_bar.disposition_counts.get("REJECTED_GOVERNOR_AGGREGATE_EXPOSURE_CAP") == 1
+
+
+def test_engine_adds_long_and_short_exposure_without_netting():
+    script = {("AAA", "09:45"): BUY, ("BBB", "09:45"): SELL, ("CCC", "09:45"): BUY}
+    res = _engine_run(script, allow_shorts=True, aggregate_exposure_cap_rs=100_000.0)
+    assert len(res.trades) == 2 and res.disposition_counts.get("REJECTED_GOVERNOR_AGGREGATE_EXPOSURE_CAP") == 1
+
+
+def test_audit_mode_keeps_the_pre_a1_sizing():
+    res = _engine_run({("AAA", "09:45"): BUY}, slot_cap_rs=58333.33, slot_cap_on_worst_entry=False,
+                      aggregate_exposure_cap_rs=3 * 58333.33)
+    assert res.trades[0].qty == 583                                   # min(1500 // 1.00, 58333.33 // 100)
+
+
+def test_prereg_metrics_and_pairs_defaults_match_adjusted_a1():
+    """Drift guard: P7 must study exactly the sizing that research/decision/sizing.py defines."""
+    import inspect
+
+    from research.backtest import metrics as M
+    from research.backtest.cost_model import DhanFeeEngine
+    from research.derivatives import pairs as PR
+    from research.studies import prereg_io
+
+    sz = prereg_io.load(prereg_io.PREREG_DIR / "resid_rev_v1.yaml")["sizing"]
+    assert (sz["max_slots"], sz["slot_cap_rs"], sz["aggregate_exposure_cap_rs"], sz["risk_budget_rs"]) == \
+        (MAX_SLOTS, SLOT_CAP_RS, AGGREGATE_EXPOSURE_CAP_RS, RISK_BUDGET_RS)
+    assert sz["aggregate_includes"] == ["filled", "pending_entries"] and sz["exposure_measure"] == "absolute_notional"
+    assert M.slot_cap_binding_stop() == pytest.approx(1500 / 38000)
+    assert inspect.signature(M.friction_in_r).parameters["notional_rs"].default == SLOT_CAP_RS
+    assert inspect.signature(M.friction_in_r).parameters["friction_rs"].default == pytest.approx(
+        DhanFeeEngine.calculate_round_trip(500.0, 500.0, 76).total_charges)            # Rs 40.40 on Rs 38,000
+    assert inspect.signature(PR.size_pair).parameters["slot_cap_rs"].default == SLOT_CAP_RS
+    assert PR.size_pair(price_y=250.0, price_x=180.0, beta=1.3, spread_sigma=1.2).gross_notional_rs <= SLOT_CAP_RS

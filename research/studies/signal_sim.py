@@ -152,15 +152,20 @@ def plan_tranches(qty: int, targets: Sequence[Tuple[float, float]]) -> List[List
 
 
 def size_qty(entry_ref: float, stop: float, side: str, risk_budget_rs: float, slot_cap_rs: float,
-             stop_limit_offset_pct: Optional[float] = None) -> int:
-    """floor(min(risk budget / per-share risk, slot cap / entry_ref)); per-share risk to the SL-limit when
-    one is modelled (plan A.10), otherwise to the trigger. 0 when the geometry is invalid."""
+             stop_limit_offset_pct: Optional[float] = None, notional_px: Optional[float] = None) -> int:
+    """floor(min(risk budget / per-share risk, slot cap / notional_px)); per-share risk to the SL-limit when
+    one is modelled (plan A.10), otherwise to the trigger. notional_px (default entry_ref) is the price the
+    slot cap is applied at: the engine passes the worst admissible entry price, so a filled position never
+    exceeds the slot cap (Adjusted A1). 0 when the geometry is invalid."""
     sg = side_sign(side)
     if not (entry_ref > 0 and math.isfinite(stop)) or sg * (entry_ref - stop) <= 0:
         return 0
+    cap_px = entry_ref if notional_px is None else notional_px
+    if not (cap_px > 0 and math.isfinite(cap_px)):
+        return 0
     risk_px = stop if stop_limit_offset_pct is None else _worse_exit(stop * (1 - sg * stop_limit_offset_pct), sg)
     risk = abs(entry_ref - risk_px)
-    return max(0, int(min(risk_budget_rs // risk, slot_cap_rs // entry_ref)))
+    return max(0, int(min(risk_budget_rs // risk, slot_cap_rs // cap_px)))
 
 
 def simulate_signal(bars: Sequence[Bar], signal_index: int, side: str, entry_ref: float, stop: float,

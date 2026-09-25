@@ -88,7 +88,9 @@ def test_entry_fills_at_next_open_plus_one_tick_and_sizes_to_slot():
     t = res.trades[0]
     assert _hm(t.entry_time) == "10:00"
     assert t.entry_price == 100.01
-    assert t.qty == 583                           # min(1500 // 1.00, 58333.33 // 100)
+    # Adjusted A1: min(1500 // 1.00, 38000 // 100.11); 100.11 = worst admissible entry (100 x 1.001 -> 100.10,
+    # + 1 tick). Was 583 under the Rs 58,333.33 cap. The fill (379 x 100.01) stays under Rs 38,000.
+    assert t.qty == 379 and t.qty * t.entry_price <= 38_000.0
 
 
 def test_clamp_skips_entry_when_next_open_gaps_away():
@@ -112,7 +114,7 @@ def test_target_needs_trade_through_then_breakeven_trail():
                                    6: (101.0, 101.1, 99.95, 100.0)})    # back through breakeven
     res, _ = _run({"AAA": s}, {("AAA", "09:45"): TWO_TRANCHE})
     t = res.trades[0]
-    assert [(e.reason, e.price, e.qty) for e in t.exits] == [("TARGET_1", 101.5, 291), ("BREAKEVEN_STOP", 100.0, 292)]
+    assert [(e.reason, e.price, e.qty) for e in t.exits] == [("TARGET_1", 101.5, 189), ("BREAKEVEN_STOP", 100.0, 190)]
     assert _hm(t.exits[0].time) == "10:30"
 
 

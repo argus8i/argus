@@ -36,22 +36,29 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
-from research.backtest.bars import IST, Bar, CandleStore
+from research.backtest.bars import IST, Bar, CandleStore, round_to_tick, tick_size
 from research.backtest.cost_model import ProductType
 from research.backtest.policy import SessionPolicy
 from research.backtest.strategies import PointInTimeView, SignalIntent, StrategyAdapter, StrategyContext
 from research.backtest.universe import PointInTimeUniverse
 from research.data.indices import canonical_index
 from research.decision.allocator import Allocator, DefaultAllocator
+from research.decision.sizing import AGGREGATE_EXPOSURE_CAP_RS, MAX_SLOTS, RISK_BUDGET_RS, SLOT_CAP_RS
 from research.studies.signal_sim import SimConfig, SimResult, side_sign, simulate_signal, size_qty
 
 
 @dataclass(frozen=True)
 class EngineConfig:
     corpus_rs: float = 250_000.0
-    risk_budget_rs: float = 1500.0
-    max_slots: int = 3
-    slot_cap_rs: float = 58333.33  # 250,000 * 0.70 / 3
+    # Adjusted A1 (Yashu, 25 Sep 2026; single source research/decision/sizing.py). Was 58,333.33 per slot.
+    risk_budget_rs: float = RISK_BUDGET_RS                        # Rs 1,500 maximum planned risk per trade
+    max_slots: int = MAX_SLOTS                                    # 3
+    slot_cap_rs: float = SLOT_CAP_RS                              # Rs 38,000 per position
+    aggregate_exposure_cap_rs: float = AGGREGATE_EXPOSURE_CAP_RS  # Rs 1,14,000, filled + pending, absolute
+    # The slot cap is applied at the worst admissible entry price (entry_ref x (1 + clamp) + entry ticks,
+    # rounded up), so a filled position never exceeds it and three full positions fit under the aggregate
+    # cap. False applies it at entry_ref (the pre-A1 behaviour, kept for the audit replays).
+    slot_cap_on_worst_entry: bool = True
     max_positions_per_sector: int = 2
     var_elm_rate: Optional[float] = None
     allow_shadow: bool = False
@@ -124,6 +131,7 @@ class Trade:
     gap_through_limit: bool = False
     holding_bars: int = 0
     release_time: Optional[datetime] = None
+    reserved_notional_rs: float = math.nan       # Adjusted A1: exposure booked before the entry fills
 
 
 @dataclass
@@ -295,9 +303,21 @@ class BacktestEngine:
         except ValueError:
             intent.disposition = "REJECTED_INVALID_SIDE"
             return None
+        cap_px = None
+        if cfg.slot_cap_on_worst_entry and intent.entry_ref > 0 and math.isfinite(intent.entry_ref):
+            # worst admissible entry: the clamp plus the entry slippage ticks (Adjusted A1 slot cap)
+            worst = intent.entry_ref * (1 + cfg.clamp_pct)
+            cap_px = round_to_tick(worst, "up") + cfg.entry_slippage_ticks * tick_size(worst)
         qty = size_qty(intent.entry_ref, intent.stop_loss, intent.side, cfg.risk_budget_rs, cfg.slot_cap_rs,
-                       cfg.stop_limit_offset_pct)
+                       cfg.stop_limit_offset_pct, notional_px=cap_px)
         intent.qty_planned = qty
+        reserve = qty * (cap_px if cap_px is not None else intent.entry_ref)
+        decided_at = bars[i].end
+        # absolute notional booked now: filled trades at their fill notional, trades whose entry has not
+        # filled by this decision at their reservation (Adjusted A1 aggregate cap)
+        # strict '<': an entry at the next bar's open (== this bar's end) has not filled at this decision
+        exposure = sum(abs(t.entry_price * t.qty) if t.entry_time < decided_at else t.reserved_notional_rs
+                       for t in active)
         sim = simulate_signal(bars, i, intent.side, intent.entry_ref, intent.stop_loss, intent.targets,
                               intent.max_bars, qty, self._sim_cfg, day)
         intent.counterfactual_net_r = sim.net_r
@@ -327,11 +347,15 @@ class BacktestEngine:
             intent.disposition = "REJECTED_GOVERNOR_CLUSTER_LIMIT"
         elif qty <= 0:
             intent.disposition = "ZERO_QTY"
+        elif not (exposure + reserve <= cfg.aggregate_exposure_cap_rs + 1e-6):
+            intent.disposition = "REJECTED_GOVERNOR_AGGREGATE_EXPOSURE_CAP"
         elif not sim.filled:
             intent.disposition = sim.disposition
         else:
             intent.disposition = "ALLOCATED"
             trade_id = f"{day.isoformat()}-{intent.symbol}-{intent.strategy}-{seq}"
             intent.trade_id = trade_id
-            return _trade_from_sim(intent, sim, day, trade_id)
+            trade = _trade_from_sim(intent, sim, day, trade_id)
+            trade.reserved_notional_rs = reserve
+            return trade
         return None

@@ -111,7 +111,22 @@ The whole book is at the aggregate cap of ₹1,14,000 absolute notional. Every p
 
 **Verdict:** "Adjusted A1 satisfies the −10% scenario budget before costs. The −15% and −20% scenarios exceed that budget. ₹12,000 is not a guaranteed maximum loss, and band flexing does not guarantee an exit."
 
-### Consumers still using older settings (NOT changed; no integration is claimed)
+### Propagation update (25 Sep 2026, later commit)
+
+Adjusted A1 now also applies in:
+- **`research/backtest/engine.py` (`EngineConfig`):**
+  - defaults are taken from `sizing.py`;
+  - new `aggregate_exposure_cap_rs` check, with disposition `REJECTED_GOVERNOR_AGGREGATE_EXPOSURE_CAP`;
+  - filled trades count at fill notional and not-yet-filled entries at their reservation, using a strict time comparison;
+  - the slot cap is applied at the worst admissible entry price (entry_ref × (1 + clamp) + entry ticks), so a fill never exceeds ₹38,000 and three positions fit under ₹1,14,000. Without this, 1-tick slippage would make the third slot almost always fail the aggregate cap.
+- **`research/studies/signal_sim.size_qty`:** a new `notional_px` argument.
+- **`research/studies/prereg/resid_rev_v1.yaml`:** the `sizing` block, amended while DRAFT.
+- **`research/backtest/metrics.py`:** defaults are now slot cap ₹38,000 and round trip ₹40.40.
+- **`research/derivatives/pairs.py`:** default slot cap ₹38,000.
+
+The P2 audit replays pin the pre-A1 sizing explicitly (`slot_cap_rs = 58333.33`, `slot_cap_on_worst_entry = False`). The tables below list the state **before** this update; after it, only the Monte Carlo audit reproduction (historical) and production `antigravity/` still use ₹58,333.
+
+### Consumers still using older settings, as of the Adjusted A1 commit b7e3db6
 
 Adjusted A1 is applied only inside `research/decision/` (sizing, `allocate`/`ExposureBook`, stress). These still use ₹58,333.33 (or ₹58,333):
 

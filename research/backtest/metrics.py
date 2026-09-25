@@ -262,12 +262,12 @@ def two_tranche_breakeven_hurdle(
 
 def slot_cap_binding_stop(
     risk_budget_rs: float = 1500.0,
-    slot_cap_rs: float = 58333.33,
+    slot_cap_rs: float = 38000.00,
 ) -> float:
     """
     Calculates the exact stop percentage threshold below which the slot notional cap binds
     before the rupee risk budget binds:
-        S* = risk_budget_rs / slot_cap_rs = 1500 / 58333.33 = 2.5714%
+        S* = risk_budget_rs / slot_cap_rs = 1500 / 38000 = 3.9474%   (Adjusted A1; was 2.5714% at 58,333.33)
     For any stop tighter than S*, 1R < risk_budget_rs.
     """
     if slot_cap_rs <= 0:
@@ -277,14 +277,17 @@ def slot_cap_binding_stop(
 
 def friction_in_r(
     stop_pct: float,
-    notional_rs: float = 58333.33,
-    friction_rs: float = 61.86,
+    notional_rs: float = 38000.00,
+    friction_rs: float = 40.40,
     risk_budget_rs: float = 1500.0,
 ) -> float:
     """
     Calculates round-trip friction expressed as a fraction of 1R:
         1R = min(risk_budget_rs, notional_rs * stop_pct)
         c = friction_rs / 1R
+    Defaults (Adjusted A1): Rs 38,000 notional; Rs 40.40 = DhanFeeEngine MIS round trip on Rs 38,000
+    (MEASURED, calculate_round_trip; 0.1063%). While the slot cap binds, c is unchanged from the Rs 58,333.33
+    defaults (61.86 there), because the fee and 1R both scale with notional.
     """
     if stop_pct <= 0 or notional_rs <= 0:
         return math.nan

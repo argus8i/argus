@@ -34,9 +34,12 @@ def test_data_is_the_pinned_kite_file():
     assert DATA.exists(), f"pinned Kite file missing: {DATA}"
     assert hashlib.sha256(DATA.read_bytes().replace(b"\r\n", b"\n")).hexdigest() == DATA_SHA256
 
+# The audit sized at the pre-A1 Rs 58,333.33 slot cap applied at entry_ref, with no aggregate cap binding
+# (3 x 58,333.33); pinned explicitly so the replay stays the audit's, whatever the engine defaults become.
 AUDIT_CFG = EngineConfig(var_elm_rate=0.20, entry_mode="signal_close", entry_slippage_ticks=0, stop_slippage_ticks=0,
                          exit_slippage_ticks=0, r_basis="trigger", cost_mode="flat_pct_of_entry_notional",
-                         flat_cost_pct=0.00106)
+                         flat_cost_pct=0.00106, slot_cap_rs=58333.33, slot_cap_on_worst_entry=False,
+                         aggregate_exposure_cap_rs=3 * 58333.33)
 
 
 @pytest.fixture(scope="module")
