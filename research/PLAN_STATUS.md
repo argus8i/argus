@@ -21,3 +21,5 @@
 | 2026-09-25 | P4 | Features and point-in-time calibration | done | 823aaa2 | Synthetic known-answer and look-ahead tests |
 | 2026-09-25 | P5 | ORB_PROD, RESID_REV v1, ORB_SIMPLE rename | done | (P5 commit) | Synthetic tests; ORB_PROD matches the desk on sampled days; next-trading-day rule made fail-closed |
 | 2026-09-25 | P5 | Descriptive runs registered | done | (P5 commit) | T0022/T0023 (Yahoo post-CAS, not evidence) |
+| 2026-09-25 | P3 | P3.4 NSE events + F&O ban fetcher | done | b0c1e0a, 91a5707 | Keys verified on recorded responses; ex-dates use a labelled assumption (no broadcast time from the API); bulk 2021-10..2026-09 download running |
+| 2026-09-25 | P6 | Decision engine P6.1–P6.7 | done | (P6 commit) | 32 tests; false promotion 2.59%, power 0.801, futility 75.7%; band-hit scenario Rs 17,500 > X Rs 12,000 (decision needed); erratum E-P6.7 |
