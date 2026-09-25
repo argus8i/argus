@@ -119,7 +119,7 @@ def _write_bars(tmp_path, days, source="SYNTHETIC"):
 def test_guard_hides_holdout_in_strategy_mode_and_qa_logs_reads(tmp_path):
     days = [date(2024, 9, 30), date(2025, 1, 2), date(2026, 8, 3)]
     _write_bars(tmp_path, days)
-    s = ParquetCandleStore(tmp_path)                                  # default guard, no lock
+    s = ParquetCandleStore(tmp_path, guard=HoldoutGuard(unlocked=False, reason="TEST_HOLDOUT_HIDDEN"))   # a guard before the P7.3 lock
     assert s.sessions("ABC") == [date(2024, 9, 30), date(2026, 8, 3)]
     assert [d.day for d in s.daily("ABC")] == [date(2024, 9, 30), date(2026, 8, 3)]
     with pytest.raises(HoldoutLockedError):
@@ -202,7 +202,7 @@ def test_legacy_json_loader_goes_through_the_guard(tmp_path):
                                   "close": 1, "volume": 1})
     f = tmp_path / "c.json"
     f.write_text(json.dumps({"symbols": {"ABC": sym}}), encoding="utf-8")
-    s = CandleStore.from_historical_json(f)
+    s = CandleStore.from_historical_json(f, guard=HoldoutGuard(unlocked=False, reason="TEST_HOLDOUT_HIDDEN"))
     assert s.sessions("ABC") == [date(2026, 8, 3)]
     assert [d.day for d in s.daily("ABC")] == [date(2026, 8, 3)]
     assert s.quality_report()["invalid_bars"] == 0
@@ -210,10 +210,12 @@ def test_legacy_json_loader_goes_through_the_guard(tmp_path):
     assert qa.sessions("ABC") == days and qa.mode == "QA"
 
 
-def test_committed_prereg_window_matches_the_plan_and_is_not_locked():
+def test_committed_prereg_window_matches_the_plan_and_is_locked_after_p7_3():
+    """P7.3 locked resid_rev_v1 on 26 Sep 2026 and P7.4 ran once: the guard is open and the done marker exists."""
     g = HoldoutGuard.from_prereg()
     assert g.window == holdout.PLAN_HOLDOUT
-    assert not g.unlocked and g.reason in ("LOCK_MISSING", "STATUS_NOT_LOCKED")
+    assert g.unlocked and g.reason == "OK"
+    assert (prereg_io.PREREG_DIR / "resid_rev_v1.holdout_done").exists()
 
 
 def test_lock_verification(tmp_path):

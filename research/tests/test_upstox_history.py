@@ -163,7 +163,9 @@ def test_fetch_resume_build_and_upstox_is_qa_only(tmp_path):
     out = tmp_path / "hist"
     m = U.build(["ABC"], out_root=out, root=tmp_path, label="t")
     assert m["symbols"][0]["source_class"] == "UPSTOX_API_V2" and m["symbols"][0]["bars_out"] == 50
-    st = ParquetCandleStore(out)                                         # strategy mode opens it now
+    from research.data.holdout import HoldoutGuard
+
+    st = ParquetCandleStore(out, guard=HoldoutGuard(unlocked=False, reason="TEST_HOLDOUT_HIDDEN"))
     assert st.sources == {"ABC": "UPSTOX_API_V2"}
     # 2026-07-01/02 are inside the locked holdout: invisible in strategy mode, visible in QA mode only
     assert st.sessions("ABC") == []

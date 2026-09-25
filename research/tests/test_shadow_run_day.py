@@ -241,3 +241,17 @@ def test_close_allocates_through_the_shadow_runner(tmp_path):
     assert summ["allocation"]["book_flat"] and summ["allocation"]["signals"] == len(rows) >= 1
     assert all(r["disposition"] == "ALLOCATED" or r["disposition"].startswith("DROPPED:") for r in rows)
     assert any(r["allocated"] and r["evidence_class"] == "E1" and r["vix_multiplier"] == 1.0 for r in rows)
+
+
+def test_live_store_keeps_the_full_daily_history_for_vix():
+    """Regression: the post-CAS cutoff is for intraday sessions only; VIX sizing needs 120 daily closes."""
+    from research.backtest.bars import DailyBar
+
+    day = date(2026, 9, 28)
+    days = [day - timedelta(days=k) for k in range(400, 0, -1)]
+    hist = SimpleNamespace(symbols=["IDX:INDIAVIX"], sessions=lambda s: [],
+                           daily=lambda s: [DailyBar(s, d, 14, 15, 13, 14, 0) for d in days])
+    live = rd.LiveDay(day, datetime.combine(day, time(10), IST), {}, "x", {}, {})
+    st = rd.LiveDayStore(hist, live)
+    assert len(st.daily("IDX:INDIAVIX")) == 400 and all(x.day < day for x in st.daily("IDX:INDIAVIX"))
+    assert len(st.daily_before("IDX:INDIAVIX", day)) >= 120

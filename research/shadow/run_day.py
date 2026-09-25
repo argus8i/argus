@@ -209,9 +209,12 @@ class LiveDayStore:
         return self._arrays(self._h.bars(symbol, day))
 
     def daily(self, symbol: str) -> List[DailyBar]:
+        """Every daily bar strictly before the live day. The post-CAS cutoff applies to intraday sessions only:
+        daily closes do not depend on the session shape, and the VIX multiplier needs 120 of them (a cutoff
+        here left ~40 and made m = 0 on every live day)."""
         if symbol not in self._hist_symbols:
             return []
-        return [x for x in self._h.daily(symbol) if self._ok(x.day)]
+        return [x for x in self._h.daily(symbol) if x.day < self.day]
 
     def daily_before(self, symbol: str, day: date) -> List[DailyBar]:
         return [x for x in self.daily(symbol) if x.day < day]
