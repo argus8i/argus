@@ -113,19 +113,28 @@ def _session_returns(store: Any, symbol: str, day: date) -> Optional[np.ndarray]
 
 
 def residual_corr(store: Any, symbols: Sequence[str], as_of: date, market: str = "IDX:NIFTY50",
-                  lookback: int = LOOKBACK, min_sessions: int = MIN_SESSIONS) -> Tuple[List[str], np.ndarray, List[str]]:
+                  lookback: int = LOOKBACK, min_sessions: int = MIN_SESSIONS,
+                  cache: Optional[Dict[Tuple[str, date], Optional[np.ndarray]]] = None
+                  ) -> Tuple[List[str], np.ndarray, List[str]]:
     """Correlation matrix of market-residual 15m returns over the last `lookback` market sessions strictly
     before as_of. Returns (clustered symbols, corr, symbols with fewer than min_sessions usable sessions)."""
     import pandas as pd
 
+    cache = {} if cache is None else cache           # (symbol, day) -> returns; shared across weeks by the caller
+
+    def ret(sym: str, d: date) -> Optional[np.ndarray]:
+        if (sym, d) not in cache:
+            cache[(sym, d)] = _session_returns(store, sym, d)
+        return cache[(sym, d)]
+
     msess = [d for d in store.sessions(market) if d < as_of][-lookback:]
-    mret = {d: r for d in msess if (r := _session_returns(store, market, d)) is not None}
+    mret = {d: r for d in msess if (r := ret(market, d)) is not None}
     days = sorted(mret)
     pos = {d: i for i, d in enumerate(days)}
     cols, names, short = [], [], []
     for s in symbols:
         have = set(store.sessions(s))
-        rets = {d: r for d in days if d in have and (r := _session_returns(store, s, d)) is not None}
+        rets = {d: r for d in days if d in have and (r := ret(s, d)) is not None}
         if len(rets) < min_sessions:
             short.append(s)
             continue
@@ -154,8 +163,9 @@ def weekly_clusters(store: Any, symbols: Sequence[str], sessions: Sequence[date]
     for d in sorted(sessions):
         by_week[tuple(d.isocalendar())[:2]].append(d)
     out: Dict[date, Dict[str, str]] = {}
+    cache: Dict[Tuple[str, date], Optional[np.ndarray]] = {}
     for (y, w), days in sorted(by_week.items()):
-        names, corr, short = residual_corr(store, symbols, days[0], **kw)
+        names, corr, short = residual_corr(store, symbols, days[0], cache=cache, **kw)
         labels = cluster_from_corr(corr, names) if names else {}
         tag = f"{y}-W{w:02d}"
         mapping = {s: f"{tag}:C{c}" for s, c in labels.items()}

@@ -208,6 +208,9 @@ def run_part(part: str, spec_path: Path = SPEC) -> Dict[str, Any]:
         res = BacktestEngine(store, universe, [adapter], cfg, calibration_provider=provider,
                              events_provider=events).run(only_dates=days)
         strategy = "RESID_REV"
+    from research.studies.portfolio import runner_portfolio
+
+    book = runner_portfolio(store, res.signals, sector_map)
     summ = _cf_summary(res.signals)
     table = summ.pop("signals_table")
     sides = {}
@@ -222,7 +225,7 @@ def run_part(part: str, spec_path: Path = SPEC) -> Dict[str, Any]:
               "sessions_run": len(res.dates), "eligible_stock_days": n_elig,
               "special_sessions_excluded": sorted(d.isoformat() for d in special if h0 <= d <= h1),
               "invalid_symbol_sessions_excluded": sum(1 for _, d in bad if h0 <= d <= h1), **summ,
-              "by_side": sides, "portfolio": _portfolio_summary(res), "options": opts,
+              "by_side": sides, "portfolio": _portfolio_summary(res), "portfolio_a1_runner": book, "options": opts,
               "decision_reasons": dict(getattr(adapter, "reasons", {})), "universe_flags": list(universe.flags),
               "lock": pre["lock"], "code_commit": pre["code_commit"],
               "snapshot": pre["snapshot"]["content_sha256"], "runtime_s": round(_time.perf_counter() - t0, 1)}

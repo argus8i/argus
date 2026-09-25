@@ -442,7 +442,10 @@ def run_hold(hold: Any, variant: str, z_star: float, limit_sessions: Optional[in
     res = BacktestEngine(store, universe, [adapter], cfg, calibration_provider=provider,
                          events_provider=events).run()
     ev_rows = event_rows(store, adapter.candidates)
-    return {"strategy": variant, "hold_bars": hold, "z_star": float(z_star),
+    from research.studies.portfolio import runner_portfolio
+
+    book = runner_portfolio(store, res.signals, sector_map)
+    return {"strategy": variant, "hold_bars": hold, "z_star": float(z_star), "portfolio_a1_runner": book,
             "design_window": [start.isoformat(), end.isoformat()], "sessions_run": len(res.dates),
             **_cf_summary(res.signals), "decision_reasons": dict(adapter.reasons),
             "candidates": len(adapter.candidates), "event_study": event_summary(ev_rows), "event_table": ev_rows,

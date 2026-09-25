@@ -226,3 +226,16 @@ def test_reconcile_counts_progress_and_drop_reasons(tmp_path):
     assert 0 < day["peak_exposure_share_of_cap"] <= 1.0 and day["book_flat"] is True
     assert s["progress"]["rule1_sessions"] == "1/60" and s["progress"]["plan_n_pre_admissible"] == "0/111"
     assert "Paper/research only" in to_markdown(s)
+
+
+# ------------------------------------------------------------------ P7.5 portfolio simulation
+def test_runner_portfolio_aggregates_sessions_under_a1():
+    from research.studies.portfolio import runner_portfolio
+
+    store = _WithVix(make_store())
+    sigs = [_sig(s, store, 5) for s in ("AAA", "BBB", "CCC", "DDD", "EEE")]
+    out = runner_portfolio(store, sigs, SECTORS)
+    assert out["sessions_with_signals"] == 1 and out["signals"] == 5
+    assert out["allocated"] <= 3 and out["max_peak_exposure_rs"] <= 114000.0 + 1e-6
+    assert out["sessions_flat_at_close"] == "1/1" and out["exposure_breaches"] == 0
+    assert sum(out["drop_reasons"].values()) == 5 - out["allocated"]

@@ -24,6 +24,7 @@ dropped ones their drop reason and E1_CF counterfactual. At the end of the sessi
 from __future__ import annotations
 
 import math
+import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -168,7 +169,7 @@ class ShadowRunner:
         for t in sorted(by_time):
             apply_until(t)
             mult = self.vix_multiplier(day, t)
-            rep.vix_multipliers[mult.reason] += 1
+            rep.vix_multipliers[re.sub(r"VIX_HISTORY_\d+_OF_\d+", "VIX_HISTORY_SHORT", mult.reason)] += 1
             planned: Dict[Tuple[str, str], Tuple[Any, int, float]] = {}
             cands: List[Candidate] = []
             for s in sorted(by_time[t], key=lambda x: (x.strategy, x.symbol)):
@@ -176,7 +177,7 @@ class ShadowRunner:
                 if qty <= 0:
                     why = "SIZE_ZERO:" + (mult.reason if mult.m <= 0 else "GEOMETRY")
                     rows.append(self._row(s, day, "DROPPED:" + why, None, 0, mult))
-                    rep.drops[why] += 1
+                    rep.drops[re.sub(r"VIX_HISTORY_\d+_OF_\d+", "VIX_HISTORY_SHORT", why)] += 1
                     continue
                 planned[(s.strategy, s.symbol)] = (s, qty, px)
                 cands.append(cand)
