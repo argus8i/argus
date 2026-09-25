@@ -1,0 +1,26 @@
+{
+  "strategy_id": "ORB_PROD",
+  "at": "2026-09-26T01:36:20+05:30",
+  "action": "KILLED_ON_DESIGN",
+  "from": "UNVERIFIED",
+  "to": "KILLED_ON_DESIGN",
+  "reasons": [
+    "design mean net R -0.0603 (t -7.40, n 14456) on ['2022-01-03', '2024-09-30']; expected_net_r <= 0, so EXPLOIT allocates it no slots"
+  ],
+  "inputs": {
+    "window": [
+      "2022-01-03",
+      "2024-09-30"
+    ],
+    "snapshot_sha256": "72a444d7aec15d979b54a36e54afb8108df4b1cf1a0105ef76cb63a7c320059d",
+    "n": 14456,
+    "mean_net_r": -0.06029769272775457,
+    "t_cluster": -7.398277490019499,
+    "mean_gross_r": -0.003295321404096601,
+    "mean_fee_r": 0.049095924496042304,
+    "mean_slip_r": 0.007906446827615685,
+    "result_file": "research/outputs/p7/orbprod_20260926_002007/result.json",
+    "evidence_class": "E1_CF"
+  },
+  "evidence": "E1_CF design-set record (can never promote)"
+}

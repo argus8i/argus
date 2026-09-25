@@ -1,21 +1,78 @@
 {
   "version": 1,
-  "updated_by": "initial seed (plan P1.4); from now on only research/decision/promotion.py writes this file",
-  "updated_at": "2026-09-25",
+  "updated_by": "research/decision/promotion.py (KILLED_ON_DESIGN ORB_PROD)",
+  "updated_at": "2026-09-26T01:36:20+05:30",
   "strategies": {
-    "ORB_PROD":        {"status": "UNVERIFIED", "evidence": "none", "notes": "production live-path baseline (plan P5.1)"},
-    "RESID_REV":       {"status": "UNVERIFIED", "evidence": "none", "notes": "pre-registered lead (plan Appendix B)"},
-    "ORB_SIMPLE":      {"status": "UNVERIFIED", "evidence": "none", "notes": "comparison only (plan P5.3)"},
-    "ORB_MOMENTUM":    {"status": "UNVERIFIED", "evidence": "none", "notes": "measured -0.003R n=41 on repo32; not holdout evidence"},
-    "VWAP_RECLAIM":    {"status": "UNVERIFIED", "evidence": "none", "notes": "measured -0.258R n=89 on repo32; not holdout evidence"},
-    "VOL_SQUEEZE":     {"status": "UNVERIFIED", "evidence": "none", "notes": "measured -0.530R n=13 on repo32; not holdout evidence"},
-    "TRAPDOOR":        {"status": "UNVERIFIED", "evidence": "none", "notes": ""},
-    "LAST_LIGHT":      {"status": "UNVERIFIED", "evidence": "none", "notes": ""},
-    "RECOIL":          {"status": "UNVERIFIED", "evidence": "none", "notes": ""},
-    "COMPASS":         {"status": "UNVERIFIED", "evidence": "none", "notes": ""},
-    "SWEEP_RECLAIM":   {"status": "UNVERIFIED", "evidence": "none", "notes": "P9 candidate; needs its own pre-registration"},
-    "LATE_MOMENTUM":   {"status": "UNVERIFIED", "evidence": "none", "notes": "P9 candidate; same family as LAST_LIGHT for DSR N"},
-    "PEAD_DRIFT":      {"status": "UNVERIFIED", "evidence": "none", "notes": "CNC overnight; excluded from Track 2 (decision 8, 25 Sep)"},
-    "CAS_REVERSAL":    {"status": "UNVERIFIED", "evidence": "none", "notes": "CNC overnight; excluded from Track 2 (decision 8, 25 Sep)"}
+    "ORB_PROD": {
+      "status": "KILLED_ON_DESIGN",
+      "evidence": "E1_CF_DESIGN",
+      "notes": "production live-path baseline (plan P5.1)",
+      "expected_net_r": -0.06029769272775457
+    },
+    "RESID_REV": {
+      "status": "UNVERIFIED",
+      "evidence": "none",
+      "notes": "pre-registered lead (plan Appendix B)"
+    },
+    "ORB_SIMPLE": {
+      "status": "UNVERIFIED",
+      "evidence": "none",
+      "notes": "comparison only (plan P5.3)"
+    },
+    "ORB_MOMENTUM": {
+      "status": "UNVERIFIED",
+      "evidence": "none",
+      "notes": "measured -0.003R n=41 on repo32; not holdout evidence"
+    },
+    "VWAP_RECLAIM": {
+      "status": "UNVERIFIED",
+      "evidence": "none",
+      "notes": "measured -0.258R n=89 on repo32; not holdout evidence"
+    },
+    "VOL_SQUEEZE": {
+      "status": "UNVERIFIED",
+      "evidence": "none",
+      "notes": "measured -0.530R n=13 on repo32; not holdout evidence"
+    },
+    "TRAPDOOR": {
+      "status": "UNVERIFIED",
+      "evidence": "none",
+      "notes": ""
+    },
+    "LAST_LIGHT": {
+      "status": "UNVERIFIED",
+      "evidence": "none",
+      "notes": ""
+    },
+    "RECOIL": {
+      "status": "UNVERIFIED",
+      "evidence": "none",
+      "notes": ""
+    },
+    "COMPASS": {
+      "status": "UNVERIFIED",
+      "evidence": "none",
+      "notes": ""
+    },
+    "SWEEP_RECLAIM": {
+      "status": "UNVERIFIED",
+      "evidence": "none",
+      "notes": "P9 candidate; needs its own pre-registration"
+    },
+    "LATE_MOMENTUM": {
+      "status": "UNVERIFIED",
+      "evidence": "none",
+      "notes": "P9 candidate; same family as LAST_LIGHT for DSR N"
+    },
+    "PEAD_DRIFT": {
+      "status": "UNVERIFIED",
+      "evidence": "none",
+      "notes": "CNC overnight; excluded from Track 2 (decision 8, 25 Sep)"
+    },
+    "CAS_REVERSAL": {
+      "status": "UNVERIFIED",
+      "evidence": "none",
+      "notes": "CNC overnight; excluded from Track 2 (decision 8, 25 Sep)"
+    }
   }
 }
