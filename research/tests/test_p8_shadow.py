@@ -158,3 +158,50 @@ def test_unknown_clusters_share_one_bucket_fail_closed():
     store = _WithVix(make_store())
     rep, _ = ShadowRunner(store, SECTORS).process_session(DAY, [_sig(s, store, 5) for s in ("AAA", "BBB", "CCC")])
     assert rep.allocated == 1 and rep.drops["CLUSTER_LIMIT"] == 2
+
+
+# ------------------------------------------------------------------ feeds
+def test_snapshot_replay_feed_is_point_in_time():
+    from research.shadow.feed import SnapshotReplayFeed
+
+    store = make_store()
+    live = SnapshotReplayFeed(store).live_day(DAY, datetime.combine(DAY, time(10, 0, 30), IST))
+    assert all(b.end <= datetime.combine(DAY, time(9, 59, 30), IST) for bs in live.bars.values() for b in bs)
+    assert not live.dropped and "AAA" in live.bars
+
+
+def test_upstox_intraday_feed_writes_a_valid_live_file(tmp_path):
+    import json
+
+    from research.shadow import run_day as rd
+    from research.shadow.feed import UpstoxIntradayFeed
+
+    day = date(2026, 9, 28)
+    mins = [[(datetime.combine(day, time(9, 15), IST) + timedelta(minutes=k)).isoformat(),
+             100 + k * 0.1, 100.5 + k * 0.1, 99.8 + k * 0.1, 100.2 + k * 0.1, 1000, 0] for k in range(45)]
+
+    class FakeClient:
+        requests_made = 0
+
+        def get(self, url):
+            self.requests_made += 1
+            if "BAD" in url:
+                return 403, b"denied"
+            return 200, json.dumps({"status": "success", "data": {"candles": list(reversed(mins))}}).encode()
+
+    out = tmp_path / "live.json"
+    summ = UpstoxIntradayFeed({"AAA": "NSE_EQ|INE000A01001", "ZZZ": "NSE_EQ|BAD"}, client=FakeClient(),
+                              out_path=out).poll(day)
+    assert summ["symbols"] == 1 and summ["errors"] == {"HTTP_403": 1}
+    live = rd.load_live(out.read_bytes(), day, datetime.combine(day, time(10, 1), IST))
+    assert not live.dropped and live.sources["AAA"] == "UPSTOX_API_V2"
+    assert [b.start.time() for b in live.bars["AAA"]] == [time(9, 15), time(9, 30), time(9, 45)]
+    b0 = live.bars["AAA"][0]
+    assert b0.open == 100.0 and b0.volume == 15000 and abs(b0.close - (100.2 + 14 * 0.1)) < 1e-9
+
+
+def test_dhan_feed_refuses():
+    from research.shadow.feed import DhanIntradayFeed
+
+    with pytest.raises(NotImplementedError, match="paid Dhan Data API"):
+        DhanIntradayFeed()
