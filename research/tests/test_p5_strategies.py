@@ -389,3 +389,14 @@ def test_one_day_engine_run_matches_the_full_run_for_that_day():
     one = run([day])
     assert one.dates == [day]
     assert full and sorted(key(s) for s in one.signals) == full
+
+
+def test_legacy_adapters_wrap_production_classes_and_refuse_unknown_names():
+    from research.strategies.legacy import NAMES, LegacyAdapter
+
+    assert set(NAMES) == {"TRAPDOOR", "LAST_LIGHT", "RECOIL", "VOL_SQUEEZE", "COMPASS"}
+    for n in NAMES:
+        a = LegacyAdapter(n)
+        assert a.name == n and type(a.impl).__module__.startswith("antigravity.models.")
+    with pytest.raises(ValueError):
+        LegacyAdapter("VWAP_RECLAIM")

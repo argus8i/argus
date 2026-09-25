@@ -333,6 +333,24 @@ def run_orbprod(limit_sessions: Optional[int] = None) -> Dict[str, Any]:
             "label": "DESIGN_SET_BASELINE"}
 
 
+def run_legacy(name: str, limit_sessions: Optional[int] = None) -> Dict[str, Any]:
+    """One production-default configuration of another Track 2 strategy on the design window
+    (research/strategies/legacy.py); descriptive E1_CF, one registered trial."""
+    from research.backtest.engine import BacktestEngine, EngineConfig
+    from research.strategies.legacy import LegacyAdapter
+
+    t0 = _time.perf_counter()
+    spec, spec_path, store, universe, sector_map, (start, end), special, bad = _setup(limit_sessions)
+    adapter = LegacyAdapter(name)
+    cfg = EngineConfig(var_elm_rate=0.20, allow_shorts=True, stop_limit_offset_pct=0.005, r_basis="stop_limit")
+    res = BacktestEngine(store, universe, [adapter], cfg, sectors=sector_map).run()
+    return {"strategy": name, "design_window": [start.isoformat(), end.isoformat()], "sessions_run": len(res.dates),
+            **_cf_summary(res.signals), "decision_reasons": dict(adapter.reasons),
+            "r_basis": "stop_limit", "evidence_class": "E1_CF (never admissible)", "parameters": "production defaults",
+            "universe_flags": list(universe.flags), "data_source": "UPSTOX_API_V2",
+            "runtime_s": round(_time.perf_counter() - t0, 1), "label": "DESIGN_SET_LEGACY_STRATEGY"}
+
+
 EVENT_HOLDS: Tuple[Any, ...] = (1, 2, 4, 8, "EOD")
 HOLD_CHOICES: Tuple[Any, ...] = (4, 8, "EOD")
 LAST_HELD_SLOT = 22          # plan A.9: bar 22 (14:30-14:45) is the last bar fully held
@@ -461,6 +479,8 @@ def run_dir(args: Any, started: datetime) -> Path:
     import os
 
     parts = [args.task]
+    if args.task == "legacy":
+        parts.append(str(args.strategy))
     if args.task == "hold":
         parts.append(f"h{args.hold}")
         if getattr(args, "variant", "RESID_REV_NF") != "RESID_REV_NF":
@@ -478,7 +498,8 @@ def run_dir(args: Any, started: datetime) -> Path:
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="P7.2 design-set tasks")
-    ap.add_argument("task", choices=["zstar", "orbprod", "hold"])
+    ap.add_argument("task", choices=["zstar", "orbprod", "hold", "legacy"])
+    ap.add_argument("--strategy", default=None, help="legacy task: TRAPDOOR, LAST_LIGHT, RECOIL, VOL_SQUEEZE, COMPASS")
     ap.add_argument("--hold", choices=["4", "8", "EOD"], default=None, help="hold task: h")
     ap.add_argument("--variant", choices=["RESID_REV", "RESID_REV_NF"], default="RESID_REV_NF")
     ap.add_argument("--zstar-result", default=None, help="hold task: result.json of a zstar run on this snapshot")
@@ -511,6 +532,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         pd.DataFrame([{"symbol": s, "session": d.isoformat(), "max_abs_z": v} for (s, d), v in scan.items()]) \
             .to_parquet(out_dir / "scan_max.parquet", index=False)
+    elif args.task == "legacy":
+        import pandas as pd
+
+        res = run_legacy(str(args.strategy), args.limit_sessions)
+        pd.DataFrame(res.pop("signals_table")).to_parquet(out_dir / "signals.parquet", index=False)
     elif args.task == "orbprod":
         import pandas as pd
 
