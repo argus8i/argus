@@ -6,7 +6,7 @@ symbol-sessions they share. Both stores are opened in QA mode.
 
 Per shared symbol-session:
 - bar starts must be identical (an offset of one bar means a parser bug: stop and fix it first);
-- OHLC must agree within one tick (index series: within 0.01%);
+- OHLC must agree within max(2 ticks, 0.20%) (Yashu, 25 Sep 2026; the plan said one tick). Indices: 0.01%;
 - volume must agree within 1%.
 Every mismatch is listed. The reference today is the Kite 32-session file (8 stocks + NIFTY 50).
 
@@ -27,7 +27,12 @@ from research.data.indices import canonical_index
 from research.data.store_parquet import ParquetCandleStore
 
 
-def compare(store: Any, reference: Any, vol_tol: float = 0.01, index_tol: float = 1e-4) -> Dict[str, Any]:
+PRICE_TOL_TICKS = 2          # Yashu, 25 Sep 2026: multi-broker tolerance max(2 ticks, 0.20%) replaces
+PRICE_TOL_PCT = 0.002        # the plan's one tick (P3.9). Volume stays within 1%; indices within 0.01%.
+
+
+def compare(store: Any, reference: Any, vol_tol: float = 0.01, index_tol: float = 1e-4,
+            price_tol_ticks: int = PRICE_TOL_TICKS, price_tol_pct: float = PRICE_TOL_PCT) -> Dict[str, Any]:
     ref_names = {(canonical_index(s) or s): s for s in reference.symbols}
     shared = sorted(set(ref_names) & set(store.symbols))
     mismatches: List[Dict[str, Any]] = []
@@ -54,7 +59,8 @@ def compare(store: Any, reference: Any, vol_tol: float = 0.01, index_tol: float 
                 counts["bars"] += 1
                 for f in ("open", "high", "low", "close"):
                     px, py = getattr(x, f), getattr(y, f)
-                    tol = tick_size(py) + 1e-9 if kind == "TRADABLE" else abs(py) * index_tol
+                    tol = (max(price_tol_ticks * tick_size(py), price_tol_pct * abs(py)) + 1e-9
+                           if kind == "TRADABLE" else abs(py) * index_tol)
                     if abs(px - py) > tol:
                         counts[f"{f}_mismatch"] += 1
                         mismatches.append({"symbol": sym, "session": day.isoformat(), "start": t.strftime("%H:%M"),
@@ -68,6 +74,8 @@ def compare(store: Any, reference: Any, vol_tol: float = 0.01, index_tol: float 
                                            "ratio": round(x.volume / y.volume, 4)})
     bars = counts["bars"] or 1
     return {
+        "tolerances": {"price": f"max({price_tol_ticks} ticks, {price_tol_pct:.2%})", "volume": f"{vol_tol:.0%}",
+                       "index": f"{index_tol:.2%}"},
         "shared_symbols": shared,
         "shared_sessions": counts["sessions"],
         "shared_bars": counts["bars"],

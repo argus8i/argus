@@ -28,3 +28,6 @@
 | 2026-09-25 | P7-prep | Adjusted A1 in engine, prereg (DRAFT), metrics, pairs | done | dff8c1c | Engine sizes the slot cap at the worst admissible entry; aggregate check over filled + pending; audit replays pin pre-A1 sizing |
 | 2026-09-25 | P3 | Upstox V2 intraday source (upstox_history.py) | built; source **FAILS** P3.9 | (Upstox commit) | Starts identical; OHLC >1 tick on 12-28% of bars, volume >1% on 12%; Yahoo sides with Kite 3:1; stays QA_ONLY; universe NOT ingested (research/notes/p3_upstox_report.md) |
 | 2026-09-25 | P3 | P3.4 NSE download resumed (--interval 4) | running | – | Through 2024-04-24 at 20:24 IST |
+| 2026-09-25 | P3 | Cross-source tolerance max(2 ticks, 0.20%) (Yashu) | done | (tolerance commit) | Upstox re-run still FAILS: 18 price fields, 837 volume bars > 1%; stays QA_ONLY pending volume/outlier decision |
+| 2026-09-25 | P7-prep | Design window 2022-01-03..2024-09-30 (Yashu); holdout unchanged | done | (tolerance commit) | prereg still DRAFT |
+| 2026-09-25 | P3 | P3.4 NSE download | stopped | – | 3rd stop (ConnectionError) at 2024-11-13; 1,144 announcement days on disk; awaiting Yashu's choice |

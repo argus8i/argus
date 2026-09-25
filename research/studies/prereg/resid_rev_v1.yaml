@@ -15,7 +15,7 @@ secondary_tests:
 variants_registered: [RESID_REV_NF]      # run only if the announcements history is unavailable (P3.4)
 data:
   bars: {interval_min: 15, source: dhan_v2_charts_intraday, timestamps: bar_start_IST, slots_used: "returns 1..23"}
-  design: [first_available, "2024-09-30"]
+  design: ["2022-01-03", "2024-09-30"]      # Yashu 25 Sep 2026 (decision 2 domain): intraday history from Jan 2022
   holdout: ["2024-10-01", "2026-07-31"]
   excluded: {from: "2026-08-03", reason: "post-CAS regime and audited sessions; descriptive only"}
 universe:

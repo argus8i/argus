@@ -335,9 +335,11 @@ def test_cross_source_passes_on_identical_data_and_flags_offsets_and_prices():
     assert off["one_bar_offset_sessions"] == 1 and off["start_mismatch_sessions"] == 1 and not off["passed"]
     gap = compare(_store_from(days, shift_min=5), _store_from(days))
     assert gap["one_bar_offset_sessions"] == 0 and gap["start_mismatch_sessions"] == 1
-    res = compare(_store_from(days, px=0.05), _store_from(days))
+    res = compare(_store_from(days, px=0.25), _store_from(days))            # 0.25% > max(2 ticks, 0.20%)
     assert not res["passed"] and res["price_mismatch_bars"]["close"] == 24
-    assert compare(_store_from(days, px=0.01), _store_from(days))["passed"], "one tick is inside tolerance"
+    assert compare(_store_from(days, px=0.15), _store_from(days))["passed"], "0.15% is inside max(2 ticks, 0.20%)"
+    strict = compare(_store_from(days, px=0.15), _store_from(days), price_tol_ticks=1, price_tol_pct=0.0)
+    assert not strict["passed"]                                                # the plan's original one-tick rule
     assert compare(_store_from(days, vol_mult=1.02), _store_from(days))["volume_mismatch_bars"] == 24
 
 

@@ -83,3 +83,33 @@ Kite is not ground truth by definition, so every bar where Upstox and Kite disag
 3. **Ask Upstox how 1-minute candles are built.** They may include trades that Kite's 15-minute candles exclude, such as odd-lot or special-session prints. That could explain wider ranges and the higher 09:15 volume. Until it is explained, the data stays QA_ONLY.
 
 **Nothing here changes the P7 blocker.** There is still no strategy-eligible intraday history for the design window (Oct 2021 – Sep 2024).
+
+## 6. Re-run under Yashu's multi-broker tolerance (25 Sep 2026, later)
+
+**Policy change (Yashu):**
+- OHLC tolerance is now max(2 ticks, 0.20%). The plan's P3.9 said one tick.
+- Volume stays within 1%, and indices within 0.01%.
+- Implemented as the defaults in `research/data/cross_source.py`; `compare(..., price_tol_ticks=1, price_tol_pct=0)` restores the original rule.
+
+**Re-run:**
+```
+python -m research.data.upstox_history xcheck --reference shared/track2_liquid/historical_candles_track2.json --report research/outputs/p3/upstox_cross_source_tol020.json
+```
+**Result:** exit **1**, still **FAIL**.
+
+| Check | Result |
+|---|---|
+| Bar starts | pass |
+| Price | **18 fields** in 17 bars out of 6,944 still exceed max(2 ticks, 0.20%). They are open 3, high 4, low 3, close 8, mostly in the 15:00 bar. The worst are COCHINSHIP 2026-09-22 15:00 high +41 bps, ANGELONE 2026-09-18 15:00 close −40 bps and SUZLON 2026-08-25 15:00 low −30 bps. |
+| Volume | **837 bars** outside 1% (248 of them at 09:15, where Upstox is systematically 1.2–3.8% higher); 517 outside 2%, 155 outside 5%, 42 outside 10% |
+
+**Range bias (MEASURED, 6,144 stock bars):**
+- Upstox's bar range is wider on 35.9% of bars and narrower on 5.4%.
+- Median range ratio 1.000; mean 1.037.
+- Extra range averages 1.1 bps (p90 4.2 bps).
+- It is one-directional, but small: about 1% of a typical 1% stop distance.
+- **About the "tick sampling" explanation:** sampling would make bars narrower, not wider, so it does not explain the direction.
+
+**Status:** `UPSTOX_API_V2` is still QA_ONLY and nothing has been ingested. Marking it passed needs two decisions that the tolerance change does not cover:
+- the volume tolerance;
+- what to do with the 18 remaining price outliers.
