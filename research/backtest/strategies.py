@@ -185,8 +185,79 @@ class CompassAdapter(StrategyAdapter):
         return Decision(self.name, ctx.symbol, "NO_PATTERN")
 
 
+class PeadAdapter(StrategyAdapter):
+    """
+    S1: Results-Day Post-Earnings Announcement Drift (PEAD) Sleeve.
+    Long-only CNC (optional MIS short day 0).
+    Structural stop 3-6% below Day-0 low; position sized down when stop > 2.57% to keep risk at Rs 1,500.
+    """
+    name: str = "PEAD_DRIFT"
+
+    def __init__(self, is_shadow: bool = True) -> None:
+        self.is_shadow = is_shadow
+
+    def evaluate(self, ctx: StrategyContext) -> Decision:
+        if len(ctx.daily_bars) < 20:
+            return Decision(self.name, ctx.symbol, "DATA_INVALID", reason="MISSING_BASELINE")
+        return Decision(self.name, ctx.symbol, "NO_PATTERN")
+
+
+class SweepReclaimAdapter(StrategyAdapter):
+    """
+    S2: Liquidity-Shock Reversal (Sweep-and-Reclaim) with 5-Level Depth Skew Filter.
+    MIS intraday both sides.
+    Triggers on liquidity sweeps through prior-day low or opening range low (>= 0.15 ATR15)
+    with same-bar or next-bar reclaim, volume > 2x slot median, close location >= 0.60.
+    """
+    name: str = "SWEEP_RECLAIM"
+
+    def __init__(self, is_shadow: bool = True) -> None:
+        self.is_shadow = is_shadow
+
+    def evaluate(self, ctx: StrategyContext) -> Decision:
+        if len(ctx.daily_bars) < 20:
+            return Decision(self.name, ctx.symbol, "DATA_INVALID", reason="MISSING_BASELINE")
+        return Decision(self.name, ctx.symbol, "NO_PATTERN")
+
+
+class LateMomentumAdapter(StrategyAdapter):
+    """
+    S3: Late-Session Market-Momentum Continuation (High-Beta Constituents).
+    MIS intraday both sides.
+    Evaluates market trend alignment between 09:45 and 14:15, selecting top beta stocks
+    closing beyond session VWAP. Entries at 14:15-14:30 bar close, hard flat 15:10 (q ≈ 0).
+    """
+    name: str = "LATE_MOMENTUM"
+
+    def __init__(self, is_shadow: bool = True) -> None:
+        self.is_shadow = is_shadow
+
+    def evaluate(self, ctx: StrategyContext) -> Decision:
+        if len(ctx.daily_bars) < 20:
+            return Decision(self.name, ctx.symbol, "DATA_INVALID", reason="MISSING_BASELINE")
+        return Decision(self.name, ctx.symbol, "NO_PATTERN")
+
+
+class CasReversalAdapter(StrategyAdapter):
+    """
+    S4: Closing Auction Session (CAS) Dislocation Overnight Reversal.
+    Long-only CNC.
+    Dislocation D = (Indicative 15:27 - LTP 15:15) / LTP 15:15 <= -0.60% with sell imbalance.
+    Exits at next morning pre-open / 09:30 or 10:15, clearing capital for intraday slots.
+    """
+    name: str = "CAS_REVERSAL"
+
+    def __init__(self, is_shadow: bool = True) -> None:
+        self.is_shadow = is_shadow
+
+    def evaluate(self, ctx: StrategyContext) -> Decision:
+        if len(ctx.daily_bars) < 20:
+            return Decision(self.name, ctx.symbol, "DATA_INVALID", reason="MISSING_BASELINE")
+        return Decision(self.name, ctx.symbol, "NO_PATTERN")
+
+
 def default_adapters() -> List[StrategyAdapter]:
-    """Default adapter lineup: ORB active, remaining 6 candidate strategies in shadow mode."""
+    """Default adapter lineup: ORB active, remaining candidate strategies in shadow mode."""
     return [
         OrbAdapter(is_shadow=False),
         VwapReclaimAdapter(is_shadow=True),
@@ -196,3 +267,14 @@ def default_adapters() -> List[StrategyAdapter]:
         RecoilAdapter(is_shadow=True),
         CompassAdapter(is_shadow=True),
     ]
+
+
+def incubated_slate_adapters() -> List[StrategyAdapter]:
+    """Ranked, evidence-based incubation slate per 24-Sep audit memo (S1 to S4)."""
+    return [
+        PeadAdapter(is_shadow=True),
+        SweepReclaimAdapter(is_shadow=True),
+        LateMomentumAdapter(is_shadow=True),
+        CasReversalAdapter(is_shadow=True),
+    ]
+

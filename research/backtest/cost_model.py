@@ -153,24 +153,31 @@ class DhanFeeEngine:
         else:
             stt = round(turnover * cls.STT_RATE_CNC, 2)
 
-        # 3. Exchange Transaction Charges (NSE)
+        # 3. Exchange Transaction Charges (NSE Cash segment)
         exchange_charges = round(turnover * cls.NSE_EXCHANGE_FEE_RATE, 2)
 
-        # 4. SEBI Turnover Fee
+        # 4. SEBI Turnover Fee (Rs 10 per Crore)
         sebi_charges = round(turnover * cls.SEBI_FEE_RATE, 2)
 
-        # 5. Stamp Duty (Buy only)
-        stamp_duty = round(turnover * cls.STAMP_DUTY_BUY, 2) if side == OrderSide.BUY else 0.0
+        # 5. Stamp Duty (Buy only: 0.003% for MIS, 0.015% for CNC Delivery)
+        if side == OrderSide.BUY:
+            stamp_rate = 0.000150 if product == ProductType.CNC else cls.STAMP_DUTY_BUY
+            stamp_duty = round(turnover * stamp_rate, 2)
+        else:
+            stamp_duty = 0.0
 
-        # 6. GST: 18% on (Brokerage + Exchange Charges + SEBI Charges)
+        # 6. DP Charge (Dhan: Rs 12.50 + 18% GST = Rs 14.75 per scrip per day on CNC Sell)
+        dp_charges = 14.75 if (product == ProductType.CNC and side == OrderSide.SELL) else 0.0
+
+        # 7. GST: 18% on (Brokerage + Exchange Charges + SEBI Charges)
         taxable_services = brokerage + exchange_charges + sebi_charges
         gst = round(taxable_services * cls.GST_RATE, 2)
 
-        # 7. RMS Auto Square-off penalty if applicable
+        # 8. RMS Auto Square-off penalty if applicable
         auto_penalty = round(cls.AUTO_SQUAREOFF_BASE * (1.0 + cls.GST_RATE), 2) if is_auto_squareoff else 0.0
 
         total = round(
-            brokerage + stt + exchange_charges + sebi_charges + stamp_duty + gst + auto_penalty,
+            brokerage + stt + exchange_charges + sebi_charges + stamp_duty + dp_charges + gst + auto_penalty,
             2,
         )
 

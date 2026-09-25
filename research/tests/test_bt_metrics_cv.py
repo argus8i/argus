@@ -133,3 +133,42 @@ def test_cpcv_split_and_path_counts():
     paths = cv.assemble_paths({i: {g: f"s{i}g{g}" for g in s[1]} for i, s in enumerate(splits)})
     assert len(paths) == 5 and all(len(p) == 6 for p in paths)
     assert all(len({p[g] for p in paths}) == 5 for g in range(6))      # each path uses a different split per group
+
+
+def test_two_tranche_breakeven_hurdles_match_analytical_table():
+    # q = 0.5 (random walk runner)
+    assert M.two_tranche_breakeven_hurdle(0.10, q_runner=0.5) == pytest.approx(1.10 / 2.50, rel=1e-6)  # 0.440
+    assert M.two_tranche_breakeven_hurdle(0.15, q_runner=0.5) == pytest.approx(1.15 / 2.50, rel=1e-6)  # 0.460
+    assert M.two_tranche_breakeven_hurdle(0.25, q_runner=0.5) == pytest.approx(1.25 / 2.50, rel=1e-6)  # 0.500
+    assert M.two_tranche_breakeven_hurdle(0.40, q_runner=0.5) == pytest.approx(1.40 / 2.50, rel=1e-6)  # 0.560
+
+    # q = 0.0 (runner never hits +3R, always breakeven)
+    assert M.two_tranche_breakeven_hurdle(0.10, q_runner=0.0) == pytest.approx(1.10 / 1.75, rel=1e-4)  # 0.6286
+    assert M.two_tranche_breakeven_hurdle(0.25, q_runner=0.0) == pytest.approx(1.25 / 1.75, rel=1e-4)  # 0.7143
+
+    # q = 1.0 (runner always hits +3R)
+    assert M.two_tranche_breakeven_hurdle(0.10, q_runner=1.0) == pytest.approx(1.10 / 3.25, rel=1e-4)  # 0.3385
+
+
+def test_slot_cap_binding_threshold_and_friction_scaling():
+    # Rs 1500 / Rs 58,333.33 = 2.5714%
+    s_star = M.slot_cap_binding_stop(1500.0, 58333.33)
+    assert s_star == pytest.approx(0.025714, rel=1e-4)
+
+    # At 0.5% stop: 1R = 58,333.33 * 0.005 = Rs 291.67
+    # MIS (Rs 61.86): 61.86 / 291.67 = 0.212R
+    c_mis_05 = M.friction_in_r(0.005, notional_rs=58333.33, friction_rs=61.86)
+    assert c_mis_05 == pytest.approx(0.212, abs=0.005)
+
+    # CNC (Rs 144.40): 144.40 / 291.67 = 0.495R
+    c_cnc_05 = M.friction_in_r(0.005, notional_rs=58333.33, friction_rs=144.40)
+    assert c_cnc_05 == pytest.approx(0.495, abs=0.005)
+
+    # At 1.0% stop: 1R = 58,333.33 * 0.01 = Rs 583.33
+    c_mis_10 = M.friction_in_r(0.010, notional_rs=58333.33, friction_rs=61.86)
+    assert c_mis_10 == pytest.approx(0.106, abs=0.005)
+
+    # Beyond binding stop (e.g. 3.0% stop): 1R is capped at Rs 1500
+    c_mis_30 = M.friction_in_r(0.030, notional_rs=58333.33, friction_rs=61.86, risk_budget_rs=1500.0)
+    assert c_mis_30 == pytest.approx(61.86 / 1500.0, rel=1e-5)
+

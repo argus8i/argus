@@ -208,6 +208,18 @@ def test_default_adapters_are_orb_active_and_rest_shadow():
                                                   "TRAPDOOR": True, "LAST_LIGHT": True, "RECOIL": True, "COMPASS": True}
 
 
+def test_incubated_slate_adapters_are_all_shadow():
+    from research.backtest.strategies import incubated_slate_adapters
+    ads = incubated_slate_adapters()
+    assert {a.name: a.is_shadow for a in ads} == {
+        "PEAD_DRIFT": True,
+        "SWEEP_RECLAIM": True,
+        "LATE_MOMENTUM": True,
+        "CAS_REVERSAL": True,
+    }
+
+
+
 # ---------------------------------------------------------------- tear sheet & study
 def test_tear_sheet_is_self_contained(tmp_path):
     days = [date(2026, 9, d) for d in range(1, 11)]

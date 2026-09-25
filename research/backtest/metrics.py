@@ -237,3 +237,59 @@ def evaluate_gate(trades: Sequence[Mapping[str, object]], sessions_observed: int
     return {"passed": not reasons, "reasons": reasons, "sessions_observed": sessions_observed,
             "admissible_executions": len(good), "e3_only_executions": len(e3), "total_trades": len(trades),
             "t_stat": t_stat, "mean_net_r": float(np.mean([float(t["net_r"]) for t in good])) if good else math.nan}
+
+
+def two_tranche_breakeven_hurdle(
+    c_friction_r: float,
+    q_runner: float = 0.5,
+    t1_r: float = 1.5,
+    t2_r: float = 3.0,
+) -> float:
+    """
+    Closed-form breakeven win rate hurdle for a 2-tranche bracket:
+        p* = (1 + c) / (1 + 0.5 * T1_R + 0.5 * T2_R * q)
+    For T1 = 1.5R, T2 = 3.0R:
+        p* = (1 + c) / (1.75 + 1.5 * q)
+    Under driftless diffusion (random walk):
+        P(T1 before -1R) = 1 / (1 + 1.5) = 40.0%
+        P(runner reaches +3R before breakeven | T1 hit) = 50.0% (q = 0.5).
+    """
+    denominator = 1.0 + 0.5 * t1_r + 0.5 * t2_r * q_runner
+    if denominator <= 0:
+        return math.nan
+    return float((1.0 + c_friction_r) / denominator)
+
+
+def slot_cap_binding_stop(
+    risk_budget_rs: float = 1500.0,
+    slot_cap_rs: float = 58333.33,
+) -> float:
+    """
+    Calculates the exact stop percentage threshold below which the slot notional cap binds
+    before the rupee risk budget binds:
+        S* = risk_budget_rs / slot_cap_rs = 1500 / 58333.33 = 2.5714%
+    For any stop tighter than S*, 1R < risk_budget_rs.
+    """
+    if slot_cap_rs <= 0:
+        return math.nan
+    return float(risk_budget_rs / slot_cap_rs)
+
+
+def friction_in_r(
+    stop_pct: float,
+    notional_rs: float = 58333.33,
+    friction_rs: float = 61.86,
+    risk_budget_rs: float = 1500.0,
+) -> float:
+    """
+    Calculates round-trip friction expressed as a fraction of 1R:
+        1R = min(risk_budget_rs, notional_rs * stop_pct)
+        c = friction_rs / 1R
+    """
+    if stop_pct <= 0 or notional_rs <= 0:
+        return math.nan
+    one_r = min(risk_budget_rs, notional_rs * stop_pct)
+    if one_r <= 0:
+        return math.nan
+    return float(friction_rs / one_r)
+
