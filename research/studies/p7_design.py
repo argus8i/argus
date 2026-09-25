@@ -143,6 +143,16 @@ def _git_commit() -> str:
         return "unknown"
 
 
+def _git_dirty_research() -> List[str]:
+    """Uncommitted changes under research/ (the code a run imports)."""
+    try:
+        out = subprocess.run(["git", "status", "--porcelain", "--", "research"], cwd=paths.repo_root(),
+                             capture_output=True, text=True, timeout=20).stdout
+        return [ln for ln in out.splitlines() if ln.strip()]
+    except (OSError, subprocess.SubprocessError):
+        return ["unknown"]
+
+
 def _sha256_file(p: Path) -> str:
     return hashlib.sha256(Path(p).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
@@ -153,7 +163,7 @@ def manifest(task: str, spec_path: Path, extra: Mapping[str, Any], started: date
 
     hist = paths.history_dir()
     data_manifest = hist / "manifests" / "upstox_v2.json"
-    return {"task": task, "git_commit": _git_commit(), "prereg": str(spec_path),
+    return {"task": task, "git_commit_at_end": _git_commit(), "prereg": str(spec_path),
             "prereg_sha256_lf": _sha256_file(spec_path),
             "data_manifest": str(data_manifest),
             "data_manifest_sha256": _sha256_file(data_manifest) if data_manifest.exists() else None,
@@ -402,6 +412,8 @@ def main(argv: Optional[List[str]] = None) -> int:
               "(python -m research.data.snapshot), or pass --allow-live-history for a trial run.")
         return 2
     universe_sha_start = _sha256_file(paths.reference_dir() / "universe_daily.parquet")
+    # the code a run imports is the code at its start: record it now, not when the manifest is written
+    code_at_start = {"git_commit_at_start": _git_commit(), "git_dirty_research_at_start": _git_dirty_research()}
     started = datetime.now(IST)
     out_dir = paths.ensure(paths.outputs_dir() / "p7" / f"{args.task}_{started:%Y%m%d_%H%M%S}")
     from research.studies import prereg_io
@@ -436,7 +448,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                                                                 "history_inputs": inputs,
                                                                 "history_inputs_after_run": snapshot.describe(),
                                                                 "universe_table_sha256_at_start":
-                                                                    universe_sha_start}, started),
+                                                                    universe_sha_start, **code_at_start},
+                                                      started),
                                                       indent=1, default=str), encoding="utf-8")
     brief = {k: v for k, v in res.items() if k not in ("daily_cf_r", "production_manifest")}
     print(json.dumps(brief, indent=1, default=str))
