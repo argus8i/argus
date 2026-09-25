@@ -1,0 +1,20 @@
+[
+ {
+  "symbol": "ENGINERSIN",
+  "series": "EQ",
+  "exDate": "24-Sep-2026",
+  "recDate": "24-Sep-2026",
+  "caBroadcastDate": null,
+  "subject": "Dividend - Rs 2.50 Per Share",
+  "comp": "Engineers India Limited"
+ },
+ {
+  "symbol": "ARFIN",
+  "series": "EQ",
+  "exDate": "24-Sep-2026",
+  "recDate": "24-Sep-2026",
+  "caBroadcastDate": null,
+  "subject": "Interim Dividend - Re 0.12 Per Share",
+  "comp": "Arfin India Limited"
+ }
+]

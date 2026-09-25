@@ -1,0 +1,56 @@
+[
+ {
+  "symbol": "MCL",
+  "an_dt": "24-Sep-2026 23:58:29",
+  "exchdisstime": "24-Sep-2026 23:58:30",
+  "sort_date": "2026-09-24 23:58:29",
+  "seq_id": "106792545",
+  "desc": "Updates",
+  "sm_name": "M TEK COPPER LIMITED"
+ },
+ {
+  "symbol": "MCL",
+  "an_dt": "24-Sep-2026 23:57:01",
+  "exchdisstime": "24-Sep-2026 23:57:03",
+  "sort_date": "2026-09-24 23:57:01",
+  "seq_id": "106792544",
+  "desc": "Updates",
+  "sm_name": "M TEK COPPER LIMITED"
+ },
+ {
+  "symbol": "XTRANET",
+  "an_dt": "24-Sep-2026 23:29:44",
+  "exchdisstime": "24-Sep-2026 23:29:45",
+  "sort_date": "2026-09-24 23:29:44",
+  "seq_id": "106792520",
+  "desc": "Analysts/Institutional Investor Meet/Con. Call Updates",
+  "sm_name": "Xtranet Technologies Limited"
+ },
+ {
+  "symbol": "DPABHUSHAN",
+  "an_dt": "24-Sep-2026 23:25:31",
+  "exchdisstime": "24-Sep-2026 23:25:32",
+  "sort_date": "2026-09-24 23:25:31",
+  "seq_id": "106792476",
+  "desc": "Analysts/Institutional Investor Meet/Con. Call Updates",
+  "sm_name": "D. P. Abhushan Limited"
+ },
+ {
+  "symbol": "DPABHUSHAN",
+  "an_dt": "24-Sep-2026 23:23:11",
+  "exchdisstime": "24-Sep-2026 23:23:12",
+  "sort_date": "2026-09-24 23:23:11",
+  "seq_id": "106792475",
+  "desc": "General Updates",
+  "sm_name": "D. P. Abhushan Limited"
+ },
+ {
+  "symbol": "STEAMHOUSE",
+  "an_dt": "24-Sep-2026 23:17:37",
+  "exchdisstime": "24-Sep-2026 23:17:38",
+  "sort_date": "2026-09-24 23:17:37",
+  "seq_id": "106792472",
+  "desc": "Bagging/Receiving of orders/contracts",
+  "sm_name": "Steamhouse India Limited"
+ }
+]

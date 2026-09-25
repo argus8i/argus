@@ -5,8 +5,9 @@ Single place that resolves every research data path (plan P3.1). All writers in 
 research/features and research/studies use these functions; nothing hard-codes a path.
 
 Environment overrides:
-    TRACK2_HISTORY_DIR     parquet history root (default: <repo>/shared/track2_liquid/history)
-    TRACK2_MAIN_CHECKOUT   main checkout (credentials, shared inputs); default: this repo
+    TRACK2_HISTORY_DIR     parquet history root (default: <main checkout>/shared/track2_liquid/history)
+    TRACK2_MAIN_CHECKOUT   main checkout (credentials, shared inputs); default: this repo, or the main
+                           checkout when this repo is a git worktree
     TRACK2_OUTPUTS_DIR     generated research outputs (default: <repo>/research/outputs)
 
 Every default location is gitignored (plan rule 1.2.6: data is never committed).
@@ -28,13 +29,28 @@ def repo_root() -> Path:
     return REPO_ROOT
 
 
+def _detect_main_checkout(root: Path) -> Path:
+    """In a git worktree, <root>/.git is a file 'gitdir: <main>/.git/worktrees/<name>'; return <main>.
+    In the main checkout (or without git) return root itself."""
+    marker = root / ".git"
+    if marker.is_file():
+        text = marker.read_text(encoding="utf-8", errors="replace").strip()
+        if text.startswith("gitdir:"):
+            gitdir = Path(text[len("gitdir:"):].strip())
+            if gitdir.parent.name == "worktrees" and gitdir.parent.parent.name == ".git":
+                return gitdir.parent.parent.parent
+    return root
+
+
 def main_checkout() -> Path:
     """The main checkout. In a git worktree the shared inputs and credentials live there."""
-    return _env_path("TRACK2_MAIN_CHECKOUT", REPO_ROOT)
+    return _env_path("TRACK2_MAIN_CHECKOUT", _detect_main_checkout(REPO_ROOT))
 
 
 def history_dir() -> Path:
-    return _env_path("TRACK2_HISTORY_DIR", REPO_ROOT / "shared" / "track2_liquid" / "history")
+    """Plan rule 1.2.6: default <main checkout>/shared/track2_liquid/history, so every worktree shares one
+    (gitignored) history."""
+    return _env_path("TRACK2_HISTORY_DIR", main_checkout() / "shared" / "track2_liquid" / "history")
 
 
 def bars_15m_dir() -> Path:

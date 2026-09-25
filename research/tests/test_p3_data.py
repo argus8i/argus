@@ -339,3 +339,22 @@ def test_cross_source_passes_on_identical_data_and_flags_offsets_and_prices():
     assert not res["passed"] and res["price_mismatch_bars"]["close"] == 24
     assert compare(_store_from(days, px=0.01), _store_from(days))["passed"], "one tick is inside tolerance"
     assert compare(_store_from(days, vol_mult=1.02), _store_from(days))["volume_mismatch_bars"] == 24
+
+
+# ------------------------------------------------------------------ paths (plan rule 1.2.6)
+def test_history_defaults_to_the_main_checkout_from_a_worktree(tmp_path, monkeypatch):
+    from research.data import paths
+
+    main = tmp_path / "main"
+    (main / ".git" / "worktrees" / "wt").mkdir(parents=True)
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    (wt / ".git").write_text(f"gitdir: {main / '.git' / 'worktrees' / 'wt'}\n", encoding="utf-8")
+    assert paths._detect_main_checkout(wt) == main
+    assert paths._detect_main_checkout(main) == main                   # .git is a directory there
+    monkeypatch.setattr(paths, "REPO_ROOT", wt)
+    monkeypatch.delenv("TRACK2_MAIN_CHECKOUT", raising=False)
+    monkeypatch.delenv("TRACK2_HISTORY_DIR", raising=False)
+    assert paths.history_dir() == main / "shared" / "track2_liquid" / "history"
+    monkeypatch.setenv("TRACK2_HISTORY_DIR", str(tmp_path / "h"))
+    assert paths.history_dir() == tmp_path / "h"

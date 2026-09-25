@@ -50,9 +50,11 @@ def load_fno_symbols(path: Path | str) -> List[str]:
 
 
 def eligibility(daily: Sequence[Tuple[date, float, int]], sessions: Iterable[date], member: bool,
-                banned: Optional[Set[date]] = None, surveillance: Optional[Set[date]] = None
-                ) -> List[Dict[str, object]]:
-    """daily: (day, close, volume) sorted by day. Returns one row per session in `sessions`."""
+                banned: Optional[Set[date]] = None, surveillance: Optional[Set[date]] = None,
+                ban_known: Optional[Set[date]] = None) -> List[Dict[str, object]]:
+    """daily: (day, close, volume) sorted by day. Returns one row per session in `sessions`.
+    ban_known: sessions whose ban list was fetched. When a ban history is supplied with ban_known, a
+    session outside it is FO_BAN_UNKNOWN (ineligible): a missing ban file is never read as "no ban"."""
     days = [d for d, _, _ in daily]
     closes = np.array([c for _, c, _ in daily], dtype=float)
     vols = np.array([v for _, _, v in daily], dtype=float)
@@ -76,6 +78,8 @@ def eligibility(daily: Sequence[Tuple[date, float, int]], sessions: Iterable[dat
             reason = "INSUFFICIENT_HISTORY"
         elif dtv < DTV_MIN_RS:
             reason = "DTV20_BELOW_30CR"
+        elif banned is not None and ban_known is not None and d not in ban_known:
+            reason = "FO_BAN_UNKNOWN"
         elif banned is not None and d in banned:
             reason = "FO_BAN"
         elif surveillance is not None and d in surveillance:
@@ -121,7 +125,8 @@ class TableUniverse:
 
 
 def build(store, fno_symbols: Sequence[str], banned: Optional[Mapping[str, Set[date]]] = None,
-          surveillance: Optional[Mapping[str, Set[date]]] = None) -> Tuple[List[Dict[str, object]], List[str]]:
+          surveillance: Optional[Mapping[str, Set[date]]] = None,
+          ban_known: Optional[Set[date]] = None) -> Tuple[List[Dict[str, object]], List[str]]:
     flags = ["FNO_MEMBERSHIP_CURRENT_LIST", "MCAP_BAND_NOT_APPLIED"]
     if banned is None:
         flags.append("FO_BAN_HISTORY_MISSING")
@@ -134,8 +139,9 @@ def build(store, fno_symbols: Sequence[str], banned: Optional[Mapping[str, Set[d
             continue
         daily = [(d.day, d.close, d.volume) for d in store.daily(sym)]
         for r in eligibility(daily, store.sessions(sym), sym in members,
-                             (banned or {}).get(sym) if banned is not None else None,
-                             (surveillance or {}).get(sym) if surveillance is not None else None):
+                             (banned or {}).get(sym, set()) if banned is not None else None,
+                             (surveillance or {}).get(sym) if surveillance is not None else None,
+                             ban_known=ban_known):
             rows.append({"symbol": sym, **r})
     return rows, flags
 
@@ -151,7 +157,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     from research.data.store_parquet import ParquetCandleStore
 
     store = ParquetCandleStore(args.root)            # STRATEGY mode: holdout sessions stay hidden
-    rows, flags = build(store, load_fno_symbols(args.fno))
+    banned = known = None
+    if (paths.history_dir() / "events" / "fo_ban_days.parquet").exists():
+        from research.data.nse_events import load_fo_ban
+
+        banned, known = load_fo_ban()                # plan P3.4 archives; unknown days are FO_BAN_UNKNOWN
+    rows, flags = build(store, load_fno_symbols(args.fno), banned=banned, ban_known=known)
     out = paths.ensure(paths.reference_dir()) / "universe_daily.parquet"
     df = pd.DataFrame(rows)
     df["session"] = df["session"].astype(str)
