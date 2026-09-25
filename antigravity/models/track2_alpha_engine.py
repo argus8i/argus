@@ -356,10 +356,12 @@ class MultiTimeframeAlphaEngine:
                 "details": abs_info,
             }
         except Exception as exc:
+            # Rule 8 v2 Fail-Closed Invariant: error in depth evaluation must fail closed
             return {
                 "normalized_ofi": 0.0,
                 "absorption_ratio": 0.0,
-                "is_distribution_trap": False,
+                "is_distribution_trap": True,
+                "data_valid": False,
                 "error": str(exc),
             }
 
