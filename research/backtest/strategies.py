@@ -92,6 +92,10 @@ class SignalIntent:
     counterfactual_exit_reason: str = ""
     counterfactual_evidence_class: str = "E1_CF"
     counterfactual_fee_estimated: bool = False
+    # net = gross - fee - slip (signal_sim); kept so a study can say whether a loss is the signal or its cost
+    counterfactual_gross_r: Optional[float] = None
+    counterfactual_fee_r: Optional[float] = None
+    counterfactual_slip_r: Optional[float] = None
     qty_planned: int = 0
     trade_id: Optional[str] = None
 

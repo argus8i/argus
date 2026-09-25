@@ -231,9 +231,21 @@ def run_orbprod(limit_sessions: Optional[int] = None) -> Dict[str, Any]:
     for s in sig:
         by_day[s.signal_time.date().isoformat()] += s.counterfactual_net_r
     se = clustered_se(list(net), [s.signal_time.date() for s in sig]) if net.size > 1 else math.nan
+
+    def _mean(attr: str) -> Optional[float]:
+        v = np.array([getattr(s, attr) for s in sig if getattr(s, attr) is not None], dtype=float)
+        v = v[np.isfinite(v)]
+        return float(v.mean()) if v.size else None
+
+    table = [{"symbol": s.symbol, "signal_time": s.signal_time.isoformat(), "side": s.side,
+              "net_r": s.counterfactual_net_r, "gross_r": s.counterfactual_gross_r,
+              "fee_r": s.counterfactual_fee_r, "slip_r": s.counterfactual_slip_r,
+              "exit_reason": s.counterfactual_exit_reason, "disposition": s.disposition} for s in sig]
     return {"strategy": "ORB_PROD", "design_window": [start.isoformat(), end.isoformat()],
             "sessions_run": len(res.dates), "signals": int(net.size), "signal_days": len(by_day),
             "mean_net_r": float(net.mean()) if net.size else None,
+            "mean_gross_r": _mean("counterfactual_gross_r"), "mean_fee_r": _mean("counterfactual_fee_r"),
+            "mean_slip_r": _mean("counterfactual_slip_r"), "signals_table": table,
             "sd_net_r": float(net.std(ddof=1)) if net.size > 1 else None,
             "se_cluster_by_day": se if math.isfinite(se) else None,
             "t_cluster": float(net.mean() / se) if net.size > 1 and math.isfinite(se) and se > 0 else None,
@@ -273,7 +285,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         pd.DataFrame([{"symbol": s, "session": d.isoformat(), "max_abs_z": v} for (s, d), v in scan.items()]) \
             .to_parquet(out_dir / "scan_max.parquet", index=False)
     else:
+        import pandas as pd
+
         res = run_orbprod(args.limit_sessions)
+        pd.DataFrame(res.pop("signals_table")).to_parquet(out_dir / "signals.parquet", index=False)
     (out_dir / "result.json").write_text(json.dumps(res, indent=1, default=str), encoding="utf-8")
     (out_dir / "manifest.json").write_text(json.dumps(manifest(args.task, spec_path,
                                                                {"limit_sessions": args.limit_sessions,

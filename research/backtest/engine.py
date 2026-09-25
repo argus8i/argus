@@ -323,6 +323,8 @@ class BacktestEngine:
         intent.counterfactual_net_r = sim.net_r
         intent.counterfactual_exit_reason = sim.exit_reason or sim.disposition
         intent.counterfactual_fee_estimated = sim.fee_estimated
+        intent.counterfactual_gross_r, intent.counterfactual_fee_r, intent.counterfactual_slip_r = \
+            sim.gross_r, sim.fee_r, sim.slip_r
         intent.counterfactual_evidence_class = "E1_CF"
 
         sector = self.sectors.get(intent.symbol, "")
