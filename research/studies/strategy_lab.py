@@ -435,6 +435,38 @@ def c2_results_gap(snap: Path, P: Panel) -> tuple:
         {"C2_mis": tr, "C2_up5": tu}
 
 
+def c4_pead_board_meeting(snap: Path, P: Panel) -> tuple:
+    """C4 PEAD_BM: L3's drift with the result date taken from board-meeting intimations (which cover the holdout;
+    the announcements feed has a gap from 2024-11-14). M = the first session on or after a 'financial results'
+    board meeting; the result is public by the close of M+1 whether it came during M, after M's close or before
+    M+1's open. Signal: close(M+1) / close(M-1) - 1 minus NIFTY's >= +3%, and the larger of the M and M+1
+    volumes >= 2 x the 20-session average before M. Buy open M+2, exit close M+21 (20 sessions); diagnostics
+    hold 10. The meeting must have been intimated before the entry (always true: SEBI requires prior notice)."""
+    b = pd.read_parquet(snap / "events" / "board_meetings.parquet")
+    b = b[b.purpose.str.contains("financial result", case=False, na=False)]
+    b = b.drop_duplicates(["symbol", "meeting_date"])
+    va = P.vol_avg_prior(20)
+    rows = []
+    for sym, md in zip(b.symbol, b.meeting_date.astype(str)):
+        j = P.j.get(sym)
+        if j is None:
+            continue
+        m = bisect.bisect_left(P.days, md)
+        if m < 1 or m + 2 >= len(P.days):
+            continue
+        r2 = (P.C[m + 1, j] / P.C[m - 1, j] - 1) * 100 - (P.nC[m + 1] / P.nC[m - 1] - 1) * 100
+        v = np.nanmax([P.V[m, j], P.V[m + 1, j]])
+        if np.isfinite(r2) and r2 >= 3.0 and np.isfinite(va[m, j]) and v >= 2.0 * va[m, j]:
+            rows.append((sym, m + 1, m + 2))
+    out, trs = {"meetings": len(b), "signals": len(rows)}, {}
+    for hold, cl in ((20, "month"), (10, "week")):
+        ev = pd.DataFrame([(s, sg, e, e + hold - 1) for s, sg, e in rows], columns=["symbol", "signal", "entry", "exit"])
+        tr = P.trades(ev, cl)
+        out[f"C4_hold{hold}"] = stats(tr, CNC)
+        trs[f"C4_hold{hold}"] = tr
+    return out, trs
+
+
 def c3_high52(P: Panel) -> tuple:
     hi = pd.DataFrame(P.H).rolling(252, min_periods=252).max().to_numpy()
     with np.errstate(invalid="ignore", divide="ignore"):
@@ -677,7 +709,7 @@ def l7_gap_and_go(P: Panel, raw_root: Path) -> tuple:
 
 
 # --------------------------------------------------------------------------------------------------- main
-TESTS = ("L1", "L1D", "L2", "L3", "L5", "L6", "L7", "L8", "C1", "C2", "C3")
+TESTS = ("L1", "L1D", "L2", "L3", "L5", "L6", "L7", "L8", "C1", "C2", "C3", "C4")
 
 
 def run(snap: Path, tests: List[str], raw_root: Optional[Path]) -> tuple:
@@ -689,7 +721,7 @@ def run(snap: Path, tests: List[str], raw_root: Optional[Path]) -> tuple:
     fns = {"L1": lambda: l1_expiry(snap, P), "L1D": lambda: l1_diagnostics(snap, P),
            "L2": lambda: l2_ban_exit(snap, P), "L3": lambda: l3_pead(snap, P),
            "L5": lambda: l5_totm(P), "L6": lambda: l6_xsec(P), "L8": lambda: l8_capitulation(P),
-           "C1": lambda: c1_ea_premium(snap, P), "C2": lambda: c2_results_gap(snap, P), "C3": lambda: c3_high52(P),
+           "C1": lambda: c1_ea_premium(snap, P), "C2": lambda: c2_results_gap(snap, P), "C3": lambda: c3_high52(P), "C4": lambda: c4_pead_board_meeting(snap, P),
            "L7": lambda: l7_gap_and_go(P, raw_root)}
     for t in tests:
         out, tr = fns[t]()

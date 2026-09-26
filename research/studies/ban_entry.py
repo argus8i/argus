@@ -468,10 +468,20 @@ def _main_minutes(args: argparse.Namespace) -> int:
     if model not in MINUTE_ENTRY_MODELS:
         print(f"REFUSED: entry model {model!r} not in {MINUTE_ENTRY_MODELS}")
         return 2
+    from research.studies import prereg_io
+
     snap = Path(args.snapshot)
+    pin = prereg_io.load(prereg_io.PREREG_DIR / "ban_entry_short_v1.yaml")["data"]["snapshot"]
+    if snap.name != pin["name"]:
+        print(f"REFUSED: the design reads the pinned snapshot {pin['name']}, not {snap.name}")
+        return 2
     raw = Path(args.raw_upstox) if args.raw_upstox else \
         paths.main_checkout() / "shared" / "track2_liquid" / "history" / "raw" / "upstox"
-    vm = VerifiedMinutes.sealed(snap, raw)
+    try:
+        vm = VerifiedMinutes.sealed(snap, raw, expected_content_sha256=pin["content_sha256"])
+    except MinuteDataRefused as exc:
+        print(f"REFUSED: {exc}")
+        return 2
     counts: Dict[str, int] = {}
     ev = ban_entries(snap, args.start, args.end, counts=counts)
     pc = daily_prev_close(snap, sorted(set(ev.symbol)))

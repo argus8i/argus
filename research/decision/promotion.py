@@ -140,6 +140,28 @@ def _clean(x: Any) -> Any:
 
 
 # ------------------------------------------------------------------------------------------ transitions
+def register_candidate(strategy_id: str, prereg_yaml: Path | str, notes: str, *,
+                       register_path: Path = REGISTER_PATH, records_dir: Path = RECORDS_DIR,
+                       now: Optional[datetime] = None) -> Dict[str, Any]:
+    """A new strategy enters the register as UNVERIFIED (the only way in). Refused if the id already exists (a
+    new version takes a new id) or if the pre-registration does not load or names a different id."""
+    now = now or datetime.now(IST)
+    reg = load_register(register_path)
+    if strategy_id in reg["strategies"]:
+        raise TransitionError(f"{strategy_id} is already in the register ({reg['strategies'][strategy_id]['status']})")
+    spec = prereg_io.load(prereg_yaml)
+    if not str(spec.get("id", "")).startswith(strategy_id):
+        raise TransitionError(f"{prereg_yaml}: pre-registration id {spec.get('id')!r} does not name {strategy_id}")
+    reg["strategies"][strategy_id] = {"status": UNVERIFIED, "evidence": "E1_CF_DESIGN", "notes": notes,
+                                      "prereg": str(Path(prereg_yaml).as_posix())}
+    rec = {"strategy_id": strategy_id, "at": now.isoformat(timespec="seconds"), "action": "REGISTER_CANDIDATE",
+           "from": None, "to": UNVERIFIED, "reasons": [notes], "inputs": {"prereg": str(prereg_yaml)},
+           "evidence": "design-window evidence only"}
+    _write_register(reg, register_path, now, f"register {strategy_id}")
+    rec["record_file"] = str(_write_record(rec, records_dir))
+    return rec
+
+
 def apply_holdout(strategy_id: str, record: Mapping[str, Any], prereg_yaml: Path | str, *,
                   register_path: Path = REGISTER_PATH, records_dir: Path = RECORDS_DIR,
                   now: Optional[datetime] = None) -> Dict[str, Any]:

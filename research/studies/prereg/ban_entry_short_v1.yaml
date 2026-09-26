@@ -33,9 +33,10 @@ primary_test:
   also_require: mean_net_r > 0
   averaged_dispositions: [FILLED, PARTIAL]
   weighting: equal weight per signal; R on the filled quantity
-  undefined_se: FAIL (a NaN or zero standard error, or fewer than 2 averaged signals, fails the test)
+  undefined_se: FAIL (a NaN or zero standard error, or fewer than 2 distinct clusters (trading sessions), fails the test)
   minimum_events: none
   substitution: none (no other entry model, stop or window may replace the primary if data or broker checks fail)
+pass_rule: primary_test AND slippage_2_ticks mean_net_r > 0
 secondary_tests:
   - {name: slippage_2_ticks, require: mean_net_r > 0}
   - {name: stop_2pct, require: report_only}

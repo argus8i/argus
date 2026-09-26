@@ -36,18 +36,24 @@ primary_test:
   se: CR1 (research/decision/stats.py clustered_se)
   threshold: 2.0
   also_require: mean_net_r > 0
-  second_gate: drift_alpha_net > 0 (beta-adjusted open E+1 to close E+5 return minus 0.28%, point estimate)
+  second_gate: drift_alpha_net > 0 (beta-adjusted open E+1 to close E+5 return minus 0.28%, point estimate; a missing or non-finite value FAILS)
+  beta: >
+    per stock, the OLS slope of daily close-to-close returns on NIFTY 50's over the trailing 120 sessions ending
+    at E (at least 60 observations), clipped to [0.3, 2.5]; where it cannot be computed, beta = 1.0 (the
+    market-adjusted return). research/studies/strategy_lab.py Panel.beta.
   averaged_dispositions: [FILLED]
   weighting: equal weight per signal
-  undefined_se: FAIL (a NaN or zero standard error, or fewer than 2 signals, fails the test)
+  undefined_se: FAIL (a NaN or zero standard error, or fewer than 2 distinct clusters (expiries), fails the test)
   minimum_events: none
   substitution: none
+pass_rule: primary_test AND second_gate AND slippage_2_ticks mean_net_r > 0
 secondary_tests:
   - {name: slippage_2_ticks, require: mean_net_r > 0}
   - {name: capacity_3_most_oversold, require: report_only}   # the 3 lowest 20-session returns per expiry (3 slots)
   - {name: stop_5pct_no_target, require: report_only}
   - {name: by_year, require: report_only}
   - {name: expiry_weekday_change, require: report_only}      # expiries before and after NSE moved stock F&O expiry off Thursday
+  - {name: per_expiry_and_without_best_3, require: report_only}   # ~21 holdout expiries: small-cluster inference (Codex)
 data:
   bars: {interval: daily, source: upstox_v2_daily (split/bonus back-adjusted), timestamps: session}
   expiry_sessions: point-in-time F&O table (reference/fno_point_in_time_2022_2026.parquet); a session is a monthly expiry when it is the nearest futures expiry of more than half the F&O stocks trading futures that session
@@ -75,6 +81,8 @@ costs: {fees: DhanFeeEngine_CNC every leg, slippage_ticks_per_side: 1, sensitivi
 sizing: {risk_budget_rs: 1500, slot_cap_rs: 38000.00, slot_cap_price: worst_admissible_entry, estimand: unconstrained_per_signal}
 known_limitations:
   - daily bars only; a stop touched and recovered within a session is filled at the stop (no intraday path)
+  - target fill is a daily-bar approximation - a session high at or above the target fills the whole half-position at the target (or at the open when it gaps above); no volume participation check (Rs 38,000 slots in F&O stocks)
+  - about 21 holdout expiries - a small-cluster CR1 result is holdout evidence, not production certainty (Codex)
   - selling on E+2 or later is a sale of shares bought T+1 (settlement credit timing is broker-dependent)
   - the long leg carries market exposure; the second gate checks that the design effect is not beta
 deployability_not_part_of_the_test:
