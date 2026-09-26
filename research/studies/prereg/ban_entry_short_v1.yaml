@@ -4,19 +4,20 @@
 id: BAN_ENTRY_SHORT_v1
 status: DRAFT
 hypothesis: >
-  On the first session of an F&O-ban spell, an intraday (MIS) short entered at the 09:15 open and covered at the
-  15:05 policy exit earns a positive mean net R (unconstrained per-signal simulation, identical fill rules for all
+  On the first session of an F&O-ban spell, an intraday (MIS) short entered at the 09:15-09:20 VWAP (a fill a
+  trader without an auction order can get) and covered at the 15:05 policy exit earns a positive mean net R (unconstrained per-signal simulation, identical fill rules for all
   signals, 1-tick slippage per side, DhanFeeEngine MIS fees, r_basis stop_limit) on the holdout.
 rationale: >
   MWPL above 95% puts the stock in the ban. No new F&O positions are allowed until MWPL falls below 80%, so
   speculative long open interest can only be unwound. The ban list for day D is published the evening before,
   so the decision needs no information from day D.
-design_evidence: {trials: [T0062, T0063, T0076, T0077], scan_entry_open_close_pct: -0.88, scan_t: -6.52, sim_sl2_net_r: 0.2963, sim_sl2_t: 6.65, sim_sl3_net_r: 0.2069, sim_sl3_t: 6.24}
+design_evidence: {trials: [T0062, T0063, T0076, T0077, T0078, T0079, T0080, T0081], scan_entry_open_close_pct: -0.88, scan_t: -6.52, open_sl2_net_r: 0.2963, open_sl2_t: 6.65, vwap5_sl2_net_r: 0.1407, vwap5_sl2_t: 3.59, vwap5_sl3_net_r: 0.1169, vwap5_sl3_t: 3.91, first_minute_low_sl2_net_r: 0.0045, first_minute_low_sl2_t: 0.11}
 primary_test: {statistic: day_clustered_t, threshold: 2.0, also_require: mean_net_r > 0}
 secondary_tests:
   - {name: slippage_2_ticks, require: mean_net_r > 0}
-  - {name: stop_3pct, require: report_only}
-  - {name: entry_0930_bar_close, require: report_only}
+  - {name: stop_2pct, require: report_only}
+  - {name: entry_auction_open, require: report_only}          # upside if a pre-open (09:00-09:08) order fills at the auction price
+  - {name: entry_first_minute_low, require: report_only}      # stress: the worst price a short could get in the first minute
   - {name: by_year, require: report_only}
 data:
   bars: {interval_min: 15, source: upstox_v2_1minute_resampled, timestamps: bar_start_IST}
@@ -31,8 +32,8 @@ universe:
 trade:
   side: SELL
   product: MIS
-  entry: {rule: session_open_0915, reference: 0915_open, slippage_ticks: 1, clamp_bps_adverse: 10}
-  stop: {sl_trigger_pct_above_entry: 2.0, sl_limit_offset_pct: 0.5}     # chosen from {2%, 3%} by the highest day-clustered t on design
+  entry: {rule: vwap_0915_0920, source: upstox_1minute_typical_price_x_volume, slippage_ticks: 1}   # Codex 26 Sep: no exact-open fills
+  stop: {sl_trigger_pct_above_entry: 3.0, sl_limit_offset_pct: 0.5}     # from {2%, 3%} by the highest day-clustered t under the primary entry (3.91 vs 3.59)
   targets: []
   exit: "15:05 policy exit (SessionPolicy)"
 engine: {r_basis: stop_limit, allow_shorts: true}
@@ -40,5 +41,5 @@ costs: {fees: DhanFeeEngine_MIS, slippage_ticks_per_side: 1, sensitivity_ticks: 
 sizing: {risk_budget_rs: 1500, max_slots: 3, slot_cap_rs: 38000.00, aggregate_exposure_cap_rs: 114000.00, slot_cap_price: worst_admissible_entry}
 open_questions_before_live:
   - broker permits MIS (intraday) SHORT in a stock that is in the F&O ban (cash segment); verify with Dhan
-  - a fill at the 09:15 open is achievable (pre-open order entry 09:00-09:08, or the first continuous prints)
+  - most of the design edge sits in the first minutes (open +0.30R, 5-min VWAP +0.14R, first-minute low +0.00R), so a pre-open auction order is the difference
 trials_registry: research/evidence/trials_registry.csv
