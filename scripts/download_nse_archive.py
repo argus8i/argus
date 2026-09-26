@@ -50,6 +50,7 @@ RETRY_BACKOFF_SECONDS = 30.0
 
 # Addition C.1: Known weekend special sessions on NSE (e.g. Budget Saturdays, Diwali Muhurat)
 KNOWN_WEEKEND_SESSIONS = [
+    "2005-06-04",  # Saturday - Special Live Trading (Disaster Recovery backup test)
     "2006-10-21",  # Saturday - Diwali Muhurat
     "2013-11-03",  # Sunday - Diwali Muhurat
     "2014-02-22",  # Saturday - Special Live Trading
