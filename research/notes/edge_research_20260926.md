@@ -100,6 +100,14 @@ Setup:
 | worst first-minute price | 141 | −0.178 | −2.43 | −233 |
 
 - **The edge is gone.** Gross R before costs is +0.017, against +0.155 on design data. The first-day fall that paid for the trade in 2022–24 did not happen in Oct 2024 – Jul 2026, even at the auction price.
+- **Not a simulator artefact** (post-verdict diagnostic on the plain daily bars):
+
+  | Window | First-ban-day open → close, market-adjusted | t |
+  |---|---|---|
+  | 2022–24 | −0.82% | −7.1 |
+  | Oct 2024 – Jul 2026 | −0.04% | −0.2 |
+
+  The effect itself disappeared.
 - **Fewer bans.** There were 141 events in 22 months, against 511 in 33 months. That is consistent with the 2025 change to how the ban is computed (future-equivalent OI). No regime split was declared, so this stays an observation, not an excuse.
 
 ### EXPIRY_RELIEF_LONG v1: REJECTED
