@@ -49,3 +49,10 @@
 | 2026-09-26 | P7 | Other production strategies on design | KILLED_ON_DESIGN x5 | (final) | COMPASS, LAST_LIGHT, TRAPDOOR, VOL_SQUEEZE, RECOIL: t -6.3 to -15.9 (T0044-T0048) |
 | 2026-09-26 | P8 | ShadowRunner, feeds, reconcile | done | 38990db, da82299, bed827b, 882e59a | 590 passed, 6 xfailed; p8_report.md |
 | 2026-09-26 | P9 | Production patch spec, security and data findings, overnight summary | done | (final) | p9_report.md; Kite CDP cookie bridge flagged; Upstox history is split/bonus back-adjusted |
+| 2026-09-26 | EDGE | Exploratory scan + strategy lab (Antigravity's 8-strategy blueprint, Codex/Claude ideas) | done | 17ffa82 | T0056-T0106, T0118-T0119: EXPIRY_RELIEF reproduced (alpha +1.03% t 4.3); BAN_EXIT +2.00% was look-ahead; GAP_AND_GO false; BULK untestable (no data); others no edge |
+| 2026-09-26 | EDGE | BAN_ENTRY_SHORT v1 one-minute simulator (Codex 12 fixes, 13 tests first) | done | 90afd68 | design VWAP SL3 +0.118R t 3.86 (T0107-T0113) |
+| 2026-09-26 | EDGE | event_holdout.py runner + Codex pre-lock fixes (10) | done | db8620c | pinned snapshot, spec/runner consistency, markers, conjunctive gates; 626 passed |
+| 2026-09-26 | EDGE | Locks BAN_ENTRY_SHORT_v1, EXPIRY_RELIEF_LONG_v1 | done | 7a9f262, 415a2b4 | Yashu approval 12:39 IST (pasted); holdout = sealed p7_holdout_20260926 |
+| 2026-09-26 | EDGE | Holdout BAN_ENTRY_SHORT_v1 (once) | **REJECTED** | 43d66d2 | -0.018R t -0.27 (141 events); auction open -0.009R (T0120-T0124) |
+| 2026-09-26 | EDGE | Holdout EXPIRY_RELIEF_LONG_v1 (once) | **REJECTED** | 43d66d2 | +0.009R t 0.09; drift alpha +0.47% t 1.66 (gate passed); 3% stop hit 46% (T0125-T0128) |
+| 2026-09-26 | EDGE | PEAD_DRIFT_LONG v1 (BSE timestamps) | DRAFT | 6d581b1 | design +2.31%/trade t 2.02, alpha t 3.2, 2022 negative; lock needs Yashu's approval of the BSE source (T0129-T0130) |
