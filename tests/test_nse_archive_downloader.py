@@ -15,8 +15,9 @@ import io
 import json
 import os
 import tempfile
+import time
 import zipfile
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -242,6 +243,7 @@ def test_manifest_schema_and_user_agent(temp_archive_dir):
         "bytes",
         "sha256",
         "saved_path",
+        "requested_at",
         "fetched_at",
         "code_commit",
         "requests_today",
@@ -376,4 +378,34 @@ def test_forward_download_interleaved_chronological(temp_archive_dir):
         ("2005-01-04", "mto"),
     ]
     assert called_sequence == expected
+
+
+def test_requested_at_field_and_pacing_gap(temp_archive_dir):
+    """Verifies requested_at is populated and monotonic pacing ensures >= min_interval between requests."""
+    downloader = NseArchiveDownloader(base_dir=temp_archive_dir, min_interval=0.08)
+    cm_bytes = _create_valid_cm_zip(date(2010, 1, 4))
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = cm_bytes
+
+    timestamps: List[datetime] = []
+    with patch.object(downloader.session, "get", return_value=mock_resp):
+        rec1 = downloader.download_file("cm_bhavcopy", date(2010, 1, 4))
+        rec2 = downloader.download_file("fo_bhavcopy", date(2010, 1, 4))
+
+    assert "requested_at" in rec1
+    assert "requested_at" in rec2
+    assert rec1["requested_at"] != ""
+    assert rec2["requested_at"] != ""
+
+    # Test monotonic pacing method directly
+    pacer = NseArchiveDownloader(base_dir=temp_archive_dir, min_interval=0.1)
+    t0 = time.monotonic()
+    req_time_1 = pacer._pace()
+    t1 = time.monotonic()
+    req_time_2 = pacer._pace()
+    t2 = time.monotonic()
+
+    assert t2 - t1 >= 0.1
+
 

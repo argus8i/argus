@@ -43,7 +43,7 @@ MONTH_ABBR = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OC
 
 ARCHIVE_BASE_URL = "https://nsearchives.nseindia.com"
 DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-MIN_INTERVAL_SECONDS = 4.0
+MIN_INTERVAL_SECONDS = 4.15
 ARCHIVE_DAILY_CAP = 500
 MAX_RETRIES = 2
 RETRY_BACKOFF_SECONDS = 30.0
@@ -235,8 +235,8 @@ class NseArchiveDownloader:
         today_iso = datetime.now(IST).date().isoformat()
         count = 0
         for rec in self.load_manifest_records():
-            fetched_at = rec.get("fetched_at", "")
-            if fetched_at.startswith(today_iso):
+            ts = rec.get("requested_at") or rec.get("fetched_at", "")
+            if ts.startswith(today_iso):
                 # Count all network attempts (including retries) made today per Rule 5
                 if rec.get("outcome") != "SKIPPED_ALREADY_SAVED":
                     count += int(rec.get("attempt", 1))
@@ -267,12 +267,20 @@ class NseArchiveDownloader:
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.write_bytes(data)
 
-    def _pace(self) -> None:
+    def _pace(self) -> str:
+        """
+        Enforces monotonic pacing >= min_interval between consecutive requests sent to the network.
+        Returns the ISO timestamp (+05:30) of the exact moment the request is sent (requested_at).
+        """
         if self._last_request_time is not None:
-            elapsed = time.monotonic() - self._last_request_time
-            if elapsed < self.min_interval:
-                time.sleep(self.min_interval - elapsed)
+            while True:
+                elapsed = time.monotonic() - self._last_request_time
+                if elapsed >= self.min_interval:
+                    break
+                time.sleep(max(0.02, self.min_interval - elapsed))
+        now_dt = datetime.now(IST)
         self._last_request_time = time.monotonic()
+        return now_dt.isoformat(timespec="seconds")
 
     def build_url_and_filename(self, dataset: str, trade_date: date) -> Tuple[str, str, str]:
         cfg = DATASETS[dataset]
@@ -338,6 +346,7 @@ class NseArchiveDownloader:
                     "bytes": len(file_bytes),
                     "sha256": current_sha256,
                     "saved_path": rel_saved_path,
+                    "requested_at": "",
                     "fetched_at": datetime.now(IST).isoformat(timespec="seconds"),
                     "code_commit": self.code_commit,
                     "requests_today": self.requests_today,
@@ -360,11 +369,12 @@ class NseArchiveDownloader:
         saved_path = ""
         saved_sha256 = ""
         saved_bytes = 0
+        requested_at = ""
 
         while attempt < (MAX_RETRIES + 1):
             attempt += 1
             self.requests_today += 1
-            self._pace()
+            requested_at = self._pace()
 
             try:
                 resp = self.session.get(url, timeout=30.0)
@@ -393,6 +403,7 @@ class NseArchiveDownloader:
                     "bytes": 0,
                     "sha256": "",
                     "saved_path": "",
+                    "requested_at": requested_at,
                     "fetched_at": datetime.now(IST).isoformat(timespec="seconds"),
                     "code_commit": self.code_commit,
                     "requests_today": self.requests_today,
@@ -414,6 +425,7 @@ class NseArchiveDownloader:
                     "bytes": 0,
                     "sha256": "",
                     "saved_path": "",
+                    "requested_at": requested_at,
                     "fetched_at": datetime.now(IST).isoformat(timespec="seconds"),
                     "code_commit": self.code_commit,
                     "requests_today": self.requests_today,
@@ -474,6 +486,7 @@ class NseArchiveDownloader:
             "bytes": saved_bytes,
             "sha256": saved_sha256,
             "saved_path": saved_path,
+            "requested_at": requested_at,
             "fetched_at": datetime.now(IST).isoformat(timespec="seconds"),
             "code_commit": self.code_commit,
             "requests_today": self.requests_today,
@@ -636,13 +649,14 @@ def run_forward_download(
     downloader: Optional[NseArchiveDownloader] = None,
     datasets: Sequence[str] = ("cm_bhavcopy", "fo_bhavcopy", "mto"),
     interval: float = MIN_INTERVAL_SECONDS,
+    daily_cap: int = ARCHIVE_DAILY_CAP,
 ) -> Dict[str, Any]:
     """
     Runs chronological forward downloading (A.1: 2005 first, 2021 last),
     interleaving CM, FO, MTO day-by-day (Part 2 Rule 73).
     """
     if downloader is None:
-        downloader = NseArchiveDownloader(min_interval=interval)
+        downloader = NseArchiveDownloader(min_interval=interval, daily_cap=daily_cap)
 
     cur = start_date
     trading_days = []
@@ -744,6 +758,7 @@ if __name__ == "__main__":
     ap.add_argument("--end-date", help="End date in YYYY-MM-DD format for forward download")
     ap.add_argument("--year", type=int, help="Download a specific year forward")
     ap.add_argument("--interval", type=float, default=MIN_INTERVAL_SECONDS, help="Interval between requests (>= 4.0s)")
+    ap.add_argument("--cap", type=int, default=ARCHIVE_DAILY_CAP, help="Daily request cap (default 500)")
     args = ap.parse_args()
 
     interval = max(MIN_INTERVAL_SECONDS, args.interval)
@@ -753,11 +768,11 @@ if __name__ == "__main__":
     elif args.start_date and args.end_date:
         s_date = date.fromisoformat(args.start_date)
         e_date = date.fromisoformat(args.end_date)
-        run_forward_download(start_date=s_date, end_date=e_date, interval=interval)
+        run_forward_download(start_date=s_date, end_date=e_date, interval=interval, daily_cap=args.cap)
     elif args.year:
         s_date = date(args.year, 1, 1)
         e_date = date(args.year, 12, 31)
-        run_forward_download(start_date=s_date, end_date=e_date, interval=interval)
+        run_forward_download(start_date=s_date, end_date=e_date, interval=interval, daily_cap=args.cap)
     else:
         print("Please specify --pilot to run the pilot, or --start-date and --end-date (or --year) for forward download.")
 
