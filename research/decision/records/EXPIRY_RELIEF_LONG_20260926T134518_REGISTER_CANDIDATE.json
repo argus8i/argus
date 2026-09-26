@@ -1,0 +1,14 @@
+{
+  "strategy_id": "EXPIRY_RELIEF_LONG",
+  "at": "2026-09-26T13:45:18+05:30",
+  "action": "REGISTER_CANDIDATE",
+  "from": null,
+  "to": "UNVERIFIED",
+  "reasons": [
+    "post-expiry rebound of 20-session losers, CNC 5 sessions (Antigravity idea); design +0.494R t 3.89"
+  ],
+  "inputs": {
+    "prereg": "C:\\Users\\yashw\\swing-trades-track2\\research\\studies\\prereg\\expiry_relief_long_v1.yaml"
+  },
+  "evidence": "design-window evidence only"
+}

@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "updated_by": "research/decision/promotion.py (KILLED_ON_DESIGN VOL_SQUEEZE)",
-  "updated_at": "2026-09-26T07:49:13+05:30",
+  "updated_by": "research/decision/promotion.py (holdout EXPIRY_RELIEF_LONG)",
+  "updated_at": "2026-09-26T13:45:18+05:30",
   "strategies": {
     "ORB_PROD": {
       "status": "KILLED_ON_DESIGN",
@@ -79,6 +79,20 @@
       "status": "UNVERIFIED",
       "evidence": "none",
       "notes": "CNC overnight; excluded from Track 2 (decision 8, 25 Sep)"
+    },
+    "BAN_ENTRY_SHORT": {
+      "status": "REJECTED",
+      "evidence": "E1_HOLDOUT",
+      "notes": "F&O-ban first-session MIS short (26 Sep edge research); design +0.118R t 3.86",
+      "prereg": "C:/Users/yashw/swing-trades-track2/research/studies/prereg/ban_entry_short_v1.yaml",
+      "prereg_sha256": "867e37e34d223837a97b99e1043b6bed7a31ef5227625ac804c7953ecf4a14a2"
+    },
+    "EXPIRY_RELIEF_LONG": {
+      "status": "REJECTED",
+      "evidence": "E1_HOLDOUT",
+      "notes": "post-expiry rebound of 20-session losers, CNC 5 sessions (Antigravity idea); design +0.494R t 3.89",
+      "prereg": "C:/Users/yashw/swing-trades-track2/research/studies/prereg/expiry_relief_long_v1.yaml",
+      "prereg_sha256": "cd142d009d613937f48c9177818f331e37e78c42522bf69daef87ef9c31e2055"
     }
   }
 }

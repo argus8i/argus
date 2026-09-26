@@ -79,6 +79,50 @@ The edge sits in the first minutes. The auction price captures most of it, and t
 - **The official open:** the Upstox daily open equals NSE's official open (the pre-open auction price) on 100% of same-scale days in 10 sampled stocks.
 - **The live universe table:** `reference/universe_daily.parquet` is a stale build (25 Sep 23:39, flag `FO_BAN_HISTORY_MISSING`). The ban-aware tables live inside the sealed snapshots. The shadow runner builds its own universe, so it is not affected.
 
-## Part B. Holdout (one run each, locked pre-registrations)
+## Part B. Holdout (one run each, locked pre-registrations): both REJECTED
 
-To be completed after the runs.
+Setup:
+- **Locks:** `ban_entry_short_v1.lock` (`867e37e3…`) and `expiry_relief_long_v1.lock` (`cd142d00…`), both at commit `7a9f262`, locked 13:43 IST.
+- **Code:** commit `415a2b4`, code identity `11f21947…`.
+- **Data:** the pinned sealed snapshot `p7_holdout_20260926` (`6040e0cf…`). Its 647 data files are byte-identical to the design snapshot's.
+- **Runner and review:** `research/studies/event_holdout.py`, reviewed by Codex twice before the lock (22 required changes in total, all closed).
+- **Evidence:** `research/evidence/holdout_*` and trials T0120–T0128.
+- **Register:** both strategies moved to REJECTED (records in `research/decision/records/`).
+
+### BAN_ENTRY_SHORT v1: REJECTED
+
+| Part | Events | Net R | t | ₹/trade |
+|---|---|---|---|---|
+| **primary** (VWAP proxy, SL 3%) | 141 | **−0.018** | **−0.27** | −21 |
+| slippage 2 ticks (gate) | 141 | −0.023 | −0.34 | −27 |
+| SL 2% | 141 | −0.017 | −0.19 | −14 |
+| auction open | 141 | −0.009 | −0.12 | −14 |
+| worst first-minute price | 141 | −0.178 | −2.43 | −233 |
+
+- **The edge is gone.** Gross R before costs is +0.017, against +0.155 on design data. The first-day fall that paid for the trade in 2022–24 did not happen in Oct 2024 – Jul 2026, even at the auction price.
+- **Fewer bans.** There were 141 events in 22 months, against 511 in 33 months. That is consistent with the 2025 change to how the ban is computed (future-equivalent OI). No regime split was declared, so this stays an observation, not an excuse.
+
+### EXPIRY_RELIEF_LONG v1: REJECTED
+
+| Part | Signals | Net R | t (by expiry) | ₹/trade |
+|---|---|---|---|---|
+| **primary** (SL 3%, half at 1.5R) | 1,154 on 20 expiries | **+0.009** | **0.09** | +7 |
+| slippage 2 ticks (gate) | 1,154 | +0.002 | 0.02 | 0 |
+| 3 most oversold per expiry | 60 | −0.024 | −0.11 | −34 |
+| SL 5%, no target (report only) | 1,152 | +0.161 | 1.53 | +230 |
+
+- **Second gate passed:** beta-adjusted 5-day drift alpha **+0.47% net of 0.28%, t 1.66**, against +1.03% (t 4.3) on design data.
+- **Primary failed:** +0.009R at t 0.09 does not meet t ≥ 2. The pass rule needs both gates, so the strategy is REJECTED.
+- **What happened:** the drift is still there but at half the size, and the **3% stop was hit on 46% of trades** (26% on design data) in the more volatile 2025. The rule chose a stop the new regime punished.
+- **Dispersion:** 11 of 20 expiries positive. Dropping the best 3 expiries leaves −0.07R.
+- **The 5% stop version** made +0.16R (t 1.5). It was report-only and cannot be promoted: choosing it now would be fitting to the holdout.
+- **Excluded expiry:** the 31 Oct 2024 expiry produced no signals. E+1 was the Diwali Muhurat special session, which is not an eligible universe session.
+
+### What this means
+
+1. **Nothing tested today is proven to make money after costs**: ten strategies, all rejected or killed. They are the 7 intraday strategies, RESID_REV, BAN_ENTRY_SHORT and EXPIRY_RELIEF_LONG. No capital, and no shadow trading of any of them as a validated strategy.
+2. **The design window was kinder than what followed.** Both event effects were strong in 2022–24 and weak or absent in Oct 2024 – Jul 2026. That period brought a market correction (Oct 2024 – Mar 2025) and several derivatives rule changes: SEBI's Nov 2024 F&O measures, the 2025 ban methodology and the expiry-day moves. Edges that live in F&O microstructure are exposed to exactly those changes.
+3. **The expiry-rebound drift is the only effect with some life left** (+0.47% alpha, t 1.7). The honest path is a **new version** with a wider stop, tested only on data that doesn't exist yet: prospective paper shadow. It cannot be validated with the data we have.
+4. **Results drift (PEAD, 20 days) is the next candidate with a real prior.** It is robust in global and Indian studies, and the design showed t 2.8. Its holdout needs results timestamps after Nov 2024, which requires one of two things:
+   - approving the BSE results-filings source Antigravity staged (it agrees with NSE on 96% of sessions); or
+   - a polite NSE announcements fetch of about 600 requests over 4 days.

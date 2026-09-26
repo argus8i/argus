@@ -1,0 +1,11 @@
+{
+ "lock": {
+  "id": "BAN_ENTRY_SHORT_v1",
+  "yaml_sha256": "867e37e34d223837a97b99e1043b6bed7a31ef5227625ac804c7953ecf4a14a2",
+  "commit": "7a9f262647fed5be32b80becff1a9f7e3b2e174b",
+  "locked_at": "2026-09-26T13:43:06+05:30"
+ },
+ "code_identity": "11f21947bad9e4dd26f7cff67b90903e17c64a68c88f03a1610c32b6b9f70d16",
+ "snapshot": "6040e0cf40909afefcf03da1fed00a10478ab98f0769ff07c95d08de9b9ece11",
+ "started_at": "2026-09-26T13:43:38+05:30"
+}
