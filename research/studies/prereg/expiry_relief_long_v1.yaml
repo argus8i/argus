@@ -3,7 +3,7 @@
 # Nothing here may change after LOCK. Holdout run and overnight CNC holds approved by Yashu (26 Sep, 12:39 IST).
 # Parsed by research/studies/prereg_io.py (strict YAML subset).
 id: EXPIRY_RELIEF_LONG_v1
-status: DRAFT
+status: LOCKED
 hypothesis: >
   F&O stocks that fell 5% or more over the 20 sessions into a monthly stock-futures expiry, bought at the next
   session's open (pre-open auction order, 1 tick worse) and held at most 5 sessions under a 3% stop with half

@@ -3,7 +3,7 @@
 # Nothing here may change after LOCK. The one holdout run was approved by Yashu (26 Sep, 12:39 IST).
 # Parsed by research/studies/prereg_io.py (strict YAML subset).
 id: BAN_ENTRY_SHORT_v1
-status: DRAFT
+status: LOCKED
 hypothesis: >
   On the first session of an F&O-ban spell, an intraday (MIS) short entered at 09:20 at the 09:15-09:19
   typical-price VWAP proxy and covered at the 15:05 minute's open earns a positive mean net R (unconstrained
