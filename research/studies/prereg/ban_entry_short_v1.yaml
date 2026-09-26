@@ -1,45 +1,91 @@
-# Pre-registration: BAN_ENTRY_SHORT v1. DRAFT, written 2026-09-26 by Claude from design-window evidence only.
-# Nothing here may change after LOCK. Locking and the one holdout run need Yashu's approval.
+# Pre-registration: BAN_ENTRY_SHORT v1. Written 2026-09-26 by Claude from design-window evidence only;
+# revised after Codex's red-team of the same day (12 required changes, all addressed; see codex_review below).
+# Nothing here may change after LOCK. The one holdout run was approved by Yashu (26 Sep, 12:39 IST).
 # Parsed by research/studies/prereg_io.py (strict YAML subset).
 id: BAN_ENTRY_SHORT_v1
 status: DRAFT
 hypothesis: >
-  On the first session of an F&O-ban spell, an intraday (MIS) short entered at the 09:15-09:20 VWAP (a fill a
-  trader without an auction order can get) and covered at the 15:05 policy exit earns a positive mean net R (unconstrained per-signal simulation, identical fill rules for all
-  signals, 1-tick slippage per side, DhanFeeEngine MIS fees, r_basis stop_limit) on the holdout.
+  On the first session of an F&O-ban spell, an intraday (MIS) short entered at 09:20 at the 09:15-09:19
+  typical-price VWAP proxy and covered at the 15:05 minute's open earns a positive mean net R (unconstrained
+  per-signal expectancy, each signal sized by Adjusted A1, one-minute simulation, 1 tick slippage per side,
+  DhanFeeEngine MIS fees on both legs, R to the SL-limit) on the holdout.
 rationale: >
-  MWPL above 95% puts the stock in the ban. No new F&O positions are allowed until MWPL falls below 80%, so
-  speculative long open interest can only be unwound. The ban list for day D is published the evening before,
-  so the decision needs no information from day D.
-design_evidence: {trials: [T0062, T0063, T0076, T0077, T0078, T0079, T0080, T0081], scan_entry_open_close_pct: -0.88, scan_t: -6.52, open_sl2_net_r: 0.2963, open_sl2_t: 6.65, vwap5_sl2_net_r: 0.1407, vwap5_sl2_t: 3.59, vwap5_sl3_net_r: 0.1169, vwap5_sl3_t: 3.91, first_minute_low_sl2_net_r: 0.0045, first_minute_low_sl2_t: 0.11}
-primary_test: {statistic: day_clustered_t, threshold: 2.0, also_require: mean_net_r > 0}
+  MWPL above 95% puts the stock in the ban: no participant may increase an open F&O position until MWPL falls
+  below 80%, so derivative positions can only be reduced. The design data show that the stock falls from the open
+  of the first ban session (market-adjusted open to close -0.88%, t -6.5; T0062-T0063). The list for session D is
+  published by NSE on the evening of D-1, so the decision needs no information from D before 09:20.
+design_evidence:
+  trials: [T0062, T0063, T0076, T0077, T0078, T0079, T0080, T0081, T0107, T0108, T0109, T0110, T0111, T0112, T0113]
+  minute_sim_vwap_sl3_net_r: 0.1181
+  minute_sim_vwap_sl3_t: 3.86
+  minute_sim_vwap_sl3_rs_per_trade: 157
+  minute_sim_vwap_sl2_net_r: 0.1616
+  minute_sim_auction_open_sl3_net_r: 0.1992
+  minute_sim_first_minute_low_sl3_net_r: 0.004
+  minute_sim_vwap_sl3_slip2_net_r: 0.1118
+  design_events: 511
+  by_year_vwap_sl3: {y2022: 0.0721, y2023: 0.106, y2024: 0.1503}
+primary_test:
+  statistic: t_cluster
+  cluster_unit: trading_session
+  se: CR1 (research/decision/stats.py clustered_se)
+  threshold: 2.0
+  also_require: mean_net_r > 0
+  averaged_dispositions: [FILLED, PARTIAL]
+  weighting: equal weight per signal; R on the filled quantity
+  undefined_se: FAIL (a NaN or zero standard error, or fewer than 2 averaged signals, fails the test)
+  minimum_events: none
+  substitution: none (no other entry model, stop or window may replace the primary if data or broker checks fail)
 secondary_tests:
   - {name: slippage_2_ticks, require: mean_net_r > 0}
   - {name: stop_2pct, require: report_only}
-  - {name: entry_auction_open, require: report_only}          # upside if a pre-open (09:00-09:08) order fills at the auction price
+  - {name: entry_auction_open, require: report_only}          # a pre-open (09:00-09:08) order filled at the auction price
   - {name: entry_first_minute_low, require: report_only}      # stress: the worst price a short could get in the first minute
   - {name: by_year, require: report_only}
+  - {name: portfolio_3_slots, require: report_only}           # at most 3 signals per session, highest DTV20 on D-1 first
+regime_split: none declared (SEBI's 2025 derivatives measures change ban frequency; only the by-year report is made)
 data:
-  bars: {interval_min: 15, source: upstox_v2_1minute_resampled, timestamps: bar_start_IST}
-  ban_lists: nsearchives fo_secban_DDMMYYYY.csv (research/data/nse_events.py; complete 2021-10-01..2026-09-25)
+  bars: {interval_min: 1, source: upstox_v2_1minute_raw, timestamps: minute_start_IST}
+  minute_files: >
+    raw Upstox 1-minute files named in the SEALED holdout snapshot's raw/upstox/manifest.jsonl; the snapshot is
+    verified first; every file's decompressed body must hash to the manifest's body_sha256 before it is parsed;
+    unsafe paths, conflicting or ambiguous records refuse; every verified file and hash is written to the run.
+  ban_lists: nsearchives fo_secban_DDMMYYYY.csv (research/data/nse_events.py; events/fo_ban.parquet; coverage events/fo_ban_days.parquet)
+  prev_close: snapshot daily bars (same vendor scale as the minute files)
   design: ["2022-01-03", "2024-09-30"]
-  holdout: ["2024-10-01", "2026-07-31"]      # never read for this rule; the design scan refuses end dates past 2024-09-30
+  holdout: ["2024-10-01", "2026-07-31"]      # never read for this rule; the design CLI refuses end dates past 2024-09-30
   excluded: {from: "2026-08-03", reason: "post-CAS regime; prospective shadow only"}
   snapshot: {name: p7_design_20260926, content_sha256: 72a444d7aec15d979b54a36e54afb8108df4b1cf1a0105ef76cb63a7c320059d}
+  holdout_snapshot: {name: p7_holdout_20260926, content_sha256: 6040e0cf40909afefcf03da1fed00a10478ab98f0769ff07c95d08de9b9ece11}
+  holdout_snapshot_note: >
+    identical to the design snapshot except reference/universe_daily (rebuilt with the holdout visible) and
+    CREATED.json; sealed 2026-09-26 03:48 IST, before this lock, and pinned here so the lock fixes the data read.
 universe:
-  event: first session of a ban spell (symbol not in the ban list of the previous session)
-  previous_session_eligible: true            # F&O member, prev close >= Rs 10, DTV20 >= Rs 30 Cr, not wrong-company
+  event: first session D of a ban spell (in the fo_secban list for D, not in the list for D-1)
+  coverage: D and D-1 must both have a ban list on disk; otherwise the event is dropped and counted (fail closed)
+  previous_session_eligible: true            # universe_daily ELIGIBLE on D-1
+  event_session_eligible: true               # universe_daily ELIGIBLE on D, or reason FO_BAN (the only D-day pass)
+  unenforced: no ASM/GSM history on disk (stated limitation)
 trade:
   side: SELL
   product: MIS
-  entry: {rule: vwap_0915_0920, source: upstox_1minute_typical_price_x_volume, slippage_ticks: 1}   # Codex 26 Sep: no exact-open fills
-  stop: {sl_trigger_pct_above_entry: 3.0, sl_limit_offset_pct: 0.5}     # from {2%, 3%} by the highest day-clustered t under the primary entry (3.91 vs 3.59)
+  entry: {rule: vwap_0915_0919, source: typical_price_vwap_proxy, release: "09:20", exposure_from: "09:20 minute", slippage_ticks: 1}
+  capacity: {participation_of_entry_window_volume: 0.10, below_plan: PARTIAL, below_one_share: UNFILLED_VOLUME}
+  stop: {type: SL-limit BUY, sl_trigger_pct_above_entry_ref: 3.0, sl_limit_offset_pct: 0.5}
+  stop_fills: >
+    a minute whose high reaches the trigger fills at max(trigger, minute open) + 1 tick, capped at the limit; a
+    minute opening above the limit leaves the order unfilled and the short is covered at the next minute's open
+    + 1 tick (STOP_LIMIT_GAP_MARKET); a trigger in a minute reaching prev_close x 1.095 (near the initial 10%
+    dynamic price band) fills at that minute's high + 1 tick (BAND_STRESS, a worst-case bound for a cover into
+    a runaway or no-offer market).
   targets: []
-  exit: "15:05 policy exit (SessionPolicy)"
-engine: {r_basis: stop_limit, allow_shorts: true}
-costs: {fees: DhanFeeEngine_MIS, slippage_ticks_per_side: 1, sensitivity_ticks: [2]}
-sizing: {risk_budget_rs: 1500, max_slots: 3, slot_cap_rs: 38000.00, aggregate_exposure_cap_rs: 114000.00, slot_cap_price: worst_admissible_entry}
-open_questions_before_live:
-  - broker permits MIS (intraday) SHORT in a stock that is in the F&O ban (cash segment); verify with Dhan
-  - most of the design edge sits in the first minutes (open +0.30R, 5-min VWAP +0.14R, first-minute low +0.00R), so a pre-open auction order is the difference
+  exit: "15:05 minute open + 1 tick (TIME_1505); if no 15:05 minute, the next minute's open; if none, the last close"
+  simulator: research/studies/ban_entry.py simulate_short_minutes (tests research/tests/test_ban_entry_minutes.py)
+costs: {fees: DhanFeeEngine_MIS both legs, slippage_ticks_per_side: 1, sensitivity_ticks: [2]}
+sizing: {risk_budget_rs: 1500, slot_cap_rs: 38000.00, slot_cap_price: worst_admissible_entry, estimand: unconstrained_per_signal}
+deployability_not_part_of_the_test:
+  - broker must permit an MIS short in the cash segment of a stock in the F&O ban (Dhan; historical permission cannot be reconstructed, so the holdout result is statistical)
+  - retail short sales are disclosed to the broker as short sales (SEBI short-selling framework); intraday only, never carried overnight
+  - live shadow must measure the real 09:20 fill against the VWAP proxy before any capital (AGENTS.md Rule 1)
+codex_review: NEXUS bus 2026-09-26; changes 1-12 addressed (D-day eligibility, coverage fail-closed, neutral rationale, 09:20 release and no pre-entry exposure, capacity, sealed-manifest hashes, true 15:05 exit, gap and band-stress fills, deployability stated, estimand unconstrained, no regime split, tightened primary)
 trials_registry: research/evidence/trials_registry.csv

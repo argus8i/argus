@@ -76,9 +76,15 @@ T_CANDIDATE, T_PROMISING = 3.0, 2.0
 class Panel:
     """Daily OHLCV of every stock on the NIFTY 50 calendar, truncated at `end` (the design end by default)."""
 
-    def __init__(self, snap: Path, end: str = DESIGN[1]) -> None:
+    def __init__(self, snap: Path, end: str = DESIGN[1], unlock_spec: Optional[Path] = None) -> None:
         if end > DESIGN[1]:
-            raise ValueError("design window only: the holdout is read once, after a locked pre-registration")
+            from research.studies import prereg_io
+
+            if unlock_spec is None or not prereg_io.verify_lock(unlock_spec).valid:
+                raise ValueError("design window only: the holdout is read once, after a locked pre-registration")
+            h1 = str(prereg_io.load(unlock_spec)["data"]["holdout"][1])
+            if end > h1:
+                raise ValueError(f"end {end} is past the locked holdout end {h1}")
         frames = [pd.read_parquet(f, columns=["symbol", "day", "open", "high", "low", "close", "volume"])
                   for f in sorted((snap / "daily").glob("*.parquet"))]
         p = pd.concat(frames)
