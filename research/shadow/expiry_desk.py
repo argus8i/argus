@@ -103,6 +103,14 @@ class ExpiryReliefV2(PaperStrategy):
             return day.weekday() < 5
         return is_monthly_expiry(md.fo(day), day)
 
+    def entry_ban(self, md: MarketFiles, entry: date) -> tuple:
+        """(ban set, assumptions). Where the source has ban lists, a missing one is None (the plan blocks). Before
+        ban lists existed on file (the 2005-2021 archive), no stock is excluded for a ban and the plan says so."""
+        ban = md.ban(entry)
+        if ban is None and not getattr(md, "ban_lists", True):
+            return set(), ["NO_BAN_LIST_ERA"]
+        return ban, []
+
     def build_plan(self, md: MarketFiles, expiry: date, entry: Optional[date]) -> Dict[str, Any]:
         from research.data import universe_build as ub
 
@@ -113,9 +121,10 @@ class ExpiryReliefV2(PaperStrategy):
         fo = md.fo(expiry)
         if not is_monthly_expiry(fo, expiry):
             return {**base, "status": "NOT_AN_EXPIRY", "reason": f"{expiry} is not a monthly stock-futures expiry"}
-        ban = md.ban(entry) if entry else None
+        ban, assumptions = self.entry_ban(md, entry) if entry else (None, [])
         if ban is None:
             return {**base, "status": "BLOCKED", "reason": f"no ban list for the entry session {entry} (fail closed)"}
+        base["assumptions"] = assumptions
         i = ss.index(expiry)
         if i < LOOKBACK - 1:
             return {**base, "status": "INSUFFICIENT_HISTORY", "reason": f"fewer than {LOOKBACK} sessions to {expiry}"}
@@ -130,7 +139,8 @@ class ExpiryReliefV2(PaperStrategy):
             frames.append(md.cm_eq(d).assign(_d=d))
             files[md.rel(md.cm_path(d))] = sha256_file(md.cm_path(d))
         files[md.rel(md.fo_path(expiry))] = sha256_file(md.fo_path(expiry))
-        files[md.rel(md.ban_path(entry))] = sha256_file(md.ban_path(entry))
+        if md.ban_path(entry).exists():
+            files[md.rel(md.ban_path(entry))] = sha256_file(md.ban_path(entry))
         cm = pd.concat(frames)
         futures = set(fo.loc[fo.FinInstrmTp == "STF", "TckrSymb"])
         wrong = set(ub.WRONG_COMPANY_SERIES)

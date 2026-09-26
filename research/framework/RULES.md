@@ -65,6 +65,10 @@ evidence for it, because it was seen before the change (this is why EXPIRY_RELIE
   refuses any window outside the design window 2022-01-03..2024-09-30, and never reads a session past the window
   end (machine: `backtest.WindowRefused`).
 - F16. Survivor-biased data (Kaggle TradingView) is for ideas only, up to 2013, never evidence.
+- F16b. Eras (machine: `backtest.era_of`): PLAYGROUND 2005-2013 from the NSE archive and DESIGN 2022-01..2024-09
+  from the daily history are open; 2014-2021 (the archive final exam), the P7 holdout 2024-10..2026-07 and
+  everything after are sealed. Archive files are checked against the manifest fingerprint when read. Before
+  2021-10 there are no ban lists on file: a plan says NO_BAN_LIST_ERA instead of pretending.
 
 **Process**
 - F17. Research code must be committed before planning: the daily command REFUSES on uncommitted code, so no

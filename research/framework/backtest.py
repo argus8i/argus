@@ -7,10 +7,14 @@ backtest and the paper desk can never disagree about what a rule means.
     python -m research.framework.backtest --strategy EXPIRY_RELIEF_LONG_v2 --from 2022-01-03 --to 2024-09-30 --dry-run
     python -m research.framework.backtest --strategy ... --from ... --to ... --register "what this run tests"
 
-Window rule: plan days and every session a trade holds must lie inside the design window (2022-01-03..2024-09-30).
-The sealed holdout (2024-10-01..2026-07-31) is read only once, by research/studies/event_holdout.py, and the time
-after it is prospective paper evidence; a window touching either is REFUSED. A plan whose entry or hold would
-cross the window end is counted as unfinished and never read.
+Eras (Yashu and Claude, 26 Sep 2026). A window must lie inside ONE open era, read from that era's source:
+    PLAYGROUND  2005-01-01..2013-12-31  NSE archive (ArchiveMarket)   explore freely; every run registered
+    DESIGN      2022-01-03..2024-09-30  daily history (MarketFiles)   the design window of the P7 studies
+Sealed, always REFUSED here:
+    2014-01-01..2021-09-30  the archive final exam: read once per locked pre-registration (a runner still to build)
+    2024-10-01..2026-07-31  the P7 holdout: read once, only by research/studies/event_holdout.py
+    2026-08-01 onwards      prospective paper evidence (the daily desk)
+A plan whose entry or hold would cross the window end is counted as unfinished and never read.
 Every design run that informs a decision is registered in research/evidence/trials_registry.csv (--register); a
 registered run needs committed research code so it can be reproduced from the commit.
 """
@@ -32,11 +36,27 @@ from research.framework import desk, evaluate
 from research.framework.market import MarketFiles
 from research.framework.strategy import PaperStrategy
 
+PLAYGROUND = (date(2005, 1, 1), date(2013, 12, 31))
 DESIGN = (date(2022, 1, 3), date(2024, 9, 30))
+ERAS = {"PLAYGROUND": (PLAYGROUND, "archive"), "DESIGN": (DESIGN, "daily")}
 
 
 class WindowRefused(PermissionError):
-    """The requested window reaches outside the design window."""
+    """The requested window is not inside one open era, or the data source does not belong to that era."""
+
+
+def era_of(md: MarketFiles, start: date, end: date) -> str:
+    from research.framework.archive import ArchiveMarket
+
+    source = "archive" if isinstance(md, ArchiveMarket) else "daily"
+    for name, ((a, b), src) in ERAS.items():
+        if a <= start <= end <= b:
+            if src != source:
+                raise WindowRefused(f"{name} is read from the {src} source, not the {source} source")
+            return name
+    raise WindowRefused(f"{start}..{end} is not inside one open era {[(k, str(v[0][0]), str(v[0][1])) for k, v in ERAS.items()]}; "
+                        "2014-2021 is the sealed archive exam, 2024-10..2026-07 the sealed holdout, later days "
+                        "prospective paper evidence")
 
 
 def _stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -57,9 +77,7 @@ def _stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def run(strategy: PaperStrategy, md: MarketFiles, start: date, end: date) -> Dict[str, Any]:
-    if start > end or start < DESIGN[0] or end > DESIGN[1]:
-        raise WindowRefused(f"{start}..{end} is outside the design window {DESIGN[0]}..{DESIGN[1]}; the holdout "
-                            "is read once by event_holdout.py and later days are prospective paper evidence")
+    era = era_of(md, start, end)
     plans: Counter = Counter()
     blocked: Counter = Counter()
     trades: List[Dict[str, Any]] = []
@@ -92,7 +110,7 @@ def run(strategy: PaperStrategy, md: MarketFiles, start: date, end: date) -> Dic
                            "exit_session": hold[-1].isoformat(), "symbol": s["symbol"], "side": s.get("side"),
                            "in_book": s["symbol"] in book, **res})
     ident = hashlib.sha256(json.dumps(sorted(data_files.items())).encode()).hexdigest()
-    return {"strategy": strategy.id, "window": [start.isoformat(), end.isoformat()], "plans": dict(plans),
+    return {"strategy": strategy.id, "era": era, "window": [start.isoformat(), end.isoformat()], "plans": dict(plans),
             "blocked": dict(blocked), "unfinished_plans": unfinished, "trades": trades, "summary": _stats(trades),
             "data_identity": ident, "data_files": len(data_files)}
 
@@ -112,7 +130,7 @@ def register_trial(bt: Dict[str, Any], *, variant: str, notes: str = "", registr
         return "" if x is None or not np.isfinite(x) else f"{x:.4f}"
 
     row = [tid, date.today().isoformat(), bt["strategy"], variant, f"{bt['window'][0]}..{bt['window'][1]}",
-           f"live_history_{bt['data_identity'][:12]}", s["n"], fmt(s["mean_net_r"]), "trigger", fmt(s["sr_per_trade"]),
+           f"{bt.get('era', 'DESIGN').lower()}_{bt['data_identity'][:12]}", s["n"], fmt(s["mean_net_r"]), "trigger", fmt(s["sr_per_trade"]),
            source, agent, f"t by plan day {fmt(s['t'])}; {s['plan_days']} plan days; years positive "
                           f"{s['years_positive']}/{s['years']}; void {s['void']}; {notes}".strip()]
     with open(reg, "a", encoding="utf-8", newline="") as fh:
@@ -139,9 +157,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.register and code["dirty"]:
         print(f"REFUSED: a registered trial needs committed research code; dirty: {code['dirty'][:5]}")
         return 2
+    from research.framework.archive import ArchiveMarket
+
     s = by_id(args.strategy)
+    start, end = date.fromisoformat(args.start), date.fromisoformat(args.end)
+    md = ArchiveMarket(history_root()) if end <= PLAYGROUND[1] else MarketFiles(history_root())
     try:
-        bt = run(s, MarketFiles(history_root()), date.fromisoformat(args.start), date.fromisoformat(args.end))
+        bt = run(s, md, start, end)
     except WindowRefused as exc:
         print(f"REFUSED: {exc}")
         return 2

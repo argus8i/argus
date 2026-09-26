@@ -132,6 +132,7 @@ class MarketFiles:
     """Read-only view of the history folder. Files are cached per instance; build a new instance each run."""
 
     CACHE_FILES = 48          # per kind; a long backtest would otherwise hold every F&O file (8 MB each) in memory
+    ban_lists = True          # F&O ban lists exist for this source; a missing one blocks (fail closed)
 
     def __init__(self, history: Path) -> None:
         self.h = Path(history)
