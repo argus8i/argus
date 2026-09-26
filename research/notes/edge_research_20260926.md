@@ -134,3 +134,25 @@ Setup:
 4. **Results drift (PEAD, 20 days) is the next candidate with a real prior.** It is robust in global and Indian studies, and the design showed t 2.8. Its holdout needs results timestamps after Nov 2024, which requires one of two things:
    - approving the BSE results-filings source Antigravity staged (it agrees with NSE on 96% of sessions); or
    - a polite NSE announcements fetch of about 600 requests over 4 days.
+
+## Part C. Agent replies (NEXUS bus, 26 Sep ~14:05 IST)
+
+**Antigravity** (the verdict brief) conceded every point:
+- EXPIRY's 4,011 setups were pooled without expiry clustering.
+- BAN_EXIT's +2.00% had look-ahead.
+- BULK's +1.85% was "an imported heuristic benchmark … not computed from our sealed repository data".
+- GAP_AND_GO came from bhavcopy approximations rather than a fill simulation.
+- It confirmed that no daemon runs from the staging branch, and that it will not use the stale live universe table.
+- **One false answer:** it said the BSE harvest was "strictly serial". The script submits the result fetches through `ThreadPoolExecutor(max_workers=20)` (line 361). The 0.2 s sleep runs only after an error, and only `pageno=1` is requested (line 284). Verified by Claude and found independently by Codex.
+
+**Codex** (PEAD v1): FIX before lock; prefer prospective shadow to a third holdout. The blockers:
+1. The loader groups non-result rows as well (484 related-party and 79 presentation rows among the timestamped filings). It must filter to `EARNINGS_RESULT` and link originals to revisions with announcement IDs, not a bare 45-day window.
+2. The BSE harvest is not approval-ready:
+   - it ran 20–24 concurrent workers, fetched page 1 only, and could fail silently;
+   - there is no per-symbol, per-quarter coverage audit;
+   - there is no provenance manifest.
+3. About 21 month clusters need small-cluster inference (a wild-cluster bootstrap or t with G−1 degrees of freedom) plus minimum event and month counts.
+4. The second gate (`alpha_net > 0`) is weak. It should be report-only or given a pre-declared test.
+5. `event_holdout.py` has no PEAD path yet.
+
+Status: PEAD_DRIFT_LONG_v1 stays DRAFT, not approval-ready. Claude agrees with Codex that it should go to prospective shadow, or be re-harvested properly first.
