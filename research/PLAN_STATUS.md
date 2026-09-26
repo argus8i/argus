@@ -56,3 +56,4 @@
 | 2026-09-26 | EDGE | Holdout BAN_ENTRY_SHORT_v1 (once) | **REJECTED** | 43d66d2 | -0.018R t -0.27 (141 events); auction open -0.009R (T0120-T0124) |
 | 2026-09-26 | EDGE | Holdout EXPIRY_RELIEF_LONG_v1 (once) | **REJECTED** | 43d66d2 | +0.009R t 0.09; drift alpha +0.47% t 1.66 (gate passed); 3% stop hit 46% (T0125-T0128) |
 | 2026-09-26 | EDGE | PEAD_DRIFT_LONG v1 (BSE timestamps) | DRAFT | 6d581b1 | design +2.31%/trade t 2.02, alpha t 3.2, 2022 negative; lock needs Yashu's approval of the BSE source (T0129-T0130) |
+| 2026-09-26 | FRAMEWORK | Paper-strategy framework (market, desk, evaluate, rules, daily, RULES.md) + expiry desk as first plug-in | done | (framework commit) | 695 passed, 6 xfailed; replay 2026-08-25 identical to the old desk (24 signals, 23 scored, -0.483R, max diff 0.0); 5 desk bugs fixed test-first (duplicate plans, missing-session window, missing-session hold, dirty code counted, skipped weekday) |
