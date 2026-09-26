@@ -1,0 +1,44 @@
+# Pre-registration: BAN_ENTRY_SHORT v1. DRAFT, written 2026-09-26 by Claude from design-window evidence only.
+# Nothing here may change after LOCK. Locking and the one holdout run need Yashu's approval.
+# Parsed by research/studies/prereg_io.py (strict YAML subset).
+id: BAN_ENTRY_SHORT_v1
+status: DRAFT
+hypothesis: >
+  On the first session of an F&O-ban spell, an intraday (MIS) short entered at the 09:15 open and covered at the
+  15:05 policy exit earns a positive mean net R (unconstrained per-signal simulation, identical fill rules for all
+  signals, 1-tick slippage per side, DhanFeeEngine MIS fees, r_basis stop_limit) on the holdout.
+rationale: >
+  MWPL above 95% puts the stock in the ban. No new F&O positions are allowed until MWPL falls below 80%, so
+  speculative long open interest can only be unwound. The ban list for day D is published the evening before,
+  so the decision needs no information from day D.
+design_evidence: {trials: [T0062, T0063, T0076, T0077], scan_entry_open_close_pct: -0.88, scan_t: -6.52, sim_sl2_net_r: 0.2963, sim_sl2_t: 6.65, sim_sl3_net_r: 0.2069, sim_sl3_t: 6.24}
+primary_test: {statistic: day_clustered_t, threshold: 2.0, also_require: mean_net_r > 0}
+secondary_tests:
+  - {name: slippage_2_ticks, require: mean_net_r > 0}
+  - {name: stop_3pct, require: report_only}
+  - {name: entry_0930_bar_close, require: report_only}
+  - {name: by_year, require: report_only}
+data:
+  bars: {interval_min: 15, source: upstox_v2_1minute_resampled, timestamps: bar_start_IST}
+  ban_lists: nsearchives fo_secban_DDMMYYYY.csv (research/data/nse_events.py; complete 2021-10-01..2026-09-25)
+  design: ["2022-01-03", "2024-09-30"]
+  holdout: ["2024-10-01", "2026-07-31"]      # never read for this rule; the design scan refuses end dates past 2024-09-30
+  excluded: {from: "2026-08-03", reason: "post-CAS regime; prospective shadow only"}
+  snapshot: {name: p7_design_20260926, content_sha256: 72a444d7aec15d979b54a36e54afb8108df4b1cf1a0105ef76cb63a7c320059d}
+universe:
+  event: first session of a ban spell (symbol not in the ban list of the previous session)
+  previous_session_eligible: true            # F&O member, prev close >= Rs 10, DTV20 >= Rs 30 Cr, not wrong-company
+trade:
+  side: SELL
+  product: MIS
+  entry: {rule: session_open_0915, reference: 0915_open, slippage_ticks: 1, clamp_bps_adverse: 10}
+  stop: {sl_trigger_pct_above_entry: 2.0, sl_limit_offset_pct: 0.5}     # chosen from {2%, 3%} by the highest day-clustered t on design
+  targets: []
+  exit: "15:05 policy exit (SessionPolicy)"
+engine: {r_basis: stop_limit, allow_shorts: true}
+costs: {fees: DhanFeeEngine_MIS, slippage_ticks_per_side: 1, sensitivity_ticks: [2]}
+sizing: {risk_budget_rs: 1500, max_slots: 3, slot_cap_rs: 38000.00, aggregate_exposure_cap_rs: 114000.00, slot_cap_price: worst_admissible_entry}
+open_questions_before_live:
+  - broker permits MIS (intraday) SHORT in a stock that is in the F&O ban (cash segment); verify with Dhan
+  - a fill at the 09:15 open is achievable (pre-open order entry 09:00-09:08, or the first continuous prints)
+trials_registry: research/evidence/trials_registry.csv
