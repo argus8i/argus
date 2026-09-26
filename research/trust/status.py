@@ -225,6 +225,28 @@ def check_paper(ctx: Mapping[str, Any]) -> Tuple[str, List[str]]:
     return ("FAIL" if problems else "PASS"), problems or ["no ALLOW_LIVE = True; ShadowRunner refuses live"]
 
 
+def check_paper_desks(ctx: Mapping[str, Any]) -> Tuple[str, List[str]]:
+    """Every registered paper strategy obeys the framework rules (research/framework/RULES.md): locked, committed,
+    unchanged pre-registration; Track 2 journal location; intact journals; and no broker code in the framework or
+    in any registered plug-in."""
+    import inspect
+
+    from research.framework import rules
+    from research.framework.strategy import registered
+
+    strategies = ctx.get("paper_strategies")
+    strategies = registered() if strategies is None else strategies
+    check_git = ctx.get("paper_check_git", True)
+    problems: List[str] = []
+    for s in strategies:
+        problems += rules.strategy_problems(s, check_git=check_git)
+    fw = Path(rules.__file__).parent
+    files = sorted(fw.glob("*.py")) + sorted({Path(inspect.getfile(type(s))) for s in strategies})
+    problems += [f"{h['file']}:{h['line']}: broker-like code: {h['text']}" for h in rules.paper_only_scan(files)]
+    ok = [f"{len(strategies)} paper strategies obey the framework rules; {len(files)} files free of broker code"]
+    return ("FAIL" if problems else "PASS"), problems or ok
+
+
 def check_isolation(ctx: Mapping[str, Any]) -> Tuple[str, List[str]]:
     inv = ctx["inventory"]
     log = _root(ctx, "main_checkout") / inv["track1_log"]
@@ -238,7 +260,7 @@ def check_isolation(ctx: Mapping[str, Any]) -> Tuple[str, List[str]]:
 CHECKS: List[Tuple[str, Callable[[Dict[str, Any]], Tuple[str, List[str]]]]] = [
     ("strategies", check_strategies), ("snapshots", check_snapshots), ("datasets", check_datasets),
     ("trials", check_trials), ("code_review", check_code), ("paper_only_gate", check_paper),
-    ("track_isolation", check_isolation),
+    ("track_isolation", check_isolation), ("paper_desks", check_paper_desks),
 ]
 
 

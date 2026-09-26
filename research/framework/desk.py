@@ -22,7 +22,7 @@ import math
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -58,6 +58,50 @@ def _prereg_sha(strategy: PaperStrategy) -> str:
     return prereg_io.normalised_sha256(strategy.prereg_path())
 
 
+# ---------------------------------------------------------------------------------------------- shared by desk + backtest
+def make_plan(strategy: PaperStrategy, md: MarketFiles, day: date) -> Tuple[Optional[date], Dict[str, Any]]:
+    """(entry session, plan). The one place a plan is made: the paper desk and the backtest both call this."""
+    entry, skipped = md.entry_session(day)
+    traded = [d.isoformat() for d in skipped if md.cm_path(d).exists()]
+    if entry is None:
+        return None, {"status": "BLOCKED", "reason": "no ban list published for any weekday in the 7 days after "
+                                                     f"{day} (fail closed)"}
+    if traded:
+        return None, {"status": "BLOCKED", "reason": f"skipped weekday(s) {traded} have a CM file: a session whose "
+                                                     "ban list is missing (fail closed)"}
+    p = dict(strategy.build_plan(md, day, entry))
+    p["skipped_weekdays"] = [d.isoformat() for d in skipped]
+    return entry, p
+
+
+def score_plan(strategy: PaperStrategy, md: MarketFiles, plan_row: Dict[str, Any], signals: List[Dict[str, Any]],
+               as_of: date) -> Tuple[str, Any]:
+    """The one place a plan is scored. ("PENDING", sessions found) until the hold has finished by as_of;
+    ("BLOCKED", {reason, detail}) when the entry session is missing or the files do not chain from the plan day
+    through the hold; else ("SCORED", (hold, [strategy.score results in signal order]))."""
+    plan_day = date.fromisoformat(plan_day_of(plan_row))
+    entry = date.fromisoformat(plan_row["entry_session"])
+    h = strategy.hold_sessions
+    hold = [d for d in md.sessions() if d >= entry][:h]
+    if len(hold) < h or hold[-1] > as_of:
+        return "PENDING", len(hold)
+    if hold[0] != entry:
+        return "BLOCKED", {"reason": "ENTRY_SESSION_MISSING", "detail": f"first session on file is {hold[0]}"}
+    ch = md.chain_window([plan_day] + hold)
+    if ch["ok"] is not True:
+        return "BLOCKED", {"reason": "DATA_GAP" if ch["ok"] is False else "CHAIN_UNKNOWN",
+                           "detail": ch["breaks"] or ch["unknown"]}
+    out = []
+    for s in signals:
+        res = dict(strategy.score(md, plan_row, s, hold))
+        if "exit_reason" not in res or "net_r" not in res:
+            raise ValueError(f"{strategy.id}.score must return exit_reason and net_r")
+        if res["net_r"] is not None and not math.isfinite(float(res["net_r"])):
+            res = {**res, "exit_reason": "VOID_NON_FINITE", "net_r": None}
+        out.append(res)
+    return "SCORED", (hold, out)
+
+
 # ---------------------------------------------------------------------------------------------- plan
 def plan(strategy: PaperStrategy, md: MarketFiles, day: date, journal_path: Optional[Path] = None, *,
          now: Optional[datetime] = None, kind: str = "PLAN", code: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -80,18 +124,7 @@ def plan(strategy: PaperStrategy, md: MarketFiles, day: date, journal_path: Opti
         p: Dict[str, Any] = {"status": "REFUSED", "reason": f"pre-registration changed after the first plan "
                                                             f"(journal {sorted(earlier)}, now {sha})"}
     else:
-        entry, skipped = md.entry_session(day)
-        traded = [d.isoformat() for d in skipped if md.cm_path(d).exists()]
-        if entry is None:
-            p = {"status": "BLOCKED", "reason": "no ban list published for any weekday in the 7 days after "
-                                                f"{day} (fail closed)"}
-        elif traded:
-            p = {"status": "BLOCKED", "reason": f"skipped weekday(s) {traded} have a CM file: a session whose ban "
-                                                "list is missing (fail closed)"}
-            entry = None
-        else:
-            p = dict(strategy.build_plan(md, day, entry))
-            p["skipped_weekdays"] = [d.isoformat() for d in skipped]
+        entry, p = make_plan(strategy, md, day)
         prior = [r["seq"] for r in rows if r.get("kind") == kind and plan_day_of(r) == day.isoformat()
                  and r.get("status") == "OK"]
         if p.get("status") == "OK" and prior:
@@ -126,8 +159,6 @@ def reconcile(strategy: PaperStrategy, md: MarketFiles, journal_path: Optional[P
     for r in rows:
         if r.get("kind") in PLAN_KINDS and r.get("status") == "OK":
             first_ok.setdefault((r["kind"], plan_day_of(r)), r["seq"])
-    ss = md.sessions()
-    h = strategy.hold_sessions
     new: List[Dict[str, Any]] = []
     pending, blocked, overdue, ignored = 0, [], [], []
     for pr in rows:
@@ -140,33 +171,22 @@ def reconcile(strategy: PaperStrategy, md: MarketFiles, journal_path: Optional[P
         todo = [s for s in pr["signals"] if (pr["seq"], s["symbol"]) not in done]
         if not todo:
             continue
-        hold = [d for d in ss if d >= entry][:h]
-        if len(hold) < h or hold[-1] > as_of:
+        state, got = score_plan(strategy, md, pr, todo, as_of)
+        if state == "PENDING":
             pending += len(todo)
-            if (as_of - entry).days > 2 * h + 7:
-                overdue.append({"plan_seq": pr["seq"], "entry_session": entry.isoformat(), "sessions_found": len(hold)})
+            if (as_of - entry).days > 2 * strategy.hold_sessions + 7:
+                overdue.append({"plan_seq": pr["seq"], "entry_session": entry.isoformat(), "sessions_found": got})
             continue
-        if hold[0] != entry:
-            blocked.append({"plan_seq": pr["seq"], "reason": "ENTRY_SESSION_MISSING",
-                            "detail": f"first session on file is {hold[0]}"})
+        if state == "BLOCKED":
+            blocked.append({"plan_seq": pr["seq"], **got})
             continue
-        ch = md.chain_window([date.fromisoformat(plan_day_of(pr))] + hold)
-        if ch["ok"] is not True:
-            blocked.append({"plan_seq": pr["seq"], "reason": "DATA_GAP" if ch["ok"] is False else "CHAIN_UNKNOWN",
-                            "detail": ch["breaks"] or ch["unknown"]})
-            continue
+        hold, results = got
         book = set(pr.get("book", pr.get("book_top3", [])))
-        for s in todo:
-            out = {"kind": "RESULT", "strategy": strategy.id, "plan_seq": pr["seq"], "symbol": s["symbol"],
-                   "side": s.get("side"), "plan_day": plan_day_of(pr), "entry_session": entry.isoformat(),
-                   "exit_session": hold[-1].isoformat(), "evidence": pr["evidence"], "in_book": s["symbol"] in book,
-                   "scored_at": now.isoformat(timespec="seconds")}
-            res = dict(strategy.score(md, pr, s, hold))
-            if "exit_reason" not in res or "net_r" not in res:
-                raise ValueError(f"{strategy.id}.score must return exit_reason and net_r")
-            if res["net_r"] is not None and not math.isfinite(float(res["net_r"])):
-                res = {**res, "exit_reason": "VOID_NON_FINITE", "net_r": None}
-            new.append({**out, **res})
+        for s, res in zip(todo, results):
+            new.append({"kind": "RESULT", "strategy": strategy.id, "plan_seq": pr["seq"], "symbol": s["symbol"],
+                        "side": s.get("side"), "plan_day": plan_day_of(pr), "entry_session": entry.isoformat(),
+                        "exit_session": hold[-1].isoformat(), "evidence": pr["evidence"],
+                        "in_book": s["symbol"] in book, "scored_at": now.isoformat(timespec="seconds"), **res})
     if new:
         journal.append(new)
     return {"scored": len(new), "pending": pending, "blocked": blocked, "overdue": overdue,

@@ -256,3 +256,24 @@ def test_identity_failure_makes_the_whole_report_an_error(tmp_path, monkeypatch)
 def test_unknown_check_status_is_an_internal_error(tmp_path, monkeypatch):
     monkeypatch.setattr(st, "CHECKS", [("a", lambda ctx: ("GREEN", []))])
     assert st.run(ctx={}, out_dir=tmp_path)[1] == st.EXIT_INTERNAL
+
+
+def test_paper_desks_check_passes_a_clean_strategy_and_fails_an_unlocked_one(tmp_path):
+    from research.tests.test_framework import ToyShort
+
+    class CleanToy(ToyShort):                  # defined here: the plug-in's own file is scanned for broker code
+        pass
+
+    pre = tmp_path / "toy.yaml"
+    pre.write_text("id: TOY_SHORT_v1\nstatus: LOCKED_PROSPECTIVE\n", encoding="utf-8")
+    s = CleanToy(pre, tmp_path / "shared" / "track2_liquid" / "paper" / "toy")
+    ctx = {"paper_strategies": [s], "paper_check_git": False}
+    status, details = st.check_paper_desks(ctx)
+    assert status == "PASS", details
+    pre.write_text("id: TOY_SHORT_v1\nstatus: DRAFT\n", encoding="utf-8")
+    status, details = st.check_paper_desks(ctx)
+    assert status == "FAIL" and any("LOCKED_PROSPECTIVE" in d for d in details)
+
+
+def test_paper_desks_is_a_registered_check():
+    assert "paper_desks" in [name for name, _ in st.CHECKS]

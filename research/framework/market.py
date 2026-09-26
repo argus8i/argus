@@ -21,6 +21,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import io
+from collections import OrderedDict
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
@@ -90,11 +91,15 @@ def normalise(df: pd.DataFrame, source: str = "") -> pd.DataFrame:
     for c in df.columns:
         if df[c].dtype == object:
             df[c] = df[c].str.strip()
+
+    def remap(col: str, fn: Any) -> None:                # each distinct value once (47,000 rows, a few dates)
+        df[col] = df[col].map({u: fn(u) for u in df[col].unique()})
+
     if legacy_fo:
-        df["FinInstrmTp"] = df["FinInstrmTp"].map(lambda x: LEGACY_INSTRUMENT.get(x, x))
-        df["XpryDt"] = df["XpryDt"].map(_iso)
+        remap("FinInstrmTp", lambda x: LEGACY_INSTRUMENT.get(x, x))
+        remap("XpryDt", _iso)
     if "TradDt" in df.columns:
-        df["TradDt"] = df["TradDt"].map(_iso)
+        remap("TradDt", _iso)
     return df
 
 
@@ -126,11 +131,23 @@ def sha256_file(p: Path) -> str:
 class MarketFiles:
     """Read-only view of the history folder. Files are cached per instance; build a new instance each run."""
 
+    CACHE_FILES = 48          # per kind; a long backtest would otherwise hold every F&O file (8 MB each) in memory
+
     def __init__(self, history: Path) -> None:
         self.h = Path(history)
-        self._cm: Dict[date, pd.DataFrame] = {}
-        self._fo: Dict[date, pd.DataFrame] = {}
+        self._cm: "OrderedDict[date, pd.DataFrame]" = OrderedDict()
+        self._fo: "OrderedDict[date, pd.DataFrame]" = OrderedDict()
         self._sessions: Optional[List[date]] = None
+
+    def _cached(self, store: "OrderedDict[date, pd.DataFrame]", d: date, path: Path) -> pd.DataFrame:
+        if d in store:
+            store.move_to_end(d)
+            return store[d]
+        df = read_udiff(path)
+        store[d] = df
+        if len(store) > self.CACHE_FILES:
+            store.popitem(last=False)
+        return df
 
     # ------------------------------------------------------------------------------------------ files
     def cm_path(self, d: date) -> Path:
@@ -158,18 +175,14 @@ class MarketFiles:
         return self._sessions
 
     def cm(self, d: date) -> pd.DataFrame:
-        if d not in self._cm:
-            self._cm[d] = read_udiff(self.cm_path(d))
-        return self._cm[d]
+        return self._cached(self._cm, d, self.cm_path(d))
 
     def cm_eq(self, d: date) -> pd.DataFrame:
         df = self.cm(d)
         return df[df["SctySrs"] == "EQ"] if "SctySrs" in df else df.iloc[:0]
 
     def fo(self, d: date) -> pd.DataFrame:
-        if d not in self._fo:
-            self._fo[d] = read_udiff(self.fo_path(d))
-        return self._fo[d]
+        return self._cached(self._fo, d, self.fo_path(d))
 
     def ban(self, d: date) -> Optional[Set[str]]:
         """The ban list for session d, or None when absent or dated differently (fail closed)."""

@@ -61,7 +61,9 @@ evidence for it, because it was seen before the change (this is why EXPIRY_RELIE
   (machine: `market.chain`; a missing session is a DATA_GAP, never a guessed holiday).
 - F13. The entry session needs its published F&O ban list; without it the plan is BLOCKED (machine).
 - F14. No dataset feeds a strategy before Claude's audit says PASS (hashes, dates inside files, coverage).
-- F15. The sealed holdout is read once per locked pre-registration, only through the holdout runner.
+- F15. The sealed holdout is read once per locked pre-registration, only through the holdout runner. The backtester
+  refuses any window outside the design window 2022-01-03..2024-09-30, and never reads a session past the window
+  end (machine: `backtest.WindowRefused`).
 - F16. Survivor-biased data (Kaggle TradingView) is for ideas only, up to 2013, never evidence.
 
 **Process**
@@ -84,7 +86,20 @@ evidence for it, because it was seen before the change (this is why EXPIRY_RELIE
 6. Register it in `research/framework/strategy.py` `registered()`; Codex reviews the commit.
 7. From the next plan day, the daily run handles it.
 
-## 5. Every trading evening
+## 5. The tools
+
+| Command | What it does |
+|---|---|
+| `python -m research.framework.daily` | Evening run: plan, score, evaluate, report (also shows the download and its audit) |
+| `python -m research.framework.backtest --strategy ID --from D --to D --dry-run` | The same plug-in code over the design window; `--register "variant"` records the trial (needs committed code) |
+| `python -m research.data.archive_audit` | Checks every downloaded archive file: fingerprint, readable, date inside, missing sessions, pacing, blocks |
+| `python -m research.trust.status` | Rebuilds the whole state from files, including a `paper_desks` check of every registered strategy |
+| `python -m research.shadow.expiry_desk summary` | One strategy's journal summary |
+
+A backtest and the paper desk call the same two functions (`desk.make_plan`, `desk.score_plan`), so they cannot
+disagree about what a rule means (machine: `test_backtest_matches_the_paper_desk_trade_for_trade`).
+
+## 6. Every trading evening
 
     python -m research.framework.daily
 
