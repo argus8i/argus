@@ -38,7 +38,10 @@ def test_trials_registry_schema_and_seed():
     assert list(rows[0].keys()) == ["trial_id", "date_run", "strategy_id", "variant", "data_span", "sample_id",
                                     "n_trades", "mean_net_r", "r_basis", "sr_per_trade", "source", "agent", "notes"]
     assert len(rows) >= 21 and len({r["trial_id"] for r in rows}) == len(rows)
-    assert all(r["r_basis"] in ("trigger", "stop_limit") for r in rows)
+    # R-based trials state their basis; E0 exploratory looks measure % moves, carry no R and say so
+    assert all(r["r_basis"] in ("trigger", "stop_limit") or
+               (r["r_basis"] == "none" and r["mean_net_r"] == "" and r["notes"].startswith("E0_EXPLORATORY"))
+               for r in rows)
 
 
 def test_measured_facts_file_exists():
