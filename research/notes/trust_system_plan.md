@@ -136,3 +136,33 @@ Each of the following would open a real hypothesis. Each is a fetch job for Anti
 Ideas came from agent assertion rather than published evidence plus a mechanism. The fix:
 - source ideas from peer-reviewed studies of Indian equities, and require a named mechanism;
 - run the design test in `strategy_lab`, and only then pre-register.
+
+## v2 revisions after Codex's review (26 Sep, 17 changes, all accepted)
+
+Source: NEXUS bus review of commit 0ebdd21 ("approve the direction, revise before implementation").
+
+### New phase order
+| Phase | Build |
+|---|---|
+| **P0** | Trust roots and schemas:<br>- a closed-world inventory (strategies, datasets, snapshots, jobs, checkouts);<br>- the governed scope: every executable, config and data-contract file that can change a trusted output, not just three folders;<br>- a machine-readable review-record schema;<br>- an evidence-record schema;<br>- fail-closed semantics: missing, unknown or stale is never PASS. |
+| **P1** | T7 and a minimal T1:<br>- **Exact reviews:** a commit is reviewed only by an APPROVED record that binds parent..commit, the patch hash and the tree, with reviewer ≠ author and retained test artifacts. Any later commit in scope is unreviewed again.<br>- **Status is rebuilt, not trusted:** the register must be reproducible from the append-only decision records, and locks and done-markers must be consistent.<br>- **Snapshots:** fully re-verified.<br>- **Git:** the git state of both checkouts is checked.<br>- **Rule 1:** the paper-only gate is checked.<br>- **Exit codes and the checker's own identity:** distinct non-zero classes (integrity / unreviewed code / missing-stale / internal error); an internal error is never green; T1 prints its own code hash. |
+| **P2** | T4 for current data: dataset-specific manifests and coverage denominators (bhavcopy, result timestamps, 1-minute candles), feeding T1. |
+| **P3** | T2 evidence records (retained raw output, input, snapshot and config hashes, worktree and dirty state, environment, time) and a structured T3: claim envelopes and semantic checks. The outcomes are PASS_SYNTAX / FLAGGED / UNABLE_TO_VERIFY; it never says "true". |
+| **P4** | T6 daily report + the paper desk, only once its inputs have machine-verifiable contracts. |
+| **P5** | Historical ingestion: a staged sample, reconciliation, then the full archive. |
+
+### Rules
+- **Untrusted as state:** T1 never derives state from `PLAN_STATUS.md`, notes, messages, filenames, commit messages, `register.json` `notes` fields, or a manifest's self-declared "complete".
+- **T5 is an incident ledger,** not an agent reliability score.
+- **Done when**, for every phase:
+  - adversarial and fail-open tests (malformed input, missing files, unknown schema versions, stale input, internal exceptions, all red);
+  - injected corruptions are detected;
+  - an independent recomputation matches;
+  - a clean-room run gives identical output;
+  - an independent review.
+- **The 2005–2021 history is external validation, not a pristine holdout:**
+  - Split it before anyone reads it: an older development segment, and a sealed final segment chosen in advance. Trials are registered from the first read.
+  - Survivorship: delisted and merged companies must stay in.
+  - Point-in-time F&O membership is required. Without it, conclusions are "broad cash-equity universe" and never "Track 2 validation".
+  - Also covered: symbol and ISIN history, a versioned corporate-action adjustment policy, historical costs, tick sizes and bands, and archive corrections.
+  - Daily history cannot validate intraday execution.
