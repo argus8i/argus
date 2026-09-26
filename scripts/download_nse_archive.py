@@ -666,6 +666,7 @@ def run_forward_download(
             trading_days.append(cur)
         cur += timedelta(days=1)
 
+    halt_reason = None
     stats: Counter = Counter()
     for td in trading_days:
         for ds in datasets:
@@ -675,7 +676,10 @@ def run_forward_download(
                 stats[outcome] += 1
             except StopExecutionError as exc:
                 print(f"Execution halted: {exc}", file=sys.stderr)
-                return {"stats": dict(stats), "stopped": str(exc)}
+                halt_reason = str(exc)
+                break
+        if halt_reason is not None:
+            break
 
     # Generate coverage reports per year encountered
     years = sorted(list(set(d.year for d in trading_days)))
@@ -685,7 +689,10 @@ def run_forward_download(
         yr_end = min(end_date, date(yr, 12, 31))
         generate_coverage_report(all_records, yr_start, yr_end, downloader.base_dir)
 
-    return {"stats": dict(stats), "trading_days": len(trading_days)}
+    result = {"stats": dict(stats), "trading_days": len(trading_days)}
+    if halt_reason is not None:
+        result["stopped"] = halt_reason
+    return result
 
 
 def run_pilot(base_dir: Optional[Path] = None, interval: float = MIN_INTERVAL_SECONDS) -> None:
