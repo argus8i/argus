@@ -21,7 +21,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import io
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -35,13 +35,72 @@ MIN_SHARE = 0.90
 MAX_ENTRY_SEARCH_DAYS = 7
 
 
+# NSE's pre-UDiFF bhavcopies (every file before 8 Jul 2024, and the whole 2005-2021 archive) use other column names.
+# They are renamed to the UDiFF names so every strategy reads one format. Dates become ISO (the legacy files write
+# 04-JAN-2010, 4-JAN-2010 or 28-Jan-2010).
+LEGACY_CM = {"SYMBOL": "TckrSymb", "SERIES": "SctySrs", "OPEN": "OpnPric", "HIGH": "HghPric", "LOW": "LwPric",
+             "CLOSE": "ClsPric", "LAST": "LastPric", "PREVCLOSE": "PrvsClsgPric", "TOTTRDQTY": "TtlTradgVol",
+             "TOTTRDVAL": "TtlTrfVal", "TIMESTAMP": "TradDt", "TOTALTRADES": "TtlNbOfTxsExctd"}
+LEGACY_FO = {"INSTRUMENT": "FinInstrmTp", "SYMBOL": "TckrSymb", "EXPIRY_DT": "XpryDt", "STRIKE_PR": "StrkPric",
+             "OPTION_TYP": "OptnTp", "OPEN": "OpnPric", "HIGH": "HghPric", "LOW": "LwPric", "CLOSE": "ClsPric",
+             "SETTLE_PR": "SttlmPric", "CONTRACTS": "TtlTradgVol", "OPEN_INT": "OpnIntrst", "CHG_IN_OI": "ChngInOpnIntrst",
+             "TIMESTAMP": "TradDt"}
+LEGACY_INSTRUMENT = {"FUTSTK": "STF", "FUTIDX": "IDF", "OPTSTK": "STO", "OPTIDX": "IDO"}
+
+
+class UnknownFormat(ValueError):
+    """A file that is neither a UDiFF nor a legacy NSE bhavcopy (fail closed: never guess columns)."""
+
+
 def _bytes(path: Path) -> bytes:
     raw = Path(path).read_bytes()
-    return gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw
+    if raw[:2] == b"\x1f\x8b":
+        return gzip.decompress(raw)
+    if raw[:4] == b"PK\x03\x04":
+        import zipfile
+
+        with zipfile.ZipFile(io.BytesIO(raw)) as z:
+            names = [n for n in z.namelist() if not n.endswith("/")]
+            if len(names) != 1:
+                raise UnknownFormat(f"{path}: zip holds {len(names)} files, expected 1")
+            return z.read(names[0])
+    return raw
+
+
+def _iso(v: str) -> str:
+    s = str(v).strip()
+    for fmt in ("%d-%b-%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s.title() if fmt == "%d-%b-%Y" else s, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return s
+
+
+def normalise(df: pd.DataFrame, source: str = "") -> pd.DataFrame:
+    cols = [c.strip() for c in df.columns]
+    df = df.set_axis(cols, axis=1)
+    df = df[[c for c in cols if c and not c.startswith("Unnamed")]]
+    if "TckrSymb" in df.columns:
+        return df
+    if "SYMBOL" not in df.columns:
+        raise UnknownFormat(f"{source}: neither a UDiFF (TckrSymb) nor a legacy (SYMBOL) bhavcopy: {cols[:6]}")
+    legacy_fo = "INSTRUMENT" in df.columns
+    df = df.rename(columns=LEGACY_FO if legacy_fo else LEGACY_CM)
+    for c in df.columns:
+        if df[c].dtype == object:
+            df[c] = df[c].str.strip()
+    if legacy_fo:
+        df["FinInstrmTp"] = df["FinInstrmTp"].map(lambda x: LEGACY_INSTRUMENT.get(x, x))
+        df["XpryDt"] = df["XpryDt"].map(_iso)
+    if "TradDt" in df.columns:
+        df["TradDt"] = df["TradDt"].map(_iso)
+    return df
 
 
 def read_udiff(path: Path) -> pd.DataFrame:
-    df = pd.read_csv(io.BytesIO(_bytes(path)), dtype=str, keep_default_na=False)
+    """Any NSE CM or F&O bhavcopy (UDiFF or legacy; plain, gzip or zip) with UDiFF column names."""
+    df = normalise(pd.read_csv(io.BytesIO(_bytes(path)), dtype=str, keep_default_na=False), str(path))
     for c in NUMERIC:
         if c in df:
             df[c] = pd.to_numeric(df[c], errors="coerce")

@@ -103,13 +103,27 @@ def download_status(history: Path, day: date) -> Dict[str, Any]:
     return out
 
 
+def archive_audit_status(history: Path, cache: Optional[Path] = None) -> Dict[str, Any]:
+    """Claude's machine audit of the archive download (research/data/archive_audit.py), when a manifest exists."""
+    if not (Path(history) / "raw" / "nse_archive" / "manifest.jsonl").exists():
+        return {"verdict": None, "note": "no archive manifest"}
+    from research.data import archive_audit, paths
+
+    cache = cache or paths.outputs_dir() / "audit" / "archive_check_cache.json"
+    a = archive_audit.audit(history, cache=cache)
+    return {"verdict": a["verdict"], "files_checked": a["files_checked"], "sessions": a["sessions"],
+            "range": [a.get("first_trade_date"), a.get("last_trade_date")], "holidays": len(a["holidays"]),
+            "problems": dict(Counter(p["kind"] for p in a["problems"])), "first_problems": a["problems"][:5]}
+
+
 def _brief(rec: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in rec.items() if k not in ("data_files", "excluded", "prev_hash", "hash")}
 
 
 def run(day: date, *, history: Optional[Path] = None, strategies: Optional[List[PaperStrategy]] = None,
         report_dir: Optional[Path] = None, now: Optional[datetime] = None, code: Optional[Dict[str, Any]] = None,
-        check_git: bool = True, check_location: bool = True, write: bool = True) -> Dict[str, Any]:
+        check_git: bool = True, check_location: bool = True, write: bool = True,
+        audit_cache: Optional[Path] = None) -> Dict[str, Any]:
     now = now or datetime.now(IST)
     h = Path(history) if history else history_root()
     md = MarketFiles(h)
@@ -118,7 +132,9 @@ def run(day: date, *, history: Optional[Path] = None, strategies: Optional[List[
     rep: Dict[str, Any] = {"day": day.isoformat(), "run_at": now.isoformat(timespec="seconds"), "paper_only": True,
                            "code_identity": code["identity"], "code_dirty": code["dirty"],
                            "market": market_status(md, day), "download": download_status(h, day), "strategies": {}}
-    exit_code = EXIT_ATTENTION if rep["market"]["problems"] or rep["download"].get("warnings") else EXIT_OK
+    rep["archive_audit"] = archive_audit_status(h, audit_cache)
+    exit_code = EXIT_ATTENTION if (rep["market"]["problems"] or rep["download"].get("warnings")
+                                   or rep["archive_audit"].get("verdict") == "FAIL") else EXIT_OK
     for s in strategies:
         st: Dict[str, Any] = {"problems": rules.strategy_problems(s, check_git=check_git,
                                                                   check_location=check_location)}
@@ -163,6 +179,12 @@ def render(rep: Dict[str, Any]) -> str:
                      f"{d['requests_on_day']} requests on this day; shortest gap between request starts "
                      f"{d['min_request_gap_s']} s")
         lines += [f"- WARNING: {w}" for w in d.get("warnings", [])]
+    a = rep.get("archive_audit", {})
+    if a.get("verdict"):
+        lines.append(f"- Claude's audit: {a['verdict']} ({a['files_checked']} files, {a['sessions']} CM sessions "
+                     f"{a['range'][0]}..{a['range'][1]}, {a['holidays']} holidays)"
+                     + (f"; problems {a['problems']}" if a["problems"] else ""))
+        lines += [f"  - {json.dumps(p, default=str)[:300]}" for p in a.get("first_problems", [])]
     for sid, st in rep["strategies"].items():
         lines += ["", f"## {sid}"]
         lines += [f"- PROBLEM: {p}" for p in st["problems"]]

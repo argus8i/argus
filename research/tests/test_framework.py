@@ -337,3 +337,56 @@ def test_download_pacing_uses_request_start_times_and_ignores_skips(tmp_path):
                  "trade_date": "2005-01-07", "dataset": "cm_bhavcopy"})
     m.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
     assert "under 4 s" in " ".join(daily.download_status(tmp_path, date(2026, 9, 26))["warnings"])
+
+
+# ---------------------------------------------------------------------------------------------- legacy NSE formats
+LEGACY_CM = ("SYMBOL,SERIES,OPEN,HIGH,LOW,CLOSE,LAST,PREVCLOSE,TOTTRDQTY,TOTTRDVAL,TIMESTAMP,TOTALTRADES,ISIN,\n"
+             "INFY,EQ,1500.5,1510,1490,1505.25,1506,1499.75,100000,150525000.5,4-JAN-2010,5000,INE009A01021,\n"
+             "INFY,BE,10,10,10,10,10,10,1,10,4-JAN-2010,1,X,\n")
+LEGACY_FO = ("INSTRUMENT,SYMBOL,EXPIRY_DT,STRIKE_PR,OPTION_TYP,OPEN,HIGH,LOW,CLOSE,SETTLE_PR,CONTRACTS,VAL_INLAKH,"
+             "OPEN_INT,CHG_IN_OI,TIMESTAMP,\n"
+             "FUTSTK,INFY,28-Jan-2010,0,XX,1501,1512,1492,1507,1507,100,1000,5000,10,04-JAN-2010,\n"
+             "FUTIDX,NIFTY,28-Jan-2010,0,XX,5200,5250,5190,5230,5230,100,1000,5000,10,04-JAN-2010,\n"
+             "OPTSTK,INFY,28-Jan-2010,1500,CE,20,25,18,22,22,10,10,50,1,04-JAN-2010,\n")
+
+
+def test_legacy_cm_file_is_normalised_to_udiff_names(tmp_path):
+    from research.framework.market import read_udiff
+
+    p = tmp_path / "cm04JAN2010bhav.csv"
+    p.write_text(LEGACY_CM, encoding="utf-8")
+    df = read_udiff(p)
+    assert {"TckrSymb", "SctySrs", "OpnPric", "ClsPric", "PrvsClsgPric", "TtlTrfVal", "TradDt"} <= set(df.columns)
+    eq = df[df.SctySrs == "EQ"].iloc[0]
+    assert eq.TckrSymb == "INFY" and eq.ClsPric == 1505.25 and eq.PrvsClsgPric == 1499.75
+    assert eq.TtlTrfVal == 150525000.5 and eq.TradDt == "2010-01-04"
+
+
+def test_legacy_fo_file_maps_instruments_and_iso_expiry(tmp_path):
+    from research.framework.market import read_udiff
+
+    p = tmp_path / "fo04JAN2010bhav.csv"
+    p.write_text(LEGACY_FO, encoding="utf-8")
+    df = read_udiff(p)
+    assert list(df.FinInstrmTp) == ["STF", "IDF", "STO"]
+    assert set(df.XpryDt) == {"2010-01-28"} and set(df.TradDt) == {"2010-01-04"}
+
+
+def test_zip_files_as_the_archive_saves_them_are_read(tmp_path):
+    import zipfile
+
+    from research.framework.market import read_udiff
+
+    p = tmp_path / "cm04JAN2010bhav.csv.zip"
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("cm04JAN2010bhav.csv", LEGACY_CM)
+    assert read_udiff(p).TckrSymb.iloc[0] == "INFY"
+
+
+def test_a_file_in_neither_format_is_refused(tmp_path):
+    from research.framework.market import UnknownFormat, read_udiff
+
+    p = tmp_path / "x.csv"
+    p.write_text("A,B\n1,2\n", encoding="utf-8")
+    with pytest.raises(UnknownFormat):
+        read_udiff(p)
