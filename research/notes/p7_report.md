@@ -126,3 +126,92 @@ Setup: z\* = 3.00, unconstrained per-signal simulation, identical fill rules, 1 
 2. The run manifest recorded the code commit at the end of the run; it now records it at the start (`cf1ea65`).
 3. The holdout runner would have refused its own later parts: its marker made `research/` "dirty", and it pinned HEAD. It now identifies code by the blob hashes of `research/**/*.py` (`5127d32`).
 4. A `.py` commit made during the holdout run would have changed that identity. It was reverted (`c729ec7`), and the diagnostics script is re-added after finalize.
+
+---
+
+## Part B: the one holdout run (P7.4), 2024-10-01 → 2026-07-31 (added after finalize)
+
+The run happened exactly once, from lock `eeec1a75…` / commit `d549fb7`, on snapshot `6040e0cf…`, with code identity `d3f0d60e…`.
+- 452 sessions; 93,282 eligible stock-days.
+- Special session 2025-10-21 (Muhurat) excluded by the design-set rule, plus 333 invalid stock-sessions.
+- Finalized 2026-09-26 04:48 IST. The done marker is committed, and a rerun is refused (checked).
+- Result files: `research/evidence/holdout_resid_rev_v1/`.
+
+### B.1 Primary test: **FAIL → RESID_REV v1 REJECTED**
+
+| Variant | n | Days | Gross R | Fee R | Slippage R | **Net R** | SE | **t** | Pre-registered requirement |
+|---|---|---|---|---|---|---|---|---|---|
+| **Primary** (1 tick, stop_limit) | 219 | 130 | **−0.036** | 0.075 | 0.012 | **−0.124** | 0.041 | **−3.03** | t ≥ 2.0 and net > 0: **FAIL** |
+| 2 ticks per side | 219 | 130 | −0.036 | 0.075 | 0.024 | −0.135 | | −3.30 | net > 0: fail |
+| r_basis trigger | 219 | 130 | −0.059 | 0.118 | 0.019 | −0.196 | | −3.12 | report only |
+| Highs/lows pulled in 2 ticks | 219 | 130 | −0.030 | 0.075 | 0.012 | −0.118 | | −2.86 | report only |
+| Long only | 93 | | | | | −0.071 | 0.069 | −1.03 | report only |
+| Short only | 126 | | | | | −0.162 | 0.051 | −3.17 | report only |
+
+- The holdout signals are genuine holdout dates: 2024-10-01 → 2026-07-20, 136 symbols, and **none** coincide with the 219 design signals. The equal counts (219 on 130 days) are a coincidence, checked.
+- Out of sample, RESID_REV_NF is **negative before costs**: gross −0.036R, against +0.047R on design. The design gross edge did not survive.
+- `promotion.apply_holdout` moved the register from UNVERIFIED to **REJECTED** (DecisionRecord `RESID_REV_*_HOLDOUT_REJECTED.json`). Version 1 is finished; any new idea needs a new version, a new pre-registration and new data.
+
+### B.2 ORB_PROD on the holdout (comparison only; already KILLED_ON_DESIGN)
+
+| n | Days | Gross R | Fee R | Slippage R | Net R | t |
+|---|---|---|---|---|---|---|
+| 12,331 | 375 | +0.013 | 0.048 | 0.008 | −0.042 | −4.61 |
+
+The same picture as on design: gross edge is about zero, and costs make it a steady loser.
+
+### B.3 P7.5 portfolio simulation (Adjusted A1 book)
+
+Setup: `ShadowRunner` with 3 slots, ₹38,000 per slot, ₹1,14,000 aggregate including pending reservations, one position per weekly cluster, two per sector, VIX multiplier.
+
+| Run | Signals | Allocated | Filled | **Net P&L** | Mean trade R | Win rate | Max drawdown | Peak exposure | Flat at close | Cap breaches |
+|---|---|---|---|---|---|---|---|---|---|---|
+| RESID_REV_NF, design (EOD) | 221 | 181 | 179 | **−₹3,437** | −0.038 | 48.6% | ₹5,743 | ₹1,13,090 | 131/131 | 0 |
+| RESID_REV_NF, holdout (primary) | 220 | 205 | 205 | **−₹9,331** | −0.101 | 44.9% | ₹10,402 | ₹1,13,660 | 130/130 | 0 |
+| ORB_PROD, holdout | 12,355 | 1,248 | 1,246 | **−₹50,326** | −0.048 | 44.7% | ₹57,426 | ₹1,13,898 | 375/375 | 0 |
+
+Notes:
+- **Design drops:** 27 blocked by the short early VIX history (m = 0), 9 by max slots, 2 by cluster limit.
+- **Holdout drops, RESID_REV:** 10 by max slots, 4 by cluster limit, 1 by size.
+- **Holdout drops, ORB_PROD:** 10,883 by max slots, 162 by size, 42 by cluster limit, 20 by sector limit.
+- **Defect (mine):** in the `slippage_2_ticks` and `r_basis_trigger` holdout parts, the portfolio simulation ran with the default 1-tick / stop-limit costs, so their rupee P&L repeats the primary's. The per-signal secondaries above use the right settings. The portfolio is not part of the decision. It is noted here, not re-run.
+
+### B.4 The other production strategies on the design set (production defaults, one configuration each)
+
+| Strategy | n | Days | Gross R | Fee R | Slippage R | Net R | t | Register |
+|---|---|---|---|---|---|---|---|---|
+| COMPASS | 19,943 | 658 | +0.016 | 0.071 | 0.012 | −0.067 | −12.09 | KILLED_ON_DESIGN |
+| LAST_LIGHT | 2,695 | 566 | +0.016 | 0.080 | 0.013 | −0.076 | −6.28 | KILLED_ON_DESIGN |
+| TRAPDOOR | 10,182 | 661 | +0.006 | 0.083 | 0.013 | −0.090 | −15.90 | KILLED_ON_DESIGN |
+| VOL_SQUEEZE | 4,668 | 616 | −0.011 | 0.057 | 0.009 | −0.077 | −7.70 | KILLED_ON_DESIGN |
+| RECOIL | 4,589 | 647 | −0.045 | 0.088 | 0.014 | −0.147 | −13.86 | KILLED_ON_DESIGN |
+
+- The adapters are `research/strategies/legacy.py`: the production classes, unmodified, with point-in-time inputs.
+- The shared research fill model applies: entry at the next bar open with the clamp, the production stop used as an SL-limit, the production targets, the 15:05 policy exit, MIS fees.
+- The production entry-limit prices are not used. That favours fills, so real results would be no better.
+- **No strategy has a positive net edge.** The best gross edge (+0.016R) is about a fifth of the ~0.08R that costs take.
+- All five meet the kill rule Yashu set for ORB_PROD (mean ≤ 0 and t ≤ −2 on the sealed design set); `promotion.kill_on_design` recorded each one.
+- VWAP_RECLAIM has no adapter here. Its earlier probe was negative at every threshold (T0004–T0006); it stays UNVERIFIED.
+
+### B.5 Late data finding: Upstox history is back-adjusted for splits and bonuses
+
+- Checked against the NSE CM bhavcopy (raw traded closes), 83 of 298 stocks agree on under 99% of days, and the ratios are exact split/bonus factors (median 0.5).
+- **21.7% of design** and **5.4% of holdout** eligible stock-days sit on adjusted price levels.
+- Intraday returns and R multiples are scale-free within a day, so the results above stand. Price-level details before an adjustment (₹10 floor, tick grid, share counts behind fees) are slightly off.
+- The 57 design RESID_REV signals on adjusted days averaged −0.093R against −0.019R for the rest. That difference is not significant (SE about 0.08).
+- **Fix before any v2 study:** rescale Upstox bars to bhavcopy price levels (P9 §4).
+
+### B.6 Conclusion
+
+**None of the seven Track 2 strategies tested has a positive net edge as a 15-minute cash MIS strategy:**
+- RESID_REV v1 was **REJECTED** on the holdout (t −3.03).
+- ORB_PROD and the five legacy strategies were **KILLED_ON_DESIGN** (t −6 to −16).
+
+The common cause is structural. A ₹38,000 MIS round trip costs about 0.11–0.13% of price. With stops of 1–2%, that is 0.06–0.13R per trade, and no signal tested earns a gross edge that large.
+
+What could change this:
+- a signal with much larger per-trade expected moves (catalyst or event driven);
+- cheaper execution (maker fills, lower-fee instruments);
+- holding periods long enough for the edge to exceed the fixed round-trip cost.
+
+Each is a new pre-registration on new data (plan P9), not a re-fit of these.

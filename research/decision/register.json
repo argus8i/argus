@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "updated_by": "research/decision/promotion.py (holdout RESID_REV)",
-  "updated_at": "2026-09-26T04:48:21+05:30",
+  "updated_by": "research/decision/promotion.py (KILLED_ON_DESIGN VOL_SQUEEZE)",
+  "updated_at": "2026-09-26T07:49:13+05:30",
   "strategies": {
     "ORB_PROD": {
       "status": "KILLED_ON_DESIGN",
@@ -31,29 +31,34 @@
       "notes": "measured -0.258R n=89 on repo32; not holdout evidence"
     },
     "VOL_SQUEEZE": {
-      "status": "UNVERIFIED",
-      "evidence": "none",
-      "notes": "measured -0.530R n=13 on repo32; not holdout evidence"
+      "status": "KILLED_ON_DESIGN",
+      "evidence": "E1_CF_DESIGN",
+      "notes": "measured -0.530R n=13 on repo32; not holdout evidence",
+      "expected_net_r": -0.07688280294843906
     },
     "TRAPDOOR": {
-      "status": "UNVERIFIED",
-      "evidence": "none",
-      "notes": ""
+      "status": "KILLED_ON_DESIGN",
+      "evidence": "E1_CF_DESIGN",
+      "notes": "",
+      "expected_net_r": -0.09014754871340099
     },
     "LAST_LIGHT": {
-      "status": "UNVERIFIED",
-      "evidence": "none",
-      "notes": ""
+      "status": "KILLED_ON_DESIGN",
+      "evidence": "E1_CF_DESIGN",
+      "notes": "",
+      "expected_net_r": -0.07643209366229066
     },
     "RECOIL": {
-      "status": "UNVERIFIED",
-      "evidence": "none",
-      "notes": ""
+      "status": "KILLED_ON_DESIGN",
+      "evidence": "E1_CF_DESIGN",
+      "notes": "",
+      "expected_net_r": -0.14728303960594114
     },
     "COMPASS": {
-      "status": "UNVERIFIED",
-      "evidence": "none",
-      "notes": ""
+      "status": "KILLED_ON_DESIGN",
+      "evidence": "E1_CF_DESIGN",
+      "notes": "",
+      "expected_net_r": -0.06648097673123687
     },
     "SWEEP_RECLAIM": {
       "status": "UNVERIFIED",

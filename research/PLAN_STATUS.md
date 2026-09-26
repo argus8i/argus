@@ -40,3 +40,12 @@
 | 2026-09-26 | P7 | P7.2c hold-study runner + event study | built | 5a92373 | Waits for the snapshot z*; runs as RESID_REV_NF until board meetings and corporate actions cover the design window |
 | 2026-09-26 | P8 | P8.2 shadow runner `research/shadow/run_day.py` | done | 6861bf6 | Replay of 2026-09-24 on real history: 19/19 ORB_PROD signals identical tick-by-tick vs one-shot. Live run blocked: feed is kite.zerodha.com/oms (rule 1.2.11), 9 symbols |
 | 2026-09-26 | P8 | P8.1 production contract + review request | filed | baa32a1 | 2 guards pass (fees Rs 61.99 both; method names), 6 strict xfails (side/shorts, A1 caps, pending reservation, MIS default, RVOL floor); shared/reviews/track2_decision_engine_review_request_2026-09-26.md |
+| 2026-09-26 | P7 | z* official (sealed snapshot) | done | 7f63611 | z* = 3.00 (T0028) |
+| 2026-09-26 | P7 | ORB_PROD design baseline | KILLED_ON_DESIGN | 7f63611 | n 14,456, net -0.060R (gross -0.003), t -7.40 (T0029) |
+| 2026-09-26 | P7 | P7.2c hold study (RESID_REV_NF) | done | 7f63611 | h EOD by Yashu's highest-t rule; all three h negative net (T0030-T0032) |
+| 2026-09-26 | P7 | P7.3 lock | done | d549fb7, 35d4311 | pushed before any holdout read; p7_report Part A 7c57316 |
+| 2026-09-26 | P7 | P7.4 holdout (once) | **REJECTED** | c835d8c | net -0.124R, t -3.03, gross -0.036R (T0035-T0039) |
+| 2026-09-26 | P7 | P7.5 A1 portfolio simulation | done | c83b431 | holdout book -Rs 9,331 (RESID_REV), -Rs 50,326 (ORB_PROD) |
+| 2026-09-26 | P7 | Other production strategies on design | KILLED_ON_DESIGN x5 | (final) | COMPASS, LAST_LIGHT, TRAPDOOR, VOL_SQUEEZE, RECOIL: t -6.3 to -15.9 (T0044-T0048) |
+| 2026-09-26 | P8 | ShadowRunner, feeds, reconcile | done | 38990db, da82299, bed827b, 882e59a | 590 passed, 6 xfailed; p8_report.md |
+| 2026-09-26 | P9 | Production patch spec, security and data findings, overnight summary | done | (final) | p9_report.md; Kite CDP cookie bridge flagged; Upstox history is split/bonus back-adjusted |
