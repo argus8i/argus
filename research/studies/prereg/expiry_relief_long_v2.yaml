@@ -1,0 +1,52 @@
+# Pre-registration: EXPIRY_RELIEF_LONG v2 (PROSPECTIVE PAPER ONLY). Written 2026-09-26 by Claude.
+# v1 was REJECTED on the holdout (+0.009R, t 0.09); its 5-session drift stayed positive (+0.47% net, t 1.66) but a 3%
+# stop was hit on 46% of trades. v2 widens the stop and drops the target. Choosing that AFTER seeing the holdout makes
+# the historical data unusable as evidence for v2: only trades journaled before their entry session can count.
+# Parsed by research/studies/prereg_io.py (strict YAML subset). Nothing here may change once the first plan is journaled.
+id: EXPIRY_RELIEF_LONG_v2
+status: LOCKED_PROSPECTIVE
+evidence_class: E2_PROSPECTIVE_PAPER
+hypothesis: >
+  F&O stocks that fell 5% or more over the 20 sessions into a monthly stock-futures expiry, bought at the next
+  session's open and held 5 sessions under a 5% stop with no target, earn a positive mean net R after Dhan CNC fees,
+  measured only on trades journaled before their entry session.
+history_for_reference_only:
+  design_2022_2024_stop5_no_target_net_r: 0.3422
+  design_t_by_expiry: 3.14
+  holdout_2024_2026_stop5_no_target_net_r: 0.1609
+  holdout_t_by_expiry: 1.53
+  note: both seen before v2 was written, so neither is evidence for v2
+signal:
+  expiry: a session that is the nearest stock-futures expiry of more than half the stocks with futures that session (NSE F&O bhavcopy, FinInstrmTp STF)
+  r20: product over the 20 sessions ending at the expiry of ClsPric / PrvsClsgPric, minus 1 (split-safe; NSE adjusts PrvsClsgPric on ex-dates)
+  threshold_pct: -5.0
+eligibility_on_entry:
+  - stock futures (STF) listed on the expiry session
+  - series EQ
+  - expiry close >= Rs 10
+  - mean daily traded value over the 20 sessions >= Rs 30 Cr
+  - not in the F&O ban list for the entry session (a missing list blocks the plan; nothing is guessed)
+  - not a known wrong-company series (research/data/universe_build.py WRONG_COMPANY_SERIES)
+  - differences from the research universe (no market-cap band, no ASM/GSM list) are stated, not hidden
+trade:
+  side: BUY
+  product: CNC
+  entry: open of the entry session (pre-open auction order), 1 tick worse
+  stop: {type: SL-M sell, pct_below_entry: 5.0, gap_rule: a session opening at or below the stop fills at its open - 1 tick}
+  target: none
+  exit: close of the 5th session held (the entry session counts as the 1st), 1 tick worse
+  corporate_action_in_hold: VOID (the trade is recorded but excluded from the statistics)
+  simulator: research/studies/expiry_relief.py simulate_long (stop_pct 0.05, target_r none), the design and holdout code
+sizing: {risk_budget_rs: 1500, slot_cap_rs: 38000.00, slot_cap_price: worst_admissible_entry, estimand: unconstrained_per_signal}
+paper_book_view: at most 3 positions per expiry, the 3 lowest r20 (A1 slots), reported alongside
+evidence_rule:
+  prospective: the PLAN journal entry is written before 09:00 IST on the entry session (hash-chained journal)
+  late: anything else is LATE and never counts
+evaluation:
+  review_after_expiries: 12
+  pass: mean net R > 0 and t clustered by expiry >= 2.0 over PROSPECTIVE trades
+  futility_after_expiries: 6
+  futility_rule: stop if mean + 1.2816 x SE (clustered by expiry) < 0
+  live_capital: never from this file; AGENTS.md Rule 1 applies (60 prospective sessions and 20 fillable entries first)
+journal: shared/track2_liquid/paper/expiry_relief_v2/journal.jsonl
+desk: research/shadow/expiry_desk.py (tests research/tests/test_expiry_desk.py)
