@@ -251,3 +251,129 @@ def test_manifest_schema_and_user_agent(temp_archive_dir):
     assert rec["user_agent"] == "CustomTestUA/1.0"
     assert rec["job"] == "JOB1"
     assert rec["dataset"] == "cm_bhavcopy"
+
+
+def test_429_stops_run_immediately(temp_archive_dir):
+    """Rule 6: HTTP 429 must stop all requests immediately without retry."""
+    downloader = NseArchiveDownloader(base_dir=temp_archive_dir, min_interval=0.0)
+    mock_resp = MagicMock()
+    mock_resp.status_code = 429
+    mock_resp.content = b"Too Many Requests"
+
+    with patch.object(downloader.session, "get", return_value=mock_resp):
+        with pytest.raises(StopExecutionError, match="429"):
+            downloader.download_file("cm_bhavcopy", date(2010, 1, 4))
+
+    manifest_records = downloader.load_manifest_records()
+    assert len(manifest_records) == 1
+    assert manifest_records[0]["outcome"] == "STOPPED_429"
+    assert manifest_records[0]["http_status"] == 429
+
+
+def test_timeout_and_5xx_retries(temp_archive_dir):
+    """Rule 8: Retries at most 2 times for timeouts and 5xx, then succeeds or fails."""
+    downloader = NseArchiveDownloader(base_dir=temp_archive_dir, min_interval=0.0)
+    cm_bytes = _create_valid_cm_zip(date(2010, 1, 4))
+
+    resp_500 = MagicMock()
+    resp_500.status_code = 500
+    resp_500.content = b"Internal Server Error"
+
+    resp_200 = MagicMock()
+    resp_200.status_code = 200
+    resp_200.content = cm_bytes
+
+    # Fails first attempt with 500, succeeds on 2nd attempt with 200
+    with patch.object(downloader.session, "get", side_effect=[resp_500, resp_200]):
+        with patch("time.sleep", return_value=None):
+            rec = downloader.download_file("cm_bhavcopy", date(2010, 1, 4))
+
+    assert rec["outcome"] == "SAVED"
+    assert rec["attempt"] == 2
+    assert rec["http_status"] == 200
+
+
+def test_count_today_requests_accumulates_all_attempts(temp_archive_dir):
+    """Rule 5: Cap must count every attempt including retries when loading from manifest."""
+    manifest_path = temp_archive_dir / "manifest.jsonl"
+    rec1 = {
+        "job": "JOB1",
+        "dataset": "cm_bhavcopy",
+        "trade_date": "2010-01-04",
+        "attempt": 3,
+        "outcome": "SAVED",
+        "fetched_at": "2026-09-26T10:00:00+05:30",
+    }
+    rec2 = {
+        "job": "JOB1",
+        "dataset": "fo_bhavcopy",
+        "trade_date": "2010-01-04",
+        "attempt": 2,
+        "outcome": "MISSING_404",
+        "fetched_at": "2026-09-26T10:05:00+05:30",
+    }
+    manifest_path.write_text(json.dumps(rec1) + "\n" + json.dumps(rec2) + "\n", encoding="utf-8")
+
+    downloader = NseArchiveDownloader(base_dir=temp_archive_dir, min_interval=0.0)
+    # rec1 took 3 attempts, rec2 took 2 attempts -> total 5 attempts today
+    assert downloader.requests_today == 5
+
+
+def test_coverage_report_generates_summary_and_tracks_weekends(temp_archive_dir):
+    """Part 3 & Addition C.1: Generates summary file, checks discrepancies, lists untracked weekends."""
+    from scripts.download_nse_archive import generate_coverage_report, KNOWN_WEEKEND_SESSIONS
+
+    assert len(KNOWN_WEEKEND_SESSIONS) >= 2
+    assert "2015-02-28" in KNOWN_WEEKEND_SESSIONS
+    assert "2020-02-01" in KNOWN_WEEKEND_SESSIONS
+
+    # Create dummy records: date 2010-01-04 saved for CM and FO, but missing for MTO (discrepancy)
+    records = [
+        {"dataset": "cm_bhavcopy", "trade_date": "2010-01-04", "outcome": "SAVED"},
+        {"dataset": "fo_bhavcopy", "trade_date": "2010-01-04", "outcome": "SAVED"},
+        {"dataset": "mto", "trade_date": "2010-01-04", "outcome": "MISSING_404"},
+    ]
+
+    summary = generate_coverage_report(
+        records=records,
+        start=date(2010, 1, 1),
+        end=date(2010, 1, 5),
+        out_dir=temp_archive_dir,
+    )
+
+    summary_file = temp_archive_dir / "coverage_summary_2010.txt"
+    assert summary_file.exists()
+    summary_text = summary_file.read_text(encoding="utf-8")
+    assert "Discrepancies" in summary_text
+    assert "2010-01-04" in summary_text
+    assert "Known Weekend Special Sessions" in summary_text
+
+
+def test_forward_download_interleaved_chronological(temp_archive_dir):
+    """Item A.1: Forward download iterates chronologically from start to end date, interleaving CM, FO, MTO."""
+    from scripts.download_nse_archive import run_forward_download
+
+    downloader = NseArchiveDownloader(base_dir=temp_archive_dir, min_interval=0.0)
+    called_sequence = []
+
+    def mock_download(dataset, trade_date):
+        called_sequence.append((trade_date.isoformat(), dataset))
+        return {"outcome": "SAVED", "trade_date": trade_date.isoformat(), "dataset": dataset}
+
+    with patch.object(downloader, "download_file", side_effect=mock_download):
+        run_forward_download(
+            start_date=date(2005, 1, 3),
+            end_date=date(2005, 1, 4),
+            downloader=downloader,
+        )
+
+    expected = [
+        ("2005-01-03", "cm_bhavcopy"),
+        ("2005-01-03", "fo_bhavcopy"),
+        ("2005-01-03", "mto"),
+        ("2005-01-04", "cm_bhavcopy"),
+        ("2005-01-04", "fo_bhavcopy"),
+        ("2005-01-04", "mto"),
+    ]
+    assert called_sequence == expected
+

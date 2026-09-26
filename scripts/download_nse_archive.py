@@ -48,6 +48,18 @@ ARCHIVE_DAILY_CAP = 500
 MAX_RETRIES = 2
 RETRY_BACKOFF_SECONDS = 30.0
 
+# Addition C.1: Known weekend special sessions on NSE (e.g. Budget Saturdays, Diwali Muhurat)
+KNOWN_WEEKEND_SESSIONS = [
+    "2006-10-21",  # Saturday - Diwali Muhurat
+    "2013-11-03",  # Sunday - Diwali Muhurat
+    "2014-02-22",  # Saturday - Special Live Trading
+    "2015-02-28",  # Saturday - Union Budget Session
+    "2016-10-30",  # Sunday - Diwali Muhurat
+    "2019-10-27",  # Sunday - Diwali Muhurat
+    "2020-02-01",  # Saturday - Union Budget Session
+    "2020-11-14",  # Saturday - Diwali Muhurat
+]
+
 DATASETS = {
     "cm_bhavcopy": {
         "job": "JOB1",
@@ -225,9 +237,9 @@ class NseArchiveDownloader:
         for rec in self.load_manifest_records():
             fetched_at = rec.get("fetched_at", "")
             if fetched_at.startswith(today_iso):
-                # Count network requests (not skipped)
+                # Count all network attempts (including retries) made today per Rule 5
                 if rec.get("outcome") != "SKIPPED_ALREADY_SAVED":
-                    count += 1
+                    count += int(rec.get("attempt", 1))
         return count
 
     def load_manifest_records(self) -> List[Dict[str, Any]]:
@@ -477,7 +489,10 @@ def generate_coverage_report(
     end: date,
     out_dir: Path,
 ) -> Dict[str, Any]:
-    """Generates coverage_<dataset>_<YYYY>.csv and returns summary tables."""
+    """
+    Generates coverage_<dataset>_<YYYY>.csv and coverage_summary_<YYYY>.txt.
+    Checks for discrepancies across datasets and lists known weekend special sessions.
+    """
     datasets = ["cm_bhavcopy", "fo_bhavcopy", "mto"]
     summary: Dict[str, Any] = {}
 
@@ -500,7 +515,7 @@ def generate_coverage_report(
         rows = []
         counts = {"SAVED": 0, "MISSING_404": 0, "FAILED": 0, "SKIPPED_ALREADY_SAVED": 0}
         for d in dates:
-            if d.weekday() >= 5:  # skip normal weekends for daily rows, unless traded
+            if d.weekday() >= 5:  # skip normal weekends for daily rows
                 continue
             d_str = d.isoformat()
             weekday_name = d.strftime("%A")
@@ -535,6 +550,62 @@ def generate_coverage_report(
             "rows": rows,
         }
 
+    # Discrepancy detection (Part 3: missing in ONE dataset but present in another)
+    discrepancies = []
+    weekdays = [d for d in dates if d.weekday() < 5]
+    for d in weekdays:
+        d_str = d.isoformat()
+        status_per_ds = {}
+        for ds in datasets:
+            rec = by_ds_date.get((ds, d_str))
+            outc = rec.get("outcome") if rec else "NOT_FETCHED"
+            status_per_ds[ds] = outc
+        saved_count = sum(1 for s in status_per_ds.values() if s in ("SAVED", "SKIPPED_ALREADY_SAVED"))
+        if 0 < saved_count < len(datasets):
+            discrepancies.append((d_str, status_per_ds))
+
+    # Known weekend special sessions (Addition C.1)
+    known_weekends_unfetched = []
+    for ws in KNOWN_WEEKEND_SESSIONS:
+        ws_fetched = any(
+            r.get("trade_date") == ws and r.get("outcome") in ("SAVED", "SKIPPED_ALREADY_SAVED")
+            for r in records
+        )
+        if not ws_fetched:
+            known_weekends_unfetched.append(ws)
+
+    # Write text summary (Part 3 & Addition C.1)
+    summary_file = out_dir / f"coverage_summary_{start.year}.txt"
+    summary_lines = [
+        f"=== Coverage Summary Report ({start.isoformat()} to {end.isoformat()}) ===",
+        f"Expected Weekdays: {len(weekdays)}",
+    ]
+    for ds in datasets:
+        c = summary[ds]["counts"]
+        total_saved = c.get("SAVED", 0) + c.get("SKIPPED_ALREADY_SAVED", 0)
+        summary_lines.append(
+            f"  - {ds}: Saved={total_saved}, Missing_404={c.get('MISSING_404', 0)}, Failed={c.get('FAILED', 0)}"
+        )
+
+    summary_lines.append(f"\nDiscrepancies (missing in 1 dataset but present in another): {len(discrepancies)}")
+    if discrepancies:
+        for d_str, st in discrepancies:
+            summary_lines.append(f"  * {d_str}: {st}")
+    else:
+        summary_lines.append("  None (all datasets consistent across all trading days).")
+
+    summary_lines.append(
+        f"\nKnown Weekend Special Sessions (Addition C.1 - awaiting official calendar in Job 4):"
+    )
+    for kw in known_weekends_unfetched:
+        summary_lines.append(f"  * {kw} (known weekend session, not yet fetched)")
+
+    summary_text = "\n".join(summary_lines) + "\n"
+    summary_file.write_text(summary_text, encoding="utf-8")
+    summary["discrepancies"] = discrepancies
+    summary["known_weekends_unfetched"] = known_weekends_unfetched
+    summary["summary_file"] = str(summary_file)
+
     return summary
 
 
@@ -557,6 +628,50 @@ def _get_first_lines_of_saved_file(file_path: Path, n: int = 3) -> List[str]:
                 return lines
     except Exception as exc:
         return [f"[Error reading file: {exc}]"]
+
+
+def run_forward_download(
+    start_date: date,
+    end_date: date,
+    downloader: Optional[NseArchiveDownloader] = None,
+    datasets: Sequence[str] = ("cm_bhavcopy", "fo_bhavcopy", "mto"),
+    interval: float = MIN_INTERVAL_SECONDS,
+) -> Dict[str, Any]:
+    """
+    Runs chronological forward downloading (A.1: 2005 first, 2021 last),
+    interleaving CM, FO, MTO day-by-day (Part 2 Rule 73).
+    """
+    if downloader is None:
+        downloader = NseArchiveDownloader(min_interval=interval)
+
+    cur = start_date
+    trading_days = []
+    while cur <= end_date:
+        cur_iso = cur.isoformat()
+        if cur.weekday() < 5 or cur_iso in KNOWN_WEEKEND_SESSIONS:
+            trading_days.append(cur)
+        cur += timedelta(days=1)
+
+    stats: Counter = Counter()
+    for td in trading_days:
+        for ds in datasets:
+            try:
+                rec = downloader.download_file(ds, td)
+                outcome = rec.get("outcome", "UNKNOWN")
+                stats[outcome] += 1
+            except StopExecutionError as exc:
+                print(f"Execution halted: {exc}", file=sys.stderr)
+                return {"stats": dict(stats), "stopped": str(exc)}
+
+    # Generate coverage reports per year encountered
+    years = sorted(list(set(d.year for d in trading_days)))
+    all_records = downloader.load_manifest_records()
+    for yr in years:
+        yr_start = max(start_date, date(yr, 1, 1))
+        yr_end = min(end_date, date(yr, 12, 31))
+        generate_coverage_report(all_records, yr_start, yr_end, downloader.base_dir)
+
+    return {"stats": dict(stats), "trading_days": len(trading_days)}
 
 
 def run_pilot(base_dir: Optional[Path] = None, interval: float = MIN_INTERVAL_SECONDS) -> None:
@@ -625,10 +740,24 @@ def run_pilot(base_dir: Optional[Path] = None, interval: float = MIN_INTERVAL_SE
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="NSE Static Archive Downloader")
     ap.add_argument("--pilot", action="store_true", help="Run January 2010 Pilot + 9 spot checks")
+    ap.add_argument("--start-date", help="Start date in YYYY-MM-DD format for forward download")
+    ap.add_argument("--end-date", help="End date in YYYY-MM-DD format for forward download")
+    ap.add_argument("--year", type=int, help="Download a specific year forward")
     ap.add_argument("--interval", type=float, default=MIN_INTERVAL_SECONDS, help="Interval between requests (>= 4.0s)")
     args = ap.parse_args()
 
+    interval = max(MIN_INTERVAL_SECONDS, args.interval)
+
     if args.pilot:
-        run_pilot(interval=max(MIN_INTERVAL_SECONDS, args.interval))
+        run_pilot(interval=interval)
+    elif args.start_date and args.end_date:
+        s_date = date.fromisoformat(args.start_date)
+        e_date = date.fromisoformat(args.end_date)
+        run_forward_download(start_date=s_date, end_date=e_date, interval=interval)
+    elif args.year:
+        s_date = date(args.year, 1, 1)
+        e_date = date(args.year, 12, 31)
+        run_forward_download(start_date=s_date, end_date=e_date, interval=interval)
     else:
-        print("Please specify --pilot to run the pilot.")
+        print("Please specify --pilot to run the pilot, or --start-date and --end-date (or --year) for forward download.")
+
