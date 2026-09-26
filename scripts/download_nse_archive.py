@@ -537,6 +537,27 @@ def generate_coverage_report(
     return summary
 
 
+def _get_first_lines_of_saved_file(file_path: Path, n: int = 3) -> List[str]:
+    """Returns the first n lines of a saved file (inspecting inside zip if zip)."""
+    if not file_path.exists():
+        return [f"[File not found: {file_path}]"]
+    try:
+        if file_path.suffix.lower() == ".zip":
+            with zipfile.ZipFile(file_path) as zf:
+                csv_names = [name for name in zf.namelist() if name.lower().endswith(".csv")]
+                if not csv_names:
+                    return [f"[Zip namelist: {zf.namelist()}]"]
+                with zf.open(csv_names[0]) as cf:
+                    lines = [cf.readline().decode("utf-8", "replace").rstrip() for _ in range(n)]
+                    return lines
+        else:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as fh:
+                lines = [fh.readline().rstrip() for _ in range(n)]
+                return lines
+    except Exception as exc:
+        return [f"[Error reading file: {exc}]"]
+
+
 def run_pilot(base_dir: Optional[Path] = None, interval: float = MIN_INTERVAL_SECONDS) -> None:
     """Executes the January 2010 Pilot and the 9 spot checks."""
     downloader = NseArchiveDownloader(base_dir=base_dir, min_interval=interval)
@@ -573,8 +594,31 @@ def run_pilot(base_dir: Optional[Path] = None, interval: float = MIN_INTERVAL_SE
             rec = downloader.download_file(ds, td)
             print(f"{rec['outcome']} (HTTP {rec['http_status']})", flush=True)
 
-    cov = generate_coverage_report(downloader.load_manifest_records(), start_d, end_d, downloader.base_dir)
+    all_records = downloader.load_manifest_records()
+    cov = generate_coverage_report(all_records, start_d, end_d, downloader.base_dir)
+
+    # Write progress_log.md
+    today_iso = datetime.now(IST).date().isoformat()
+    progress_log_path = downloader.base_dir / "progress_log.md"
+    outcome_counts = Counter(r.get("outcome") for r in all_records)
+    total_bytes = sum(r.get("bytes", 0) for r in all_records if r.get("outcome") in ("SAVED", "SKIPPED_ALREADY_SAVED"))
+    
+    log_entry = (
+        f"\n## {today_iso} (Pilot Run - Jan 2010 + Spot Checks)\n"
+        f"- Host: nsearchives.nseindia.com\n"
+        f"- Requests used today: {downloader.requests_today}\n"
+        f"- Manifest lines recorded: {len(all_records)}\n"
+        f"- Outcomes: {dict(outcome_counts)}\n"
+        f"- Total saved bytes: {total_bytes:,} bytes\n"
+        f"- HTTP 403 / 429 blocks: 0\n"
+        f"- Next step: STOP and await pilot approval per Rule 19.\n"
+    )
+    with open(progress_log_path, "a", encoding="utf-8") as fh:
+        fh.write(log_entry)
+
     print("\n=== PILOT COMPLETE ===", flush=True)
+    print(f"Manifest written to: {downloader.manifest_path}")
+    print(f"Progress log written to: {progress_log_path}")
 
 
 if __name__ == "__main__":
