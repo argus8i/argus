@@ -29,8 +29,9 @@
  "baseline_note": "Commits at or before a checkout's baseline predate the trust system; they were reviewed in prose only and are reported as LEGACY, never as reviewed.",
  "review_ledger": {"root": "main_checkout", "path": "shared/trust/reviews.jsonl"},
  "governed_scope": ["**/*.py", "**/*.yaml", "**/*.yml", "**/*.toml", "**/*.bat", "**/*.ps1", "**/*.cmd",
-                    "**/requirements*.txt", "research/trust/inventory.json"],
- "excluded_scope": ["**/*.md"],
+                    "**/requirements*.txt", "**/*.json", "**/*.csv"],
+ "governed_scope_note": "JSON and CSV added after CODEX-TRUST-P1-001 #2: configs, the decision register and records, and the trials registry change trusted outputs.",
+ "excluded_scope": ["**/*.md", "**/*.log"],
  "track1_log": "CHATGPT/observation_log.csv",
  "track2_ids_forbidden_in_track1_log": ["BAN_ENTRY_SHORT", "EXPIRY_RELIEF_LONG", "PEAD_DRIFT_LONG"]
 }

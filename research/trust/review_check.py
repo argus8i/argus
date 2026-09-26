@@ -61,6 +61,23 @@ def describe(repo: Path, parent: str, commit: str, scope: Sequence[str], exclude
             "patch_sha256": hashlib.sha256(patch).hexdigest(), "files": files}
 
 
+def evidence_ok(tests: Any) -> bool:
+    """Every retained test must have passed (exit 0), and its artifact must exist and hash to the recorded
+    output_sha256 (Codex finding CODEX-TRUST-P1-001 #1: fabricated or failing evidence must not count)."""
+    if not isinstance(tests, list) or not tests:
+        return False
+    for t in tests:
+        try:
+            if int(t.get("exit_code")) != 0:
+                return False
+            art = Path(str(t.get("artifact", "")))
+            if not art.is_file() or hashlib.sha256(art.read_bytes()).hexdigest() != t.get("output_sha256"):
+                return False
+        except (TypeError, ValueError, OSError, AttributeError):
+            return False
+    return True
+
+
 def _valid_ranges(repo: Path, reviews: Iterable[Mapping[str, Any]], scope: Sequence[str],
                   excluded: Sequence[str]) -> List[set]:
     ranges = []
@@ -68,6 +85,8 @@ def _valid_ranges(repo: Path, reviews: Iterable[Mapping[str, Any]], scope: Seque
         if r.get("verdict") != "APPROVED":
             continue
         if str(r.get("reviewer", "")).strip().lower() == str(r.get("author", "")).strip().lower():
+            continue
+        if not evidence_ok(r.get("tests")):
             continue
         try:
             d = describe(repo, r["parent_commit"], r["reviewed_commit"], scope, excluded)

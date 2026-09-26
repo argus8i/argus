@@ -109,8 +109,13 @@ def _commit(r: Path, name: str, text: str, msg: str) -> str:
 
 def _approve(r: Path, parent: str, commit: str, **kw) -> dict:
     d = rc.describe(r, parent, commit, SCOPE, EXCL)
+    log = r.parent / f"evidence_{commit[:8]}.log"
+    log.write_bytes(b"27 passed\n")
+    import hashlib
+    tests = [{"command": "pytest", "exit_code": 0, "artifact": str(log),
+              "output_sha256": hashlib.sha256(log.read_bytes()).hexdigest()}]
     return _review(reviewed_commit=commit, parent_commit=parent, tree_sha=d["tree_sha"],
-                   patch_sha256=d["patch_sha256"], **kw)
+                   patch_sha256=d["patch_sha256"], tests=tests, **kw)
 
 
 def test_governed_scope_matching():
@@ -141,6 +146,26 @@ def test_review_with_wrong_patch_hash_or_self_review_or_rejection_does_not_cover
     good = _approve(repo, base, c1)
     for bad in (dict(good, patch_sha256="0" * 64), dict(good, author="codex"), dict(good, verdict="REJECTED")):
         assert [u["commit"] for u in rc.unreviewed_commits(repo, base, "HEAD", [bad], SCOPE, EXCL)] == [c1]
+
+
+def test_review_evidence_must_exist_match_its_hash_and_pass(repo):
+    base = _git(repo, "rev-parse", "HEAD")
+    c1 = _commit(repo, "b.py", "y = 2\n", "c1")
+    good = _approve(repo, base, c1)
+    assert rc.unreviewed_commits(repo, base, "HEAD", [good], SCOPE, EXCL) == []
+    failing = dict(good, tests=[dict(good["tests"][0], exit_code=1)])
+    missing = dict(good, tests=[dict(good["tests"][0], artifact=str(repo.parent / "nope.log"))])
+    forged = dict(good, tests=[dict(good["tests"][0], output_sha256="f" * 64)])
+    for bad in (failing, missing, forged):
+        assert [u["commit"] for u in rc.unreviewed_commits(repo, base, "HEAD", [bad], SCOPE, EXCL)] == [c1]
+
+
+def test_governed_scope_includes_json_and_csv_contracts():
+    from research.trust.status import load_inventory
+    inv = load_inventory()
+    for f in ("antigravity/config/execution_config.json", "research/decision/register.json",
+              "research/decision/records/X.json", "research/evidence/trials_registry.csv"):
+        assert rc.governed(f, inv["governed_scope"], inv["excluded_scope"]), f
 
 
 def test_range_review_covers_every_commit_in_it(repo):
@@ -215,6 +240,17 @@ def test_exit_class_priority(tmp_path, monkeypatch):
     assert st.run(ctx={}, out_dir=tmp_path)[1] == st.EXIT_MISSING
     monkeypatch.setattr(st, "CHECKS", [("a", lambda ctx: ("PASS", []))])
     assert st.run(ctx={}, out_dir=tmp_path)[1] == 0
+
+
+def test_identity_failure_makes_the_whole_report_an_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(st, "CHECKS", [("a", lambda ctx: ("PASS", []))])
+    def boom():
+        raise OSError("cannot read checker")
+    monkeypatch.setattr(st, "checker_identity", boom)
+    report, code = st.run(ctx={}, out_dir=tmp_path)
+    assert code == st.EXIT_INTERNAL and report["exit_code"] == st.EXIT_INTERNAL
+    assert "exit 4" in report["verdict"]
+    assert any(c["check"] == "checker_identity" and c["status"] == "ERROR" for c in report["checks"])
 
 
 def test_unknown_check_status_is_an_internal_error(tmp_path, monkeypatch):

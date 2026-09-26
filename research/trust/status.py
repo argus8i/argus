@@ -278,14 +278,16 @@ def run(ctx: Optional[Dict[str, Any]] = None, out_dir: Optional[Path] = None) ->
                 details = [f"{type(exc).__name__}: {exc}", traceback.format_exc(limit=3)]
             results.append({"check": name, "status": status, "details": list(details)})
             codes.add(STATUS_EXIT[status])
-    code = next((c for c in PRIORITY if c in codes), EXIT_OK)
+    try:
+        ident = checker_identity()
+    except Exception as exc:                  # CODEX-TRUST-P1-001 #3: an identity failure is an ERROR check too
+        ident = f"UNKNOWN ({type(exc).__name__}: {exc})"
+        results.append({"check": "checker_identity", "status": "ERROR", "details": [ident]})
+        codes.add(EXIT_INTERNAL)
+    code = next((c for c in PRIORITY if c in codes), EXIT_OK)     # decided once, after every check
     s = ctx.get("summary", {})
     verdict = (f"strategies passed: {s.get('strategies_passed', 'UNKNOWN')}; "
                f"live trading: prohibited (AGENTS.md Rule 1); exit {code}")
-    try:
-        ident = checker_identity()
-    except Exception as exc:
-        ident, code = f"UNKNOWN ({exc})", EXIT_INTERNAL
     report = {"generated_at": started.isoformat(timespec="seconds"), "checker_sha256": ident, "exit_code": code,
               "verdict": verdict, "summary": s, "checks": results}
     if out_dir is None:
