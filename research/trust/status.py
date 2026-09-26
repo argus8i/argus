@@ -6,7 +6,7 @@ T1: one command, one truth (trust plan v2, P1).
     python -m research.trust.status            # prints the report, writes <outputs>/trust/status_latest.json
 
 Reads only machine records, never prose (notes, PLAN_STATUS.md, messages, register 'notes' fields, commit messages):
-  strategies  register.json is REBUILT from the append-only decision records (research/decision/records) and must match;
+  strategies  the decision register is REBUILT from the append-only decision records (research/decision/records) and must match;
               every lock verifies; every holdout_done marker is backed by a register entry citing its lock.
   snapshots   every inventory snapshot is fully re-verified (snapshot.verify) against its pinned content hash.
   datasets    every inventory dataset is present (coverage audits arrive in P2).
@@ -60,7 +60,7 @@ def checker_identity() -> str:
 # ---------------------------------------------------------------------------------------------- pure checks
 def reconstruct_register(register: Mapping[str, Any], records: Sequence[Mapping[str, Any]],
                          legacy: Sequence[str]) -> List[str]:
-    """Replay the decision records (oldest first) and compare with register.json. Legacy strategies start
+    """Replay the decision records (oldest first) and compare with the decision register. Legacy strategies start
     UNVERIFIED; any other strategy must enter through a record from None."""
     problems: List[str] = []
     state: Dict[str, Optional[str]] = {s: "UNVERIFIED" for s in legacy}
@@ -76,11 +76,11 @@ def reconstruct_register(register: Mapping[str, Any], records: Sequence[Mapping[
     reg = register.get("strategies", {})
     for sid in sorted(set(reg) | set(state)):
         if sid not in reg:
-            problems.append(f"{sid}: in the decision records but not in register.json")
+            problems.append(f"{sid}: in the decision records but not in the register")
         elif state.get(sid) is None:
-            problems.append(f"{sid}: in register.json without any decision record (not a legacy strategy)")
+            problems.append(f"{sid}: in the register without any decision record (not a legacy strategy)")
         elif reg[sid].get("status") != state[sid]:
-            problems.append(f"{sid}: register.json says {reg[sid].get('status')!r}, the records say {state[sid]!r}")
+            problems.append(f"{sid}: the register says {reg[sid].get('status')!r}, the records say {state[sid]!r}")
     return problems
 
 
@@ -110,7 +110,9 @@ def _root(ctx: Mapping[str, Any], name: str) -> Path:
 def check_strategies(ctx: Mapping[str, Any]) -> Tuple[str, List[str]]:
     from research.studies import prereg_io
 
-    reg = json.loads(Path(ctx["register_path"]).read_text(encoding="utf-8"))
+    from research.decision import promotion
+
+    reg = promotion.load_register(Path(ctx["register_path"]))            # read only, through the one writer
     records = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(Path(ctx["records_dir"]).glob("*.json"))]
     problems = reconstruct_register(reg, records, ctx["inventory"]["legacy_strategies"])
     prereg = Path(ctx["prereg_dir"])
