@@ -57,6 +57,8 @@ from antigravity.daemons.inbox_worker import (
     DurableReplayStore,
 )
 from antigravity.daemons.tri_agent_bus import (
+    send_to_agent,
+    wait_for_agent_response,
     send_to_antigravity,
     get_message_status,
     read_antigravity_response,
@@ -65,6 +67,84 @@ from antigravity.daemons.tri_agent_bus import (
     safe_atomic_file_write_occ,
     ask_antigravity_detailed,
 )
+
+
+@pytest.mark.parametrize("sender,recipient", [
+    ("ANTIGRAVITY", "CLAUDE"),
+    ("ANTIGRAVITY", "CODEX"),
+    ("CLAUDE", "CODEX"),
+    ("CODEX", "CLAUDE"),
+    ("CLAUDE", "ANTIGRAVITY"),
+    ("CODEX", "ANTIGRAVITY"),
+])
+def test_pairwise_signed_ping_routes(msg_test_env, sender, recipient):
+    message_id, correlation_id = send_to_agent(
+        sender=sender, recipient=recipient, subject="PING", body="route check"
+    )
+    assert message_id
+    InboxWorker().run_single_pass()
+    result = wait_for_agent_response(correlation_id, recipient, timeout_sec=2)
+    assert result["success"] is True
+    assert result["response"]["output_payload"]["agent"] == recipient
+    assert result["response"]["responder"] == "ANTIGRAVITY"
+    assert result["response"]["route_agent"] == recipient
+
+
+@pytest.mark.parametrize("recipient,dispatcher", [
+    ("CLAUDE", "ask_claude_detailed"),
+    ("CODEX", "ask_codex_detailed"),
+])
+def test_peer_model_route_uses_recipient_cli(msg_test_env, monkeypatch, recipient, dispatcher):
+    calls = []
+
+    def fake_dispatch(prompt, timeout_sec, min_chars):
+        calls.append((prompt, timeout_sec, min_chars))
+        return {"success": True, "output": f"{recipient}_MODEL_OK", "returncode": 0,
+                "elapsed": 0.01, "error": None}
+
+    monkeypatch.setattr(tab, dispatcher, fake_dispatch)
+    _, correlation_id = send_to_agent(
+        sender="ANTIGRAVITY", recipient=recipient,
+        subject="REVIEW", body="Read-only route test", timeout_sec=5,
+    )
+    InboxWorker().run_single_pass()
+    result = wait_for_agent_response(correlation_id, recipient, timeout_sec=2)
+    assert result["success"] is True
+    assert result["response"]["output_payload"]["model_response"] == f"{recipient}_MODEL_OK"
+    assert calls and "Read-only route test" in calls[0][0]
+
+
+@pytest.mark.parametrize("recipient,dispatcher", [
+    ("CLAUDE", "ask_claude_detailed"),
+    ("CODEX", "ask_codex_detailed"),
+])
+def test_peer_chat_uses_tool_restricted_route(msg_test_env, monkeypatch, recipient, dispatcher):
+    calls = []
+
+    def fake_dispatch(prompt, timeout_sec, min_chars, chat_only=False):
+        calls.append(chat_only)
+        return {"success": True, "output": "PEER_CHAT_OK", "returncode": 0,
+                "elapsed": 0.01, "error": None}
+
+    monkeypatch.setattr(tab, dispatcher, fake_dispatch)
+    _, correlation_id = send_to_agent(
+        sender="ANTIGRAVITY", recipient=recipient,
+        subject="CHAT", body="Discuss the model without tools", timeout_sec=5,
+    )
+    InboxWorker().run_single_pass()
+    result = wait_for_agent_response(correlation_id, recipient, timeout_sec=2)
+    assert result["success"] is True
+    assert calls == [True]
+
+
+def test_peer_response_route_substitution_rejected(msg_test_env):
+    _, correlation_id = send_to_agent(
+        sender="CLAUDE", recipient="CODEX", subject="PING", body="route check"
+    )
+    InboxWorker().run_single_pass()
+    result = wait_for_agent_response(correlation_id, "CLAUDE", timeout_sec=2)
+    assert result["success"] is False
+    assert "recipient" in result["error"].lower() or "route" in result["error"].lower()
 from typing import Any, Dict, Optional
 
 

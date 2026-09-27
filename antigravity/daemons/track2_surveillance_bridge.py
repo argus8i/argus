@@ -98,6 +98,21 @@ def sync_surveillance_to_research(
         meta = sources[kind]
         if not isinstance(meta, dict):
             return {"ok": False, "reason": f"SOURCE_META_NOT_DICT: {kind}"}
+
+        # Enforce HTTP 200 status
+        http_status = meta.get("http_status")
+        if http_status != 200:
+            return {"ok": False, "reason": f"INVALID_HTTP_STATUS_{kind.upper()}: {http_status}"}
+
+        # Enforce official NSE source URL allowlist
+        source_url = meta.get("source_url", "")
+        if not isinstance(source_url, str):
+            return {"ok": False, "reason": f"INVALID_SOURCE_URL_TYPE_{kind.upper()}"}
+        import urllib.parse
+        parsed_url = urllib.parse.urlparse(source_url)
+        if parsed_url.scheme != "https" or (parsed_url.hostname or "").lower() not in {"www.nseindia.com", "nsearchives.nseindia.com"}:
+            return {"ok": False, "reason": f"UNTRUSTED_HOST_{kind.upper()}: {source_url}"}
+
         raw_rel = meta.get("raw_relative_path")
         expected_sha = meta.get("sha256")
         if not raw_rel or not expected_sha:
@@ -118,21 +133,28 @@ def sync_surveillance_to_research(
         verified_bytes[kind] = b
         verified_hashes[kind] = actual_sha
 
+    # Destination immutability check: never overwrite existing files
+    target_asm = target_surv_dir / f"{d_iso}_asm.json"
+    target_gsm = target_surv_dir / f"{d_iso}_gsm.json"
+    target_snap = target_surv_dir / snapshot_filename
+    receipt_path = target_surv_dir / f"bridge_receipt_{d_iso}.json"
+
+    for dest_file in (target_asm, target_gsm, target_snap, receipt_path):
+        if dest_file.exists():
+            return {
+                "ok": False,
+                "reason": f"DESTINATION_FILE_ALREADY_EXISTS_NO_OVERWRITE: {dest_file}",
+            }
+
     # Atomically write target files in research desk canonical layout
     files_written: List[str] = []
     try:
-        # Write <date>_asm.json
-        target_asm = target_surv_dir / f"{d_iso}_asm.json"
         atomic_write_bytes(target_asm, verified_bytes["asm"])
         files_written.append(str(target_asm))
 
-        # Write <date>_gsm.json
-        target_gsm = target_surv_dir / f"{d_iso}_gsm.json"
         atomic_write_bytes(target_gsm, verified_bytes["gsm"])
         files_written.append(str(target_gsm))
 
-        # Write copy of snapshot manifest
-        target_snap = target_surv_dir / snapshot_filename
         atomic_write_bytes(target_snap, snapshot_path.read_bytes())
         files_written.append(str(target_snap))
 

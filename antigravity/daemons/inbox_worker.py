@@ -1,7 +1,7 @@
 r"""
 inbox_worker.py - Antigravity Inbox Worker Daemon & Durable Messaging Processor
 ==============================================================================
-Processes inbound messages sent to ANTIGRAVITY by Claude Code, OpenAI Codex, or User.
+Processes signed messages addressed to Antigravity, Claude Code, or Codex.
 Enforces:
   1. Cryptographic HMAC-SHA256 authentication and nonce replay prevention.
   2. Strict alphanumeric identifier sanitization (^[a-zA-Z0-9_\-]{8,64}$) preventing path injection.
@@ -50,7 +50,7 @@ MAX_ATTEMPTS = 3
 IDENTIFIER_REGEX = re.compile(r"^[a-zA-Z0-9_\-]{8,64}$")
 
 VALID_SENDERS = {"CLAUDE", "CODEX", "ANTIGRAVITY", "USER"}
-VALID_RECIPIENTS = {"ANTIGRAVITY"}
+VALID_RECIPIENTS = {"ANTIGRAVITY", "CLAUDE", "CODEX"}
 VALID_TRACKS = {"TRACK_1", "TRACK_2", "SHARED"}
 VALID_STATUSES = {"CREATED", "CLAIMED", "PROCESSING", "COMPLETED", "FAILED", "TIMED_OUT", "INCOMPLETE", "CONFLICT"}
 
@@ -280,7 +280,7 @@ def canonicalize_envelope(envelope: Dict[str, Any]) -> str:
     for k, v in envelope.items():
         if k in RUNTIME_METADATA_FIELDS or v is None:
             continue
-        if k == "status" and envelope.get("recipient") == "ANTIGRAVITY" and v in ["CLAIMED", "PROCESSING"]:
+        if k == "status" and envelope.get("recipient") in VALID_RECIPIENTS and v in ["CLAIMED", "PROCESSING"]:
             d[k] = "CREATED"
         else:
             d[k] = v
@@ -659,6 +659,7 @@ class InboxWorker:
                 pass
 
         subject = msg.get("subject", "").upper()
+        recipient = msg.get("recipient", "ANTIGRAVITY")
         body = msg.get("body", "")
         track = msg.get("track", "SHARED")
         expected_file = msg.get("expected_response_file")
@@ -666,10 +667,37 @@ class InboxWorker:
 
         # 1. Fast-Path Deterministic Handlers
         if subject in ["PING", "HEALTH_CHECK"]:
-            return "COMPLETED", {"reply": "PONG", "agent": "ANTIGRAVITY", "track": track, "time": get_current_ist()}, {}, None
+            return "COMPLETED", {"reply": "PONG", "agent": recipient, "check": "GATEWAY_ROUTE_ONLY", "track": track, "time": get_current_ist()}, {}, None
 
         if subject == "ECHO":
             return "COMPLETED", {"echo": body}, {}, None
+
+        if recipient in {"CLAUDE", "CODEX"}:
+            # The gateway attests the CLI output; it does not impersonate the peer's
+            # private signing key or claim that its interactive IDE pane was reached.
+            if expected_file:
+                return "INCOMPLETE", None, {}, "PEER_ARTIFACT_UNSUPPORTED: Review messages are read-only."
+            from antigravity.daemons import tri_agent_bus as bus
+            dispatch = bus.ask_claude_detailed if recipient == "CLAUDE" else bus.ask_codex_detailed
+            prompt = (
+                f"Signed Nexus message from {msg.get('sender')} to {recipient}. "
+                "This dispatch is for discussion/review only: do not edit files, "
+                "place orders, or dispatch other agents.\n"
+                f"Subject: {msg.get('subject')}\nBody: {body}\nTrack: {track}"
+            )
+            timeout_sec = max(1, min(int(msg.get("timeout_sec", 120)), 900))
+            dispatch_kwargs = {"timeout_sec": timeout_sec, "min_chars": 1}
+            if subject == "CHAT":
+                dispatch_kwargs["chat_only"] = True
+            result = dispatch(prompt, **dispatch_kwargs)
+            if not result.get("success"):
+                return "FAILED", result.get("output"), {}, result.get("error") or "Peer CLI failed."
+            return "COMPLETED", {
+                "agent": recipient,
+                "model_response": result.get("output"),
+                "transport": "HEADLESS_CLI",
+                "elapsed_sec": result.get("elapsed", 0.0),
+            }, {}, None
 
         if subject == "INSPECT_FILE":
             valid, abs_path, err = validate_path_security(body if isinstance(body, str) else None, track)
@@ -766,7 +794,10 @@ class InboxWorker:
         corr_id = msg.get("correlation_id", uuid.uuid4().hex)
         safe_corr_name = get_safe_filename(corr_id, "_resp.json")
         outbox_file = os.path.join(OUTBOX_DIR, safe_corr_name)
-        antigravity_key = get_agent_secret_key("ANTIGRAVITY") or "antigravity_default_secure_secret_key_2026"
+        antigravity_key = get_agent_secret_key("ANTIGRAVITY")
+        if not antigravity_key:
+            raise RuntimeError("Antigravity gateway signing key is unavailable")
+        route_agent = msg.get("recipient")
 
         # 1. Schema, Identifier, and Authentication Validation
         is_valid, schema_err = validate_message_schema(msg)
@@ -776,6 +807,7 @@ class InboxWorker:
                 "message_id": f"resp_{uuid.uuid4().hex[:12]}",
                 "correlation_id": corr_id,
                 "responder": "ANTIGRAVITY",
+                "route_agent": route_agent,
                 "status": "FAILED",
                 "created_at_ist": get_current_ist(),
                 "completed_at_ist": get_current_ist(),
@@ -795,6 +827,7 @@ class InboxWorker:
                 "message_id": f"resp_{uuid.uuid4().hex[:12]}",
                 "correlation_id": corr_id,
                 "responder": "ANTIGRAVITY",
+                "route_agent": route_agent,
                 "status": "INCOMPLETE",
                 "created_at_ist": get_current_ist(),
                 "completed_at_ist": get_current_ist(),
@@ -827,6 +860,7 @@ class InboxWorker:
             "message_id": f"resp_{uuid.uuid4().hex[:12]}",
             "correlation_id": corr_id,
             "responder": "ANTIGRAVITY",
+            "route_agent": route_agent,
             "status": status,
             "created_at_ist": get_current_ist(),
             "completed_at_ist": get_current_ist(),

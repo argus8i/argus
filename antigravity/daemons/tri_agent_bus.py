@@ -41,6 +41,8 @@ from antigravity.daemons.inbox_worker import (
     load_auth_config,
     get_agent_secret_key,
     get_safe_filename,
+    VALID_SENDERS,
+    VALID_RECIPIENTS,
     FileLock,
     DurableReplayStore,
     InboxWorker
@@ -89,6 +91,10 @@ CODEX_BIN = get_codex_bin()
 AGY_BIN = get_antigravity_bin()
 WORKSPACE = r"c:\Users\yashw\swing trades"
 from antigravity.daemons.agent_access import prepare_dispatch, TASK_BOUNDARIES
+CHAT_BOUNDARIES = (
+    "Nexus conversation only. Do not use tools, edit files, place orders, "
+    "or claim to have inspected the repository. Answer from the signed message text only.\n"
+)
 LOGS_DIR = os.path.join(WORKSPACE, "antigravity", "logs")
 DIALOGUE_MD = os.path.join(LOGS_DIR, "tri_agent_dialogue.md")
 DIALOGUE_JSONL = os.path.join(LOGS_DIR, "tri_agent_dialogue.jsonl")
@@ -282,7 +288,8 @@ def validate_reviewer_output(
     return None
 
 
-def ask_claude_detailed(prompt: str, timeout_sec: int = 300, min_chars: int = MIN_REVIEW_CHARS) -> Dict[str, Any]:
+def ask_claude_detailed(prompt: str, timeout_sec: int = 300, min_chars: int = MIN_REVIEW_CHARS,
+                        chat_only: bool = False) -> Dict[str, Any]:
     """Invokes Claude Code non-interactively in the workspace with structured returncode tracking."""
     recipient = "Claude Code"
     dispatch_id = begin_dispatch(recipient, prompt)
@@ -292,8 +299,10 @@ def ask_claude_detailed(prompt: str, timeout_sec: int = 300, min_chars: int = MI
         return {"success": False, "output": err, "returncode": 1, "elapsed": 0.0, "error": err}
     t0 = time.time()
     try:
+        cli_flags = ["--tools", ""] if chat_only else prepare_dispatch("CLAUDE")
+        boundary = CHAT_BOUNDARIES if chat_only else TASK_BOUNDARIES
         proc = subprocess.run(
-            [CLAUDE_BIN, *prepare_dispatch("CLAUDE"), "-p", TASK_BOUNDARIES + prompt],
+            [CLAUDE_BIN, *cli_flags, "-p", boundary + prompt],
             cwd=WORKSPACE,
             capture_output=True,
             text=True,
@@ -330,7 +339,8 @@ def ask_claude(prompt: str, timeout_sec: int = 180) -> str:
     return ask_claude_detailed(prompt, timeout_sec)["output"]
 
 
-def ask_codex_detailed(prompt: str, timeout_sec: int = 300, min_chars: int = MIN_REVIEW_CHARS) -> Dict[str, Any]:
+def ask_codex_detailed(prompt: str, timeout_sec: int = 300, min_chars: int = MIN_REVIEW_CHARS,
+                       chat_only: bool = False) -> Dict[str, Any]:
     """Invokes OpenAI Codex non-interactively and returns its final message.
 
     Deliberately does NOT use subprocess pipes. codex.exe spawns children
@@ -361,11 +371,13 @@ tokens used
 
     try:
         with open(console_path, "w", encoding="utf-8") as console:
+            cli_flags = ["--sandbox", "read-only"] if chat_only else prepare_dispatch("CODEX")
+            boundary = CHAT_BOUNDARIES if chat_only else TASK_BOUNDARIES
             proc = subprocess.run(
                 [CODEX_BIN, "exec", "--skip-git-repo-check", "--ephemeral",
-                 *prepare_dispatch("CODEX"),
+                 *cli_flags,
                  "--output-last-message", last_message_path, "-"],
-                input=TASK_BOUNDARIES + prompt,
+                input=boundary + prompt,
                 cwd=WORKSPACE,
                 stdout=console,
                 stderr=subprocess.STDOUT,
@@ -516,7 +528,7 @@ def broadcast(prompt: str) -> Dict[str, str]:
 # Durable Bidirectional Messaging API (Antigravity Inbox / Outbox Protocol)
 # ==============================================================================
 
-def send_to_antigravity(
+def send_to_agent(
     sender: str,
     subject: str,
     body: Any,
@@ -530,12 +542,17 @@ def send_to_antigravity(
     timeout_sec: float = 120.0,
     message_id: Optional[str] = None,
     auth_secret: Optional[str] = None,
-    nonce: Optional[str] = None
+    nonce: Optional[str] = None,
+    recipient: str = "ANTIGRAVITY",
 ) -> Tuple[str, str]:
     """
-    Enqueues an authenticated, immutable message in Antigravity's inbox.
+    Enqueues an authenticated message for any Nexus peer via the gateway inbox.
     Returns: (message_id, correlation_id)
     """
+    if sender not in VALID_SENDERS:
+        raise ValueError(f"Unknown sender: {sender}")
+    if recipient not in VALID_RECIPIENTS:
+        raise ValueError(f"Unknown recipient: {recipient}")
     ensure_directories()
     msg_id = message_id or f"msg_{int(time.time())}_{uuid.uuid4().hex[:12]}"
     corr_id = correlation_id or f"corr_{int(time.time())}_{uuid.uuid4().hex[:12]}"
@@ -554,14 +571,16 @@ def send_to_antigravity(
             return msg_id, corr_id
 
     # Load sender secret key from external storage
-    secret_key = auth_secret or get_agent_secret_key(sender) or load_auth_config().get("secret_key", "")
+    secret_key = auth_secret or get_agent_secret_key(sender)
+    if not secret_key:
+        raise RuntimeError(f"No signing key configured for sender {sender}")
     msg_nonce = nonce or uuid.uuid4().hex
 
     envelope = {
         "message_id": msg_id,
         "correlation_id": corr_id,
         "sender": sender,
-        "recipient": "ANTIGRAVITY",
+        "recipient": recipient,
         "track": track,
         "created_at_ist": get_current_ist(),
         "subject": subject,
@@ -583,6 +602,11 @@ def send_to_antigravity(
     inbox_path = os.path.join(INBOX_DIR, safe_msg_file)
     write_json_atomic(inbox_path, envelope)
     return msg_id, corr_id
+
+
+def send_to_antigravity(*args: Any, **kwargs: Any) -> Tuple[str, str]:
+    """Backward-compatible Antigravity route."""
+    return send_to_agent(*args, recipient="ANTIGRAVITY", **kwargs)
 
 
 def get_message_status(message_id: str, correlation_id: Optional[str] = None) -> Dict[str, Any]:
@@ -731,6 +755,35 @@ def wait_for_antigravity_response(
     }
 
 
+def wait_for_agent_response(
+    correlation_id: str,
+    recipient: str,
+    timeout_sec: float = 30.0,
+    poll_interval_sec: float = 0.25,
+    auto_process_worker: bool = False,
+    **verification: Any,
+) -> Dict[str, Any]:
+    """Wait for a signed gateway response and verify which peer was routed."""
+    if recipient not in VALID_RECIPIENTS:
+        raise ValueError(f"Unknown recipient: {recipient}")
+    result = wait_for_antigravity_response(
+        correlation_id,
+        timeout_sec=timeout_sec,
+        poll_interval_sec=poll_interval_sec,
+        auto_process_worker=auto_process_worker,
+        expected_responder="ANTIGRAVITY",
+        **verification,
+    )
+    response = result.get("response")
+    if response and result.get("verification", {}).get("verified"):
+        actual = response.get("route_agent")
+        if actual != recipient:
+            result["success"] = False
+            result["status"] = "ROUTE_MISMATCH"
+            result["error"] = f"Response route mismatch: expected recipient {recipient}, got {actual}"
+    return result
+
+
 def verify_task_completion(
     response: Optional[Dict[str, Any]],
     expected_file: Optional[str] = None,
@@ -785,15 +838,21 @@ def verify_task_completion(
         }
 
     resp_key = get_agent_secret_key(actual_responder)
-    if resp_key:
-        expected_sig = compute_envelope_hmac(response, resp_key)
-        if not hmac.compare_digest(response.get("auth_signature", ""), expected_sig):
-            return {
-                "verified": False,
-                "status": "AUTH_FAILED",
-                "reason": "Response cryptographic HMAC signature verification failed.",
-                "artifact_hashes": response.get("artifact_hashes", {})
-            }
+    if not resp_key:
+        return {
+            "verified": False,
+            "status": "AUTH_FAILED",
+            "reason": f"No signing key configured for responder '{actual_responder}'.",
+            "artifact_hashes": response.get("artifact_hashes", {})
+        }
+    expected_sig = compute_envelope_hmac(response, resp_key)
+    if not hmac.compare_digest(response.get("auth_signature", ""), expected_sig):
+        return {
+            "verified": False,
+            "status": "AUTH_FAILED",
+            "reason": "Response cryptographic HMAC signature verification failed.",
+            "artifact_hashes": response.get("artifact_hashes", {})
+        }
 
     # 3. Correlation ID Verification
     if expected_correlation_id and response.get("correlation_id") != expected_correlation_id:
