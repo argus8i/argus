@@ -34,6 +34,9 @@ CHAIN_TOLERANCE = 0.001
 MIN_COMMON = 20
 MIN_SHARE = 0.90
 MAX_ENTRY_SEARCH_DAYS = 7
+# NSE ASM/GSM surveillance lists (raw NSE API JSON, fetched each trading evening by the data pipeline) are required for
+# plan days from this date on; history before it has none, so a plan there states NO_SURVEILLANCE_LIST_ERA.
+SURVEILLANCE_FROM = date(2026, 9, 28)
 
 
 # NSE's pre-UDiFF bhavcopies (every file before 8 Jul 2024, and the whole 2005-2021 archive) use other column names.
@@ -224,6 +227,26 @@ class MarketFiles:
             return None
         when, syms = parse_ban_csv(_bytes(p).decode("utf-8", errors="replace"))
         return set(syms) if when == d else None
+
+    def surveillance_path(self, d: date, kind: str) -> Path:
+        return self.h / "raw" / "nse" / "surveillance" / f"{d.isoformat()}_{kind}.json"
+
+    def surveillance_required(self, d: date) -> bool:
+        return d >= SURVEILLANCE_FROM
+
+    def surveillance(self, d: date) -> Optional[Set[str]]:
+        """Symbols on NSE's ASM (long- and short-term) or GSM list as fetched on session d, or None when either file
+        is missing or not the expected shape (fail closed: never read as 'nobody is under surveillance')."""
+        import json
+
+        try:
+            asm = json.loads(self.surveillance_path(d, "asm").read_text(encoding="utf-8"))
+            gsm = json.loads(self.surveillance_path(d, "gsm").read_text(encoding="utf-8"))
+            rows = list(asm["longterm"]["data"]) + list(asm["shortterm"]["data"]) + list(gsm)
+            syms = {str(r["symbol"]).strip() for r in rows}
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        return syms if all(syms) else None
 
     # ------------------------------------------------------------------------------------------ calendar
     def entry_session(self, day: date) -> Tuple[Optional[date], List[date]]:

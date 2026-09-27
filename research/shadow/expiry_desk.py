@@ -125,6 +125,12 @@ class ExpiryReliefV2(PaperStrategy):
         if ban is None:
             return {**base, "status": "BLOCKED", "reason": f"no ban list for the entry session {entry} (fail closed)"}
         base["assumptions"] = assumptions
+        surv = md.surveillance(expiry)                   # ASM/GSM as fetched on the plan day (decision A, 27 Sep)
+        if surv is None:
+            if md.surveillance_required(expiry):
+                return {**base, "status": "BLOCKED", "reason": f"no ASM/GSM list for {expiry} (fail closed)"}
+            surv = set()
+            assumptions.append("NO_SURVEILLANCE_LIST_ERA")
         i = ss.index(expiry)
         if i < LOOKBACK - 1:
             return {**base, "status": "INSUFFICIENT_HISTORY", "reason": f"fewer than {LOOKBACK} sessions to {expiry}"}
@@ -141,6 +147,10 @@ class ExpiryReliefV2(PaperStrategy):
         files[md.rel(md.fo_path(expiry))] = sha256_file(md.fo_path(expiry))
         if md.ban_path(entry).exists():
             files[md.rel(md.ban_path(entry))] = sha256_file(md.ban_path(entry))
+        for kind in ("asm", "gsm"):
+            sp = md.surveillance_path(expiry, kind)
+            if sp.exists():
+                files[md.rel(sp)] = sha256_file(sp)
         cm = pd.concat(frames)
         futures = set(fo.loc[fo.FinInstrmTp == "STF", "TckrSymb"])
         wrong = set(ub.WRONG_COMPANY_SERIES)
@@ -160,6 +170,8 @@ class ExpiryReliefV2(PaperStrategy):
                 excluded[sym] = "PRICE_BELOW_10"
             elif turnover_cr < MIN_TURNOVER_CR:
                 excluded[sym] = "TURNOVER_BELOW_30CR"
+            elif sym in surv:
+                excluded[sym] = "ASM_GSM"
             elif sym in ban:
                 excluded[sym] = "FO_BAN_ON_ENTRY"
             elif r20 <= DROP_PCT:

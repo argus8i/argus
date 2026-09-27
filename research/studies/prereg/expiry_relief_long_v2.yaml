@@ -27,7 +27,10 @@ eligibility_on_entry:
   - mean daily traded value over the 20 sessions >= Rs 30 Cr
   - not in the F&O ban list for the entry session (a missing list blocks the plan; nothing is guessed)
   - not a known wrong-company series (research/data/universe_build.py WRONG_COMPANY_SERIES)
-  - differences from the research universe (no market-cap band, no ASM/GSM list) are stated, not hidden
+  - not on the NSE ASM (long or short term) or GSM list fetched on the expiry evening (history/raw/nse/surveillance, one file each); a missing list blocks the plan
+  - no market-cap band, because AGENTS.md Rule 11 as amended on 2026-09-27 (Yashu, decision A) applies the Rs 4,000-75,000 Cr market-cap band to the ORB family only
+amendments:
+  - 2026-09-27, before any plan was journaled - ASM/GSM exclusion added and the market-cap band ruled out (Yashu decision A after Codex CODEX-FRAMEWORK-001 A3); history before 2026-09-28 has no lists, so backtests there state NO_SURVEILLANCE_LIST_ERA
 trade:
   side: BUY
   product: CNC

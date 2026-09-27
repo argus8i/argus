@@ -286,3 +286,64 @@ def test_is_plan_day_only_on_the_expiry_or_when_the_fo_file_is_missing(hist):
 
 def test_the_evaluation_numbers_come_from_the_preregistration():
     assert ed.ExpiryReliefV2().evaluation == {"review_after": 12, "futility_after": 6, "t_pass": 2.0}
+
+
+# ------------------------------------------------------------------ ASM/GSM gate (Yashu decision A, 27 Sep 2026)
+def _surv(h: Path, d: date, asm=(), gsm=()) -> None:
+    """Raw NSE API JSON as the evening job saves it: history/raw/nse/surveillance/<D>_asm.json and <D>_gsm.json."""
+    import json
+
+    p = h / "raw" / "nse" / "surveillance"
+    p.mkdir(parents=True, exist_ok=True)
+    row = lambda s: {"symbol": s, "isin": "X", "companyName": s, "survCode": "X"}
+    (p / f"{d.isoformat()}_asm.json").write_text(json.dumps(
+        {"longterm": {"data": [row(s) for s in asm]}, "shortterm": {"data": []}}), encoding="utf-8")
+    (p / f"{d.isoformat()}_gsm.json").write_text(json.dumps([row(s) for s in gsm]), encoding="utf-8")
+
+
+def test_surveillance_lists_are_read_and_a_missing_one_is_none(hist):
+    from research.framework.market import MarketFiles
+
+    h, e = hist["history"], hist["expiry"]
+    assert MarketFiles(h).surveillance(e) is None
+    _surv(h, e, asm=["FALL"], gsm=["OTHER"])
+    assert MarketFiles(h).surveillance(e) == {"FALL", "OTHER"}
+    (h / "raw" / "nse" / "surveillance" / f"{e.isoformat()}_gsm.json").write_text("not json", encoding="utf-8")
+    assert MarketFiles(h).surveillance(e) is None                        # unreadable is missing (fail closed)
+
+
+def test_a_stock_on_asm_or_gsm_is_excluded(hist, monkeypatch):
+    from research.framework import market
+
+    monkeypatch.setattr(market, "SURVEILLANCE_FROM", date(2026, 1, 1))
+    h, e = hist["history"], hist["expiry"]
+    _ban(h, hist["days"][21], [])
+    _surv(h, e, asm=["FALL"])
+    p = ed.build_plan(h, e, hist["days"][21])
+    assert p["status"] == "OK" and p["excluded"]["FALL"] == "ASM_GSM"
+    assert "FALL" not in [s["symbol"] for s in p["signals"]]
+
+
+def test_a_missing_surveillance_list_blocks_a_live_era_plan(hist, monkeypatch):
+    from research.framework import market
+
+    monkeypatch.setattr(market, "SURVEILLANCE_FROM", date(2026, 1, 1))
+    h, e = hist["history"], hist["expiry"]
+    _ban(h, hist["days"][21], [])
+    p = ed.build_plan(h, e, hist["days"][21])
+    assert p["status"] == "BLOCKED" and "ASM/GSM" in p["reason"]
+
+
+def test_before_the_lists_were_collected_the_plan_states_the_assumption(hist):
+    h, e = hist["history"], hist["expiry"]                              # August 2026: before SURVEILLANCE_FROM
+    _ban(h, hist["days"][21], [])
+    p = ed.build_plan(h, e, hist["days"][21])
+    assert p["status"] == "OK" and "NO_SURVEILLANCE_LIST_ERA" in p["assumptions"]
+
+
+def test_the_market_cap_band_is_not_a_condition_of_this_strategy():
+    """Decision A: the Rs 4,000-75,000 Cr band is for the ORB family only (AGENTS.md Rule 11 as amended)."""
+    from research.studies import prereg_io
+
+    elig = " ".join(prereg_io.load(ed.prereg_path())["eligibility_on_entry"]).lower()
+    assert "asm" in elig and "gsm" in elig and "market-cap band" in elig and "orb family only" in elig

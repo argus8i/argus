@@ -54,6 +54,9 @@ def market_status(md: MarketFiles, day: date) -> Dict[str, Any]:
                                 "previous closes match): a session file is missing")
             elif ch["ok"] is None:
                 problems.append(f"cannot verify that {day} follows {prev[-1]} ({ch.get('reason')})")
+    if has_cm and md.surveillance_required(day) and md.surveillance(day) is None:
+        problems.append(f"no readable ASM/GSM lists for {day} in history/raw/nse/surveillance "
+                        "(a plan tonight would be BLOCKED)")
     nxt, skipped = md.entry_session(day)
     if nxt is None:
         notes.append("no ban list for the next session yet (a plan tonight would be BLOCKED)")

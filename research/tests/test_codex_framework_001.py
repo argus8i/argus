@@ -124,8 +124,13 @@ def test_backdated_now_cannot_create_prospective_plan(tmp_path):                
     assert row["evidence"] != "PROSPECTIVE"
 
 
-@pytest.mark.xfail(strict=True, reason="A3: Track 2 market-cap / ASM-GSM gates await Yashu's decision (see top)")
-def test_track2_plan_blocks_without_asm_gsm_and_market_cap(tmp_path):              # A3
+def test_track2_plan_blocks_without_asm_gsm_and_market_cap(tmp_path, monkeypatch):  # A3, resolved by decision A
+    """Superseded by Yashu's decision A (27 Sep 2026): AGENTS.md Rule 11 now applies the market-cap band to the ORB
+    family only, and the expiry pre-registration adds the ASM/GSM exclusion. So the probe's intent now reads: a
+    live-era plan WITHOUT the ASM/GSM lists must block (the market-cap part no longer applies to this strategy)."""
+    from research.framework import market
+
+    monkeypatch.setattr(market, "SURVEILLANCE_FROM", date(2026, 1, 1))
     fixture = make_history.__wrapped__(tmp_path)
     entry = fixture["days"][21]
     _ban(fixture["history"], entry, [])

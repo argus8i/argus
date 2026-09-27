@@ -79,6 +79,12 @@ class ArchiveMarket(MarketFiles):
     def ban(self, d: date) -> Optional[Set[str]]:
         return None
 
+    def surveillance_required(self, d: date) -> bool:        # no ASM/GSM history exists for the archive years
+        return False
+
+    def surveillance(self, d: date) -> Optional[Set[str]]:
+        return None
+
     def uncovered(self, start: date, end: date) -> List[date]:
         """Weekdays in [start, end] for which the manifest has no CM outcome at all (neither SAVED nor a 404)."""
         out, d = [], start
