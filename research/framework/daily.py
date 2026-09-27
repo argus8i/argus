@@ -124,7 +124,7 @@ def run(day: date, *, history: Optional[Path] = None, strategies: Optional[List[
         report_dir: Optional[Path] = None, now: Optional[datetime] = None, code: Optional[Dict[str, Any]] = None,
         check_git: bool = True, check_location: bool = True, write: bool = True,
         audit_cache: Optional[Path] = None) -> Dict[str, Any]:
-    now_arg, code_arg = now, code                 # passed to the desk only as given (desk.ALLOW_INJECTED, A4)
+    now_arg, code_arg = now, code                 # passed on as given; the desk never trusts them (A4, -002)
     now = now or datetime.now(IST)
     h = Path(history) if history else history_root()
     md = MarketFiles(h)
@@ -135,13 +135,16 @@ def run(day: date, *, history: Optional[Path] = None, strategies: Optional[List[
                            "market": market_status(md, day), "download": download_status(h, day), "strategies": {}}
     rep["archive_audit"] = archive_audit_status(h, audit_cache)
     loaded = rules.block_broker_imports()          # A7: the runtime paper-only boundary
-    if loaded:
-        rep["market"]["problems"].append(f"broker SDK modules already loaded in this process: {loaded}")
+    if loaded:                                    # -002: a loaded SDK can no longer be stopped, so nothing runs
+        rep["market"]["problems"].append(f"REFUSED: broker SDK modules already loaded in this process {loaded}; "
+                                         "nothing was planned or scored (paper only, AGENTS.md Rule 1)")
     if not strategies:                            # CODEX-FRAMEWORK-001 A8: nothing checked is not "all clean"
         rep["market"]["problems"].append("no paper strategy is registered: nothing was planned or scored")
     exit_code = EXIT_ATTENTION if (rep["market"]["problems"] or rep["download"].get("warnings")
                                    or rep["archive_audit"].get("verdict") == "FAIL") else EXIT_OK
-    for s in strategies:
+    if loaded:
+        exit_code = EXIT_REFUSED
+    for s in (strategies if not loaded else []):
         st: Dict[str, Any] = {"problems": rules.strategy_problems(s, check_git=check_git,
                                                                   check_location=check_location)}
         rep["strategies"][s.id] = st

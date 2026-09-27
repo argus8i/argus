@@ -71,15 +71,30 @@ def _mto_date(content: bytes) -> Optional[str]:
     return None
 
 
+# Every column a strategy or the desk reads (UDiFF names; legacy files are mapped). A file without one of them is
+# not usable market data, whatever its date says (CODEX-FRAMEWORK-002).
+REQUIRED = {"cm_bhavcopy": ("TckrSymb", "SctySrs", "OpnPric", "HghPric", "LwPric", "ClsPric", "PrvsClsgPric",
+                            "TtlTrfVal", "TradDt"),
+            "fo_bhavcopy": ("TckrSymb", "FinInstrmTp", "XpryDt", "ClsPric", "TradDt")}
+MTO_MIN_FIELDS = 7
+
+
 def _check_bytes(raw: bytes, dataset: str, source: str) -> Dict[str, Any]:
     """{'dates': set of ISO dates inside, 'rows': n} or {'error': ...}, from exactly the bytes that were hashed.
-    Reads only the date column (fast), after checking the header is a real bhavcopy header."""
+    Reads only the required columns, and refuses a file that lacks any of them."""
     try:
         if dataset == "mto":
-            d = _mto_date(unpack(raw, source))
-            return {"dates": {d} if d else set(), "rows": 1 if d else 0}
-        df = parse_bhavcopy(raw, source, columns=("TradDt",))
-        return {"dates": set(df["TradDt"]) if "TradDt" in df else set(), "rows": int(len(df))}
+            content = unpack(raw, source)
+            d = _mto_date(content)
+            rows = sum(1 for ln in content.decode("utf-8", errors="replace").splitlines()
+                       if ln.startswith("20,") and len(ln.split(",")) >= MTO_MIN_FIELDS)
+            return {"dates": {d} if d else set(), "rows": rows}
+        need = REQUIRED[dataset]
+        df = parse_bhavcopy(raw, source, columns=need)
+        missing = [c for c in need if c not in df.columns]
+        if missing:
+            return {"error": f"MISSING_COLUMNS {missing}"}
+        return {"dates": set(df["TradDt"]), "rows": int(len(df))}
     except Exception as exc:                          # BadZipFile, UnknownFormat, parse errors: all UNREADABLE
         return {"error": f"{type(exc).__name__}: {exc}"}
 
@@ -196,7 +211,8 @@ def audit(history: Path, cache: Optional[Path] = None, expected: tuple = EXPECTE
     for (ds, td) in by_key:
         coverage[str(td)[:4]][ds] += 1
     # ---- completeness (CODEX-FRAMEWORK-001 A1): PASS means complete, never "clean so far"
-    cm_done = {date.fromisoformat(td) for td, per in outcome.items() if len(td) == 10 and "cm_bhavcopy" in per}
+    # a weekday is accounted for only when ALL THREE datasets have an outcome for it (CODEX-FRAMEWORK-002)
+    cm_done = {date.fromisoformat(td) for td, per in outcome.items() if len(td) == 10 and set(DATASETS) <= set(per)}
     lo, hi = expected
     want = [lo + timedelta(days=k) for k in range((hi - lo).days + 1)]
     want = [d for d in want if d.weekday() < 5]

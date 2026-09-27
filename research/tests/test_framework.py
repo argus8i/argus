@@ -71,11 +71,21 @@ def _market(h: Path, days: list, skip=()) -> None:
         _ban(h, d)
 
 
-
 @pytest.fixture(autouse=True)
-def _trusted_test_clock(monkeypatch):
-    """Tests supply their own clock and code identity; production never may (CODEX-FRAMEWORK-001 A4)."""
-    monkeypatch.setattr(desk, "ALLOW_INJECTED", True)
+def _test_clock(monkeypatch):
+    """The desk never trusts a passed `now` or `code` (CODEX-FRAMEWORK-002). These tests say when a plan is written by
+    setting the desk's own clock and code state for the call; production code has no such path."""
+    real_plan = desk.plan
+
+    def plan_at(*args, now=None, code=None, **kwargs):
+        if now is not None:
+            monkeypatch.setattr(desk, "wall_clock", lambda: now)
+        if code is not None:
+            monkeypatch.setattr(desk, "code_state", lambda: code)
+        return real_plan(*args, **kwargs)
+
+    monkeypatch.setattr(desk, "plan", plan_at)
+
 
 class ToyShort(PaperStrategy):
     id = "TOY_SHORT_v1"

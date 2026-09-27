@@ -17,11 +17,12 @@ same rules here, so no strategy can grade its own homework:
              evaluation decision on PROSPECTIVE results only (evaluate.decide with the pre-registered numbers).
 
 Two guards from CODEX-FRAMEWORK-001:
-  A2  plan and reconcile run under an exclusive lock file next to the journal (<journal>.lock), across threads and
-      processes, so two desks can never both read "not scored yet" and both score. A lock older than 30 minutes is
-      stale (a desk run takes seconds) and is replaced; a live one is waited for, up to 2 minutes, then refused.
-  A4  a PROSPECTIVE plan uses the real wall clock and the real code state. A caller-supplied `now` or `code` makes
-      the row INJECTED_CLOCK_OR_CODE (LATE) unless ALLOW_INJECTED is set, which only the tests do.
+  A2  plan and reconcile run under an operating-system lock on <journal>.lock, across threads and processes, so two
+      desks can never both read "not scored yet" and both score. The OS releases it if the holder dies, so a live
+      holder is waited for (up to 2 minutes, then refused) and never robbed.
+  A4  a PROSPECTIVE plan uses the real wall clock (wall_clock) and the real code state (code_state). A caller-
+      supplied `now` or `code` ALWAYS makes the row INJECTED_CLOCK_OR_CODE (LATE); there is no switch. Tests control
+      time by replacing wall_clock and code_state themselves.
 """
 from __future__ import annotations
 
@@ -45,8 +46,9 @@ IST = timezone(timedelta(hours=5, minutes=30))
 EVIDENCE = ("PROSPECTIVE", "LATE", "REPLAY")
 PLAN_KINDS = ("PLAN", "PLAN_REPLAY")
 VOID_RATE_WARN = 0.20
-ALLOW_INJECTED = False          # tests only: trust a caller-supplied clock and code identity
-LOCK_WAIT_S, LOCK_STALE_S = 120.0, 1800.0
+ALLOW_INJECTED = False          # RETIRED (CODEX-FRAMEWORK-002): nothing reads it; setting it changes nothing
+LOCK_WAIT_S = 120.0
+LOCK_STALE_S = 1800.0           # no longer used to take a lock (the OS lock needs no staleness rule); kept as a name
 
 
 class JournalBusy(RuntimeError):
@@ -57,35 +59,58 @@ def wall_clock() -> datetime:
     return datetime.now(IST)
 
 
+def _try_lock(fd: int) -> bool:
+    """An operating-system lock on the lock file's first byte: held per open handle (so threads of one process
+    exclude each other too) and released by the OS when the holder exits or crashes, so there is never a stale lock
+    to guess about (CODEX-FRAMEWORK-002: an old file time is not proof that its owner is dead)."""
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def _unlock(fd: int) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
 @contextmanager
 def journal_lock(journal_path: Path) -> Iterator[None]:
+    """Exclusive access to one journal across threads and processes. The lock file stays on disk; only the OS lock
+    on it matters. A holder that is still working is waited for (up to LOCK_WAIT_S), never robbed."""
     lock = Path(str(journal_path) + ".lock")
     lock.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock), os.O_CREAT | os.O_RDWR)
     start = _time.monotonic()
-    while True:
-        try:
-            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            try:
-                if _time.time() - lock.stat().st_mtime > LOCK_STALE_S:
-                    lock.unlink()                     # a crashed run's lock; a live desk run takes seconds
-                    continue
-            except FileNotFoundError:
-                continue
+    try:
+        while True:
+            os.lseek(fd, 0, os.SEEK_SET)
+            if _try_lock(fd):
+                break
             if _time.monotonic() - start > LOCK_WAIT_S:
                 raise JournalBusy(f"{lock} is held by another desk run for over {LOCK_WAIT_S:.0f} s")
             _time.sleep(0.05)
-            continue
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(f"pid {os.getpid()} since {wall_clock().isoformat(timespec='seconds')}\n")
-        break
-    try:
-        yield
-    finally:
         try:
-            lock.unlink()
-        except FileNotFoundError:
-            pass
+            yield
+        finally:
+            _unlock(fd)
+    finally:
+        os.close(fd)
 
 
 def code_state() -> Dict[str, Any]:
@@ -160,8 +185,8 @@ def plan(strategy: PaperStrategy, md: MarketFiles, day: date, journal_path: Opti
         raise ValueError(f"kind must be one of {PLAN_KINDS}")
     if now is not None and now.tzinfo is None:
         raise ValueError("now must carry a timezone (a naive time cannot be compared with the 09:00 IST deadline)")
-    injected = (now is not None or code is not None) and not ALLOW_INJECTED
-    if injected:                                 # CODEX-FRAMEWORK-001 A4: record the truth, never the claim
+    injected = now is not None or code is not None
+    if injected:                                 # CODEX-FRAMEWORK-001 A4 / -002: record the truth, never the claim
         now, code = None, None
     jp = Path(journal_path or strategy.journal_path(replay=kind != "PLAN"))
     with journal_lock(jp):
