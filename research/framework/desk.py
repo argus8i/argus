@@ -15,14 +15,24 @@ same rules here, so no strategy can grade its own homework:
              ENTRY_SESSION_MISSING, CHAIN_UNKNOWN). Plans still pending long after entry are reported OVERDUE.
   summary    per evidence class; VOID counts by reason; integrity problems (pre-registration changed); and the
              evaluation decision on PROSPECTIVE results only (evaluate.decide with the pre-registered numbers).
+
+Two guards from CODEX-FRAMEWORK-001:
+  A2  plan and reconcile run under an exclusive lock file next to the journal (<journal>.lock), across threads and
+      processes, so two desks can never both read "not scored yet" and both score. A lock older than 30 minutes is
+      stale (a desk run takes seconds) and is replaced; a live one is waited for, up to 2 minutes, then refused.
+  A4  a PROSPECTIVE plan uses the real wall clock and the real code state. A caller-supplied `now` or `code` makes
+      the row INJECTED_CLOCK_OR_CODE (LATE) unless ALLOW_INJECTED is set, which only the tests do.
 """
 from __future__ import annotations
 
 import math
+import os
+import time as _time
 from collections import Counter
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 
@@ -35,6 +45,47 @@ IST = timezone(timedelta(hours=5, minutes=30))
 EVIDENCE = ("PROSPECTIVE", "LATE", "REPLAY")
 PLAN_KINDS = ("PLAN", "PLAN_REPLAY")
 VOID_RATE_WARN = 0.20
+ALLOW_INJECTED = False          # tests only: trust a caller-supplied clock and code identity
+LOCK_WAIT_S, LOCK_STALE_S = 120.0, 1800.0
+
+
+class JournalBusy(RuntimeError):
+    """Another desk holds the journal lock (fail closed: nothing is written)."""
+
+
+def wall_clock() -> datetime:
+    return datetime.now(IST)
+
+
+@contextmanager
+def journal_lock(journal_path: Path) -> Iterator[None]:
+    lock = Path(str(journal_path) + ".lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    start = _time.monotonic()
+    while True:
+        try:
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                if _time.time() - lock.stat().st_mtime > LOCK_STALE_S:
+                    lock.unlink()                     # a crashed run's lock; a live desk run takes seconds
+                    continue
+            except FileNotFoundError:
+                continue
+            if _time.monotonic() - start > LOCK_WAIT_S:
+                raise JournalBusy(f"{lock} is held by another desk run for over {LOCK_WAIT_S:.0f} s")
+            _time.sleep(0.05)
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(f"pid {os.getpid()} since {wall_clock().isoformat(timespec='seconds')}\n")
+        break
+    try:
+        yield
+    finally:
+        try:
+            lock.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def code_state() -> Dict[str, Any]:
@@ -107,12 +158,20 @@ def plan(strategy: PaperStrategy, md: MarketFiles, day: date, journal_path: Opti
          now: Optional[datetime] = None, kind: str = "PLAN", code: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if kind not in PLAN_KINDS:
         raise ValueError(f"kind must be one of {PLAN_KINDS}")
-    now = now or datetime.now(IST)
-    if now.tzinfo is None:
+    if now is not None and now.tzinfo is None:
         raise ValueError("now must carry a timezone (a naive time cannot be compared with the 09:00 IST deadline)")
-    journal = Journal(journal_path or strategy.journal_path(replay=kind != "PLAN"))
+    injected = (now is not None or code is not None) and not ALLOW_INJECTED
+    if injected:                                 # CODEX-FRAMEWORK-001 A4: record the truth, never the claim
+        now, code = None, None
+    jp = Path(journal_path or strategy.journal_path(replay=kind != "PLAN"))
+    with journal_lock(jp):
+        return _plan_locked(strategy, md, day, Journal(jp), now or wall_clock(), kind,
+                            code if code is not None else code_state(), injected)
+
+
+def _plan_locked(strategy: PaperStrategy, md: MarketFiles, day: date, journal: Journal, now: datetime, kind: str,
+                 code: Dict[str, Any], injected: bool) -> Dict[str, Any]:
     rows = journal.verify()
-    code = code if code is not None else code_state()
     sha = _prereg_sha(strategy)
     base = {"kind": kind, "strategy": strategy.id, "plan_day": day.isoformat(),
             "written_at": now.isoformat(timespec="seconds"), "prereg_sha256": sha,
@@ -134,6 +193,8 @@ def plan(strategy: PaperStrategy, md: MarketFiles, day: date, journal_path: Opti
     reason = None
     if p.get("status") != "OK":
         reason = "NOT_OK"
+    elif injected:
+        reason = "INJECTED_CLOCK_OR_CODE"
     elif code["dirty"]:
         reason = "CODE_DIRTY"
     elif deadline is None or now >= deadline:
@@ -151,10 +212,15 @@ def plan(strategy: PaperStrategy, md: MarketFiles, day: date, journal_path: Opti
 # ---------------------------------------------------------------------------------------------- reconcile
 def reconcile(strategy: PaperStrategy, md: MarketFiles, journal_path: Optional[Path] = None, *, as_of: date,
               replay: bool = False, now: Optional[datetime] = None) -> Dict[str, Any]:
-    journal = Journal(journal_path or strategy.journal_path(replay=replay))
+    jp = Path(journal_path or strategy.journal_path(replay=replay))
+    with journal_lock(jp):
+        return _reconcile_locked(strategy, md, Journal(jp), as_of, now or wall_clock())
+
+
+def _reconcile_locked(strategy: PaperStrategy, md: MarketFiles, journal: Journal, as_of: date,
+                      now: datetime) -> Dict[str, Any]:
     rows = journal.verify()
-    now = now or datetime.now(IST)
-    done = {(r["plan_seq"], r["symbol"]) for r in rows if r.get("kind") == "RESULT"}
+    done ={(r["plan_seq"], r["symbol"]) for r in rows if r.get("kind") == "RESULT"}
     first_ok: Dict[Any, int] = {}
     for r in rows:
         if r.get("kind") in PLAN_KINDS and r.get("status") == "OK":
@@ -187,6 +253,9 @@ def reconcile(strategy: PaperStrategy, md: MarketFiles, journal_path: Optional[P
                         "side": s.get("side"), "plan_day": plan_day_of(pr), "entry_session": entry.isoformat(),
                         "exit_session": hold[-1].isoformat(), "evidence": pr["evidence"],
                         "in_book": s["symbol"] in book, "scored_at": now.isoformat(timespec="seconds"), **res})
+    keys = [(r["plan_seq"], r["symbol"]) for r in new]
+    if len(set(keys)) != len(keys) or set(keys) & done:
+        raise RuntimeError("a signal would be scored twice (fail closed, nothing written)")
     if new:
         journal.append(new)
     return {"scored": len(new), "pending": pending, "blocked": blocked, "overdue": overdue,

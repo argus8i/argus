@@ -71,6 +71,12 @@ def _market(h: Path, days: list, skip=()) -> None:
         _ban(h, d)
 
 
+
+@pytest.fixture(autouse=True)
+def _trusted_test_clock(monkeypatch):
+    """Tests supply their own clock and code identity; production never may (CODEX-FRAMEWORK-001 A4)."""
+    monkeypatch.setattr(desk, "ALLOW_INJECTED", True)
+
 class ToyShort(PaperStrategy):
     id = "TOY_SHORT_v1"
     hold_sessions = 2
@@ -390,3 +396,14 @@ def test_a_file_in_neither_format_is_refused(tmp_path):
     p.write_text("A,B\n1,2\n", encoding="utf-8")
     with pytest.raises(UnknownFormat):
         read_udiff(p)
+
+
+def test_the_runtime_block_refuses_broker_sdk_imports():
+    import importlib as il
+
+    from research.framework.rules import BROKER_MODULES, BrokerImportBlocked, block_broker_imports
+
+    assert block_broker_imports() == []
+    for name in BROKER_MODULES:
+        with pytest.raises(BrokerImportBlocked):
+            il.import_module(name)

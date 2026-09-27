@@ -16,7 +16,36 @@ BROKER_PATTERNS = [
     r"\bdhan[h]q\b", r"\bkite[c]onnect\b", r"\bsmart[a]pi\b", r"\bupstox_[c]lient\b",
     r"\b(place|modify|cancel)[_]order\b", r"\brequests[.](post|put|delete)[(]", r"api[.]dhan[.]co",
     r"kite[.]zerodha[.]com/oms", r"\bbreeze_[c]onnect\b",
+    # CODEX-FRAMEWORK-001 A7: a line scan cannot see through dynamic code, so dynamic code itself is refused in
+    # strategy and framework files (the runtime block below is the real boundary; this scan is the lint).
+    r"\bimport[l]ib\b", r"__im[p]ort__", r"\bev[a]l\s*[(]", r"\bex[e]c\s*[(]", r"\bgetattr\s*[(][^)]*[+]",
 ]
+# Broker SDK top-level module names, written split so this file does not match its own scan.
+BROKER_MODULES = ("dhan" + "hq", "kite" + "connect", "smart" + "api", "breeze" + "_connect", "upstox" + "_client",
+                  "fyers" + "_apiv3", "neo" + "_api_client")
+
+
+class BrokerImportBlocked(ImportError):
+    """A broker SDK import was attempted while the paper framework was running (AGENTS.md Rule 1)."""
+
+
+class _BrokerBlocker:
+    """A sys.meta_path finder that refuses every broker SDK import."""
+
+    def find_spec(self, name: str, path: Any = None, target: Any = None) -> None:
+        if name.split(".")[0] in BROKER_MODULES:
+            raise BrokerImportBlocked(f"import of {name!r} refused: the research framework is paper only")
+        return None
+
+
+def block_broker_imports() -> List[str]:
+    """Install the runtime block (once) and return broker modules that were ALREADY imported (a problem to report,
+    since a loaded module can no longer be stopped)."""
+    import sys
+
+    if not any(isinstance(f, _BrokerBlocker) for f in sys.meta_path):
+        sys.meta_path.insert(0, _BrokerBlocker())
+    return sorted(m for m in sys.modules if m.split(".")[0] in BROKER_MODULES)
 PAPER_FOLDER = "/shared/track2_liquid/paper/"
 
 

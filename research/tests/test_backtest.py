@@ -17,6 +17,12 @@ from research.tests.test_framework import CLEAN, ToyShort, _market, _weekdays
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
+
+@pytest.fixture(autouse=True)
+def _trusted_test_clock(monkeypatch):
+    """Tests supply their own clock and code identity; production never may (CODEX-FRAMEWORK-001 A4)."""
+    monkeypatch.setattr(desk, "ALLOW_INJECTED", True)
+
 @pytest.fixture()
 def env(tmp_path):
     h = tmp_path / "history"

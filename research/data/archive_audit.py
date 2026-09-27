@@ -33,59 +33,63 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from research.framework.market import MarketFiles, _bytes, read_udiff
+from research.framework.market import MarketFiles, parse_bhavcopy, unpack
 
 DATASETS = ("cm_bhavcopy", "fo_bhavcopy", "mto")
 MIN_GAP_S = 4.0
 DAILY_CAP = 1000
 
 
-class _ArchiveCM(MarketFiles):
-    """MarketFiles over the archive's CM zips, located through the manifest instead of the daily layout."""
+EXPECTED = (date(2005, 1, 1), date(2021, 9, 30))          # the data program's JOBs 1-3 range
+CHAIN_COLUMNS = ("TckrSymb", "SctySrs", "ClsPric", "PrvsClsgPric")
 
-    def __init__(self, history: Path, cm_files: Dict[date, Path]) -> None:
+
+class _ArchiveCM(MarketFiles):
+    """MarketFiles over the archive's CM zips, located through the manifest. Reads only the four columns the chain
+    needs, from bytes whose SHA-256 is re-checked at the read (nothing is cached across runs)."""
+
+    def __init__(self, history: Path, cm_files: Dict[date, Path], sha: Dict[Path, str]) -> None:
         super().__init__(history)
-        self._files = cm_files
+        self._files, self._sha = cm_files, sha
         self._sessions = sorted(cm_files)
 
     def cm_path(self, d: date) -> Path:
         return self._files.get(d, self.h / "__absent__" / d.isoformat())
 
+    def _read(self, path: Path):
+        raw = Path(path).read_bytes()
+        if hashlib.sha256(raw).hexdigest() != self._sha.get(Path(path)):
+            raise ValueError(f"{path} changed during the audit")
+        return parse_bhavcopy(raw, str(path), columns=CHAIN_COLUMNS)
 
-def _mto_date(raw: bytes) -> Optional[str]:
-    for ln in raw.decode("utf-8", errors="replace").splitlines()[:4]:
+
+def _mto_date(content: bytes) -> Optional[str]:
+    for ln in content.decode("utf-8", errors="replace").splitlines()[:4]:
         f = [x.strip() for x in ln.split(",")]
         if len(f) >= 3 and f[0] == "10" and f[1].upper() == "MTO":
             return datetime.strptime(f[2], "%d%m%Y").date().isoformat()
     return None
 
 
-def _check_file(p: Path, dataset: str) -> Dict[str, Any]:
-    """{'dates': set of ISO dates inside, 'rows': n} or {'error': ...}."""
+def _check_bytes(raw: bytes, dataset: str, source: str) -> Dict[str, Any]:
+    """{'dates': set of ISO dates inside, 'rows': n} or {'error': ...}, from exactly the bytes that were hashed.
+    Reads only the date column (fast), after checking the header is a real bhavcopy header."""
     try:
         if dataset == "mto":
-            d = _mto_date(_bytes(p))
+            d = _mto_date(unpack(raw, source))
             return {"dates": {d} if d else set(), "rows": 1 if d else 0}
-        df = read_udiff(p)
+        df = parse_bhavcopy(raw, source, columns=("TradDt",))
         return {"dates": set(df["TradDt"]) if "TradDt" in df else set(), "rows": int(len(df))}
     except Exception as exc:                          # BadZipFile, UnknownFormat, parse errors: all UNREADABLE
         return {"error": f"{type(exc).__name__}: {exc}"}
 
 
-def _load_cache(p: Optional[Path]) -> Dict[str, Any]:
-    if p is None or not Path(p).exists():
-        return {}
-    try:
-        return json.loads(Path(p).read_text(encoding="utf-8"))
-    except ValueError:
-        return {}
-
-
-def audit(history: Path, cache: Optional[Path] = None) -> Dict[str, Any]:
-    """cache: optional JSON file remembering the content check of files already verified, keyed by path and SHA-256
-    (the SHA-256 of every file is still recomputed on every run, so a changed file is never trusted from the cache)."""
+def audit(history: Path, cache: Optional[Path] = None, expected: tuple = EXPECTED) -> Dict[str, Any]:
+    """Verdict: FAIL on any problem (including no files at all); PASS only when clean AND every weekday of `expected`
+    is accounted for in the CM manifest (SAVED or 404); PASS_PARTIAL when clean but not complete.
+    `cache` is accepted for old callers and ignored: every run re-reads every file (CODEX-FRAMEWORK-001 A5: a cache in
+    a writable folder could certify bytes it never checked)."""
     h = Path(history)
-    memo = _load_cache(cache)
     m = h / "raw" / "nse_archive" / "manifest.jsonl"
     problems: List[Dict[str, Any]] = []
     rows: List[Dict[str, Any]] = []
@@ -107,7 +111,7 @@ def audit(history: Path, cache: Optional[Path] = None) -> Dict[str, Any]:
     for (ds, td), shas in by_key.items():
         if len(shas) > 1:
             problems.append({"kind": "CONFLICTING_SAVES", "dataset": ds, "trade_date": td, "sha256": sorted(shas)})
-    checked, cm_files, cm_sha = set(), {}, {}
+    checked, cm_files, cm_sha, sha_by_path = set(), {}, {}, {}
     for r in saved:
         key = (r.get("saved_path"), r.get("sha256"))
         if key in checked:
@@ -119,16 +123,11 @@ def audit(history: Path, cache: Optional[Path] = None) -> Dict[str, Any]:
         if not r.get("saved_path") or not p.is_file():
             problems.append({"kind": "FILE_MISSING", **base})
             continue
-        if hashlib.sha256(p.read_bytes()).hexdigest() != r.get("sha256"):
+        raw = p.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != r.get("sha256"):
             problems.append({"kind": "SHA_MISMATCH", **base})
             continue
-        mkey = f"{r.get('saved_path')}|{r.get('sha256')}"
-        if mkey in memo:
-            res = {"dates": set(memo[mkey]["dates"]), "rows": memo[mkey]["rows"]}
-        else:
-            res = _check_file(p, ds)
-            if "error" not in res:
-                memo[mkey] = {"dates": sorted(res["dates"]), "rows": res["rows"]}
+        res = _check_bytes(raw, ds, str(p))
         if "error" in res:
             problems.append({"kind": "UNREADABLE", **base, "error": res["error"]})
         elif res["rows"] == 0:
@@ -138,6 +137,9 @@ def audit(history: Path, cache: Optional[Path] = None) -> Dict[str, Any]:
         elif ds == "cm_bhavcopy":
             cm_files[date.fromisoformat(td)] = p
             cm_sha[date.fromisoformat(td)] = str(r.get("sha256"))
+            sha_by_path[p] = str(r.get("sha256"))
+    if not checked:
+        problems.append({"kind": "NO_FILES", "detail": "no SAVED file in the manifest: nothing to certify"})
 
     # ---- coverage across datasets
     outcome: Dict[str, Dict[str, str]] = defaultdict(dict)
@@ -155,7 +157,7 @@ def audit(history: Path, cache: Optional[Path] = None) -> Dict[str, Any]:
 
     # ---- missing sessions (the chain)
     # A gap with a weekday nobody has requested yet is "not yet downloaded", not a missing session.
-    arch = _ArchiveCM(h, cm_files)
+    arch = _ArchiveCM(h, cm_files, sha_by_path)
     ss = arch.sessions()
     hol = {date.fromisoformat(x) for x in holidays}
     attempted = {date.fromisoformat(td) for td in outcome if len(td) == 10}
@@ -165,13 +167,7 @@ def audit(history: Path, cache: Optional[Path] = None) -> Dict[str, Any]:
         if any(d.weekday() < 5 and d not in attempted for d in between):
             not_yet.append([a.isoformat(), b.isoformat()])
             continue
-        ckey = f"chain|{cm_sha[a]}|{cm_sha[b]}"
-        if ckey in memo:
-            c = memo[ckey]
-        else:
-            c = arch.chain(a, b)
-            if c["ok"] is not None:
-                memo[ckey] = {"ok": c["ok"], "matched": c["matched"], "compared": c["compared"]}
+        c = arch.chain(a, b)
         if c["ok"] is True:
             continue
         # A day that was 404 in every dataset looked like a holiday; a broken chain across it says it traded (the
@@ -196,13 +192,21 @@ def audit(history: Path, cache: Optional[Path] = None) -> Dict[str, Any]:
         if d and n > DAILY_CAP:
             problems.append({"kind": "OVER_CAP", "day": d, "requests": n})
 
-    if cache is not None:
-        Path(cache).parent.mkdir(parents=True, exist_ok=True)
-        Path(cache).write_text(json.dumps(memo), encoding="utf-8")
     coverage: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for (ds, td) in by_key:
         coverage[str(td)[:4]][ds] += 1
-    return {"verdict": "PASS" if not problems else "FAIL", "problems": problems, "files_checked": len(checked),
+    # ---- completeness (CODEX-FRAMEWORK-001 A1): PASS means complete, never "clean so far"
+    cm_done = {date.fromisoformat(td) for td, per in outcome.items() if len(td) == 10 and "cm_bhavcopy" in per}
+    lo, hi = expected
+    want = [lo + timedelta(days=k) for k in range((hi - lo).days + 1)]
+    want = [d for d in want if d.weekday() < 5]
+    missing = [d for d in want if d not in cm_done]
+    complete = not missing and not not_yet
+    verdict = "FAIL" if problems else ("PASS" if complete else "PASS_PARTIAL")
+    return {"verdict": verdict, "problems": problems, "files_checked": len(checked),
+            "coverage": {"expected": [lo.isoformat(), hi.isoformat()], "weekdays_expected": len(want),
+                         "weekdays_accounted": len(want) - len(missing),
+                         "first_unaccounted": missing[0].isoformat() if missing else None, "complete": complete},
             "sessions": len(ss), "holidays": holidays, "not_yet_downloaded": not_yet, "outcomes": dict(Counter(r.get("outcome") for r in rows)),
             "first_trade_date": ss[0].isoformat() if ss else None, "last_trade_date": ss[-1].isoformat() if ss else None,
             "saved_by_year": {y: dict(v) for y, v in sorted(coverage.items())}, "requests_per_day": dict(per_day)}
@@ -217,12 +221,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = ap.parse_args(argv)
     h = Path(args.history) if args.history else paths.history_dir()
     out = paths.ensure(paths.outputs_dir() / "audit")
-    rep = audit(h, cache=out / "archive_check_cache.json")
+    rep = audit(h)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     (out / f"archive_audit_{stamp}.json").write_text(json.dumps(rep, indent=1, default=str), encoding="utf-8")
+    cov = rep.get("coverage", {})
     print(f"VERDICT {rep['verdict']}: {rep['files_checked']} files, {rep['sessions']} CM sessions "
           f"{rep.get('first_trade_date')}..{rep.get('last_trade_date')}, holidays {len(rep['holidays'])}, "
           f"outcomes {rep.get('outcomes')}")
+    if cov:
+        print(f"COVERAGE {cov['weekdays_accounted']}/{cov['weekdays_expected']} weekdays of {cov['expected'][0]}.."
+              f"{cov['expected'][1]} accounted; first unaccounted {cov['first_unaccounted']}; "
+              f"{len(rep.get('not_yet_downloaded', []))} not-yet-downloaded gaps"
+              + (" (PASS_PARTIAL = clean so far, NOT complete: not yet usable for a full-period study)"
+                 if rep["verdict"] == "PASS_PARTIAL" else ""))
     for k, n in Counter(p["kind"] for p in rep["problems"]).items():
         print(f"  {k}: {n}")
     for p in rep["problems"][:20]:

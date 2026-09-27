@@ -89,6 +89,12 @@ def hist(tmp_path):
     return {"history": h, "days": days, "expiry": expiry}
 
 
+
+@pytest.fixture(autouse=True)
+def _trusted_test_clock(monkeypatch):
+    """Tests supply their own clock and code identity; production never may (CODEX-FRAMEWORK-001 A4)."""
+    monkeypatch.setattr(desk, "ALLOW_INJECTED", True)
+
 @pytest.fixture(autouse=True)
 def _clean_code(monkeypatch):
     """The research code identity is a git fact; tests run on a working tree, so it is pinned clean here."""

@@ -276,9 +276,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
     d = date.fromisoformat(args.date)
     if args.cmd == "plan":
-        rec = desk.plan(s, md, d, code=code)
+        rec = desk.plan(s, md, d)                 # the desk reads the real clock and code state itself (A4)
     elif args.cmd == "replay":
-        rec = desk.plan(s, md, d, kind="PLAN_REPLAY", code=code)
+        rec = desk.plan(s, md, d, kind="PLAN_REPLAY")
         rec = {**rec, "reconcile": desk.reconcile(s, md, as_of=date.today(), replay=True)}
     else:
         rec = desk.reconcile(s, md, as_of=d)

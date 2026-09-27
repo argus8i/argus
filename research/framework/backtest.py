@@ -78,6 +78,16 @@ def _stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def run(strategy: PaperStrategy, md: MarketFiles, start: date, end: date) -> Dict[str, Any]:
     era = era_of(md, start, end)
+    from research.framework.archive import ArchiveMarket
+    from research.framework.rules import block_broker_imports
+
+    if block_broker_imports():
+        raise RuntimeError("a broker SDK module is loaded in this process; the backtest is paper only")
+    if isinstance(md, ArchiveMarket):             # CODEX-FRAMEWORK-001 A1: never backtest a half-downloaded window
+        gap = md.uncovered(start, end)
+        if gap:
+            raise WindowRefused(f"the archive is not downloaded for {len(gap)} weekdays of {start}..{end} "
+                                f"(first {gap[0]}); a partial window would silently drop trades")
     plans: Counter = Counter()
     blocked: Counter = Counter()
     trades: List[Dict[str, Any]] = []

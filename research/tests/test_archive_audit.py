@@ -105,12 +105,14 @@ def arch(tmp_path):
     return a, days
 
 
-def test_a_clean_archive_passes(arch):
-    a, _ = arch
+def test_a_clean_archive_passes_only_when_complete(arch):
+    a, days = arch
     a.write()
-    rep = aa.audit(a.h)
+    rep = aa.audit(a.h, expected=(days[0], days[-1]))
     assert rep["verdict"] == "PASS", rep["problems"]
-    assert rep["files_checked"] == 18 and rep["sessions"] == 6
+    assert rep["files_checked"] == 18 and rep["sessions"] == 6 and rep["coverage"]["complete"] is True
+    part = aa.audit(a.h)                                   # against the full 2005-2021 range: clean, not complete
+    assert part["verdict"] == "PASS_PARTIAL" and part["coverage"]["first_unaccounted"] == "2005-01-11"
 
 
 def test_sha_mismatch_and_missing_file_fail(arch):
@@ -165,7 +167,7 @@ def test_all_three_404_is_a_holiday_not_a_problem(arch):
     for ds in ("cm_bhavcopy", "fo_bhavcopy", "mto"):
         a.missing(ds, hol)
     a.write()
-    rep = aa.audit(a.h)
+    rep = aa.audit(a.h, expected=(days[0], hol))
     assert rep["verdict"] == "PASS" and rep["holidays"] == [hol.isoformat()]
 
 
@@ -193,8 +195,9 @@ def test_a_gap_not_yet_downloaded_is_not_a_missing_session(arch):
     far = date(2010, 1, 4)                        # a spot check years ahead of the forward download
     a.day(far, far - timedelta(days=3))
     a.write()
-    rep = aa.audit(a.h)
-    assert rep["verdict"] == "PASS", rep["problems"]
+    rep = aa.audit(a.h, expected=(days[0], far))
+    assert rep["verdict"] == "PASS_PARTIAL", rep["problems"]            # clean, but years are not downloaded yet
+    assert rep["problems"] == [] and rep["coverage"]["complete"] is False
     assert rep["not_yet_downloaded"] == [[days[-1].isoformat(), far.isoformat()]]
 
 
@@ -210,12 +213,23 @@ def test_a_404_day_that_breaks_the_chain_is_named_as_traded(tmp_path):
     assert gap and gap[0]["all_404_but_traded"] == [tue.isoformat()]
 
 
-def test_the_cache_skips_rechecks_but_never_trusts_a_changed_file(arch, tmp_path):
+def test_every_run_rereads_every_file_and_a_changed_file_fails(arch, tmp_path):
     a, days = arch
     a.write()
-    cache = tmp_path / "cache.json"
-    assert aa.audit(a.h, cache=cache)["verdict"] == "PASS"
-    assert aa.audit(a.h, cache=cache)["verdict"] == "PASS"         # second run from the cache
+    span = (days[0], days[-1])
+    assert aa.audit(a.h, expected=span)["verdict"] == "PASS"
     p = a.h / a.rows[0]["saved_path"]
-    p.write_bytes(p.read_bytes() + b"x")                            # tampered after it was cached
-    assert "SHA_MISMATCH" in {x["kind"] for x in aa.audit(a.h, cache=cache)["problems"]}
+    p.write_bytes(p.read_bytes() + b"x")                            # changed after a PASS
+    assert "SHA_MISMATCH" in {x["kind"] for x in aa.audit(a.h, expected=span)["problems"]}
+
+
+def test_a_non_bhavcopy_file_with_the_right_hash_is_unreadable(tmp_path):
+    raw = b"A,B\n1,2\n"
+    rel = "raw/nse_archive/cm_bhavcopy/2005/x.csv"
+    (tmp_path / rel).parent.mkdir(parents=True)
+    (tmp_path / rel).write_bytes(raw)
+    m = tmp_path / "raw" / "nse_archive" / "manifest.jsonl"
+    m.write_text(json.dumps({"dataset": "cm_bhavcopy", "trade_date": "2005-01-03", "outcome": "SAVED",
+                             "saved_path": rel, "sha256": hashlib.sha256(raw).hexdigest()}) + "\n", encoding="utf-8")
+    rep = aa.audit(tmp_path)
+    assert rep["verdict"] == "FAIL" and rep["problems"][0]["kind"] == "UNREADABLE"

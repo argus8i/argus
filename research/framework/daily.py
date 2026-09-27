@@ -109,9 +109,9 @@ def archive_audit_status(history: Path, cache: Optional[Path] = None) -> Dict[st
         return {"verdict": None, "note": "no archive manifest"}
     from research.data import archive_audit, paths
 
-    cache = cache or paths.outputs_dir() / "audit" / "archive_check_cache.json"
-    a = archive_audit.audit(history, cache=cache)
-    return {"verdict": a["verdict"], "files_checked": a["files_checked"], "sessions": a["sessions"],
+    a = archive_audit.audit(history)
+    return {"verdict": a["verdict"], "coverage": a.get("coverage"), "files_checked": a["files_checked"],
+            "sessions": a["sessions"],
             "range": [a.get("first_trade_date"), a.get("last_trade_date")], "holidays": len(a["holidays"]),
             "problems": dict(Counter(p["kind"] for p in a["problems"])), "first_problems": a["problems"][:5]}
 
@@ -124,6 +124,7 @@ def run(day: date, *, history: Optional[Path] = None, strategies: Optional[List[
         report_dir: Optional[Path] = None, now: Optional[datetime] = None, code: Optional[Dict[str, Any]] = None,
         check_git: bool = True, check_location: bool = True, write: bool = True,
         audit_cache: Optional[Path] = None) -> Dict[str, Any]:
+    now_arg, code_arg = now, code                 # passed to the desk only as given (desk.ALLOW_INJECTED, A4)
     now = now or datetime.now(IST)
     h = Path(history) if history else history_root()
     md = MarketFiles(h)
@@ -133,6 +134,11 @@ def run(day: date, *, history: Optional[Path] = None, strategies: Optional[List[
                            "code_identity": code["identity"], "code_dirty": code["dirty"],
                            "market": market_status(md, day), "download": download_status(h, day), "strategies": {}}
     rep["archive_audit"] = archive_audit_status(h, audit_cache)
+    loaded = rules.block_broker_imports()          # A7: the runtime paper-only boundary
+    if loaded:
+        rep["market"]["problems"].append(f"broker SDK modules already loaded in this process: {loaded}")
+    if not strategies:                            # CODEX-FRAMEWORK-001 A8: nothing checked is not "all clean"
+        rep["market"]["problems"].append("no paper strategy is registered: nothing was planned or scored")
     exit_code = EXIT_ATTENTION if (rep["market"]["problems"] or rep["download"].get("warnings")
                                    or rep["archive_audit"].get("verdict") == "FAIL") else EXIT_OK
     for s in strategies:
@@ -144,8 +150,8 @@ def run(day: date, *, history: Optional[Path] = None, strategies: Optional[List[
             continue
         try:
             if s.is_plan_day(md, day):
-                st["plan"] = _brief(desk.plan(s, md, day, now=now, code=code))
-            st["reconcile"] = desk.reconcile(s, md, as_of=day, now=now)
+                st["plan"] = _brief(desk.plan(s, md, day, now=now_arg, code=code_arg))
+            st["reconcile"] = desk.reconcile(s, md, as_of=day, now=now_arg)
             st["summary"] = desk.summary(s)
         except Exception as exc:
             st["problems"].append(f"INTERNAL {type(exc).__name__}: {exc}")
@@ -219,7 +225,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"REFUSED: research code has uncommitted changes {code['dirty'][:5]}; commit first, then re-run "
                   "(a plan written now could never count as evidence)")
             return EXIT_REFUSED
-        rep = run(day, code=code)
+        rep = run(day)                            # the desk reads the real clock and code state itself (A4)
         print(render(rep))
         return rep["exit_code"]
     except Exception as exc:

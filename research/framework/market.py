@@ -53,8 +53,8 @@ class UnknownFormat(ValueError):
     """A file that is neither a UDiFF nor a legacy NSE bhavcopy (fail closed: never guess columns)."""
 
 
-def _bytes(path: Path) -> bytes:
-    raw = Path(path).read_bytes()
+def unpack(raw: bytes, source: str = "") -> bytes:
+    """The file's content: gunzipped, or the single member of a zip, or the bytes themselves."""
     if raw[:2] == b"\x1f\x8b":
         return gzip.decompress(raw)
     if raw[:4] == b"PK\x03\x04":
@@ -63,9 +63,13 @@ def _bytes(path: Path) -> bytes:
         with zipfile.ZipFile(io.BytesIO(raw)) as z:
             names = [n for n in z.namelist() if not n.endswith("/")]
             if len(names) != 1:
-                raise UnknownFormat(f"{path}: zip holds {len(names)} files, expected 1")
+                raise UnknownFormat(f"{source}: zip holds {len(names)} files, expected 1")
             return z.read(names[0])
     return raw
+
+
+def _bytes(path: Path) -> bytes:
+    return unpack(Path(path).read_bytes(), str(path))
 
 
 def _iso(v: str) -> str:
@@ -79,7 +83,7 @@ def _iso(v: str) -> str:
 
 
 def normalise(df: pd.DataFrame, source: str = "") -> pd.DataFrame:
-    cols = [c.strip() for c in df.columns]
+    cols = [c.strip().lstrip("﻿") for c in df.columns]
     df = df.set_axis(cols, axis=1)
     df = df[[c for c in cols if c and not c.startswith("Unnamed")]]
     if "TckrSymb" in df.columns:
@@ -93,7 +97,8 @@ def normalise(df: pd.DataFrame, source: str = "") -> pd.DataFrame:
             df[c] = df[c].str.strip()
 
     def remap(col: str, fn: Any) -> None:                # each distinct value once (47,000 rows, a few dates)
-        df[col] = df[col].map({u: fn(u) for u in df[col].unique()})
+        if col in df.columns:
+            df[col] = df[col].map({u: fn(u) for u in df[col].unique()})
 
     if legacy_fo:
         remap("FinInstrmTp", lambda x: LEGACY_INSTRUMENT.get(x, x))
@@ -103,13 +108,35 @@ def normalise(df: pd.DataFrame, source: str = "") -> pd.DataFrame:
     return df
 
 
-def read_udiff(path: Path) -> pd.DataFrame:
-    """Any NSE CM or F&O bhavcopy (UDiFF or legacy; plain, gzip or zip) with UDiFF column names."""
-    df = normalise(pd.read_csv(io.BytesIO(_bytes(path)), dtype=str, keep_default_na=False), str(path))
+def _usecols(content: bytes, columns: Sequence[str], source: str) -> Any:
+    """The source-file column names to read for the wanted UDiFF `columns` (legacy files use other names). Refuses a
+    header that is not a bhavcopy header, so a partial read can never accept a non-bhavcopy file."""
+    header = [c.strip() for c in content.split(b"\n", 1)[0].decode("utf-8-sig", "replace").strip("\r").split(",")]
+    if "TckrSymb" in header:
+        names = set(columns) | {"TckrSymb"}
+    elif "SYMBOL" in header:
+        legacy = LEGACY_FO if "INSTRUMENT" in header else LEGACY_CM
+        rev = {v: k for k, v in legacy.items()}
+        names = {rev.get(c, c) for c in columns} | {"SYMBOL"} | ({"INSTRUMENT"} if "INSTRUMENT" in header else set())
+    else:
+        raise UnknownFormat(f"{source}: neither a UDiFF (TckrSymb) nor a legacy (SYMBOL) bhavcopy: {header[:6]}")
+    return lambda c: c.strip().lstrip("﻿") in names
+
+
+def parse_bhavcopy(raw: bytes, source: str = "", columns: Optional[Sequence[str]] = None) -> pd.DataFrame:
+    """The bytes of any NSE CM or F&O bhavcopy file (UDiFF or legacy; plain, gzip or zip), UDiFF column names.
+    columns: read only these UDiFF columns (plus the symbol), for speed."""
+    content = unpack(raw, source)
+    use = _usecols(content, columns, source) if columns is not None else None
+    df = normalise(pd.read_csv(io.BytesIO(content), dtype=str, keep_default_na=False, usecols=use), source)
     for c in NUMERIC:
         if c in df:
             df[c] = pd.to_numeric(df[c], errors="coerce")
     return df
+
+
+def read_udiff(path: Path) -> pd.DataFrame:
+    return parse_bhavcopy(Path(path).read_bytes(), str(path))
 
 
 def cm_path(h: Path, d: date) -> Path:
@@ -144,7 +171,7 @@ class MarketFiles:
         if d in store:
             store.move_to_end(d)
             return store[d]
-        df = read_udiff(path)
+        df = self._read(path)
         store[d] = df
         if len(store) > self.CACHE_FILES:
             store.popitem(last=False)
@@ -174,6 +201,9 @@ class MarketFiles:
                     continue
             self._sessions = sorted(out)
         return self._sessions
+
+    def _read(self, path: Path) -> pd.DataFrame:
+        return read_udiff(path)
 
     def cm(self, d: date) -> pd.DataFrame:
         return self._cached(self._cm, d, self.cm_path(d))

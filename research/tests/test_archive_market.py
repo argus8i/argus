@@ -80,3 +80,11 @@ def test_the_expiry_plugin_assumes_no_ban_only_where_ban_lists_do_not_exist(arch
     s = ExpiryReliefV2()
     assert s.entry_ban(ArchiveMarket(a.h), days[3]) == (set(), ["NO_BAN_LIST_ERA"])
     assert s.entry_ban(MarketFiles(tmp_path / "empty"), days[3]) == (None, [])     # live era: missing blocks
+
+
+def test_a_backtest_window_the_archive_has_not_downloaded_is_refused(arch, tmp_path):
+    a, days = arch
+    pre = tmp_path / "toy.yaml"
+    pre.write_text("id: TOY_SHORT_v1\nstatus: LOCKED_PROSPECTIVE\n", encoding="utf-8")
+    with pytest.raises(backtest.WindowRefused, match="not downloaded"):
+        backtest.run(ToyShort(pre, tmp_path / "p"), ArchiveMarket(a.h), days[0], days[-1] + timedelta(days=30))
