@@ -26,6 +26,7 @@ import pytest
 from scripts.download_nse_archive import (
     ARCHIVE_DAILY_CAP,
     DATASETS,
+    IST,
     NseArchiveDownloader,
     StopExecutionError,
     validate_cm_fo_content,
@@ -296,28 +297,22 @@ def test_timeout_and_5xx_retries(temp_archive_dir):
 
 
 def test_count_today_requests_accumulates_all_attempts(temp_archive_dir):
-    """Rule 5: Cap must count every attempt including retries when loading from manifest."""
+    """Rule 5 & Work Order #3: Cap must count every attempt including retries when loading from manifest."""
     manifest_path = temp_archive_dir / "manifest.jsonl"
-    rec1 = {
-        "job": "JOB1",
-        "dataset": "cm_bhavcopy",
-        "trade_date": "2010-01-04",
-        "attempt": 3,
-        "outcome": "SAVED",
-        "fetched_at": "2026-09-26T10:00:00+05:30",
-    }
-    rec2 = {
-        "job": "JOB1",
-        "dataset": "fo_bhavcopy",
-        "trade_date": "2010-01-04",
-        "attempt": 2,
-        "outcome": "MISSING_404",
-        "fetched_at": "2026-09-26T10:05:00+05:30",
-    }
-    manifest_path.write_text(json.dumps(rec1) + "\n" + json.dumps(rec2) + "\n", encoding="utf-8")
+    today_iso = datetime.now(IST).date().isoformat()
+    # 3 attempts for cm_bhavcopy: attempt 1 retry, attempt 2 retry, attempt 3 saved
+    # 2 attempts for fo_bhavcopy: attempt 1 retry, attempt 2 missing_404
+    recs = [
+        {"job": "JOB1", "dataset": "cm_bhavcopy", "trade_date": "2010-01-04", "attempt": 1, "outcome": "RETRY_TIMEOUT", "requested_at": f"{today_iso}T10:00:00+05:30"},
+        {"job": "JOB1", "dataset": "cm_bhavcopy", "trade_date": "2010-01-04", "attempt": 2, "outcome": "RETRY_500", "requested_at": f"{today_iso}T10:00:15+05:30"},
+        {"job": "JOB1", "dataset": "cm_bhavcopy", "trade_date": "2010-01-04", "attempt": 3, "outcome": "SAVED", "requested_at": f"{today_iso}T10:00:30+05:30"},
+        {"job": "JOB1", "dataset": "fo_bhavcopy", "trade_date": "2010-01-04", "attempt": 1, "outcome": "RETRY_TIMEOUT", "requested_at": f"{today_iso}T10:05:00+05:30"},
+        {"job": "JOB1", "dataset": "fo_bhavcopy", "trade_date": "2010-01-04", "attempt": 2, "outcome": "MISSING_404", "requested_at": f"{today_iso}T10:05:15+05:30"},
+    ]
+    manifest_path.write_text("\n".join(json.dumps(r) for r in recs) + "\n", encoding="utf-8")
 
     downloader = NseArchiveDownloader(base_dir=temp_archive_dir, min_interval=0.0)
-    # rec1 took 3 attempts, rec2 took 2 attempts -> total 5 attempts today
+    # 5 attempts recorded across the 2 files -> total 5 attempts today
     assert downloader.requests_today == 5
 
 
@@ -407,5 +402,48 @@ def test_requested_at_field_and_pacing_gap(temp_archive_dir):
     t2 = time.monotonic()
 
     assert t2 - t1 >= 0.1
+
+
+def test_retried_attempt_is_logged_in_manifest_to_prevent_counter_drift(temp_archive_dir):
+    """
+    Work Order #3 / Rule 9 Regression Test:
+    Every network attempt sent over the wire must be logged in the manifest,
+    including intermediate attempts that result in timeout or 5xx before a retry,
+    so that manifest record count strictly matches requests_today.
+    """
+    import requests
+    downloader = NseArchiveDownloader(base_dir=temp_archive_dir, min_interval=0.0)
+
+    resp_404 = MagicMock()
+    resp_404.status_code = 404
+    resp_404.content = b""
+
+    # Attempt 1: Timeout; Attempt 2: 404 Not Found
+    with patch("scripts.download_nse_archive.RETRY_BACKOFF_SECONDS", 0.001):
+        with patch.object(
+            downloader.session,
+            "get",
+            side_effect=[requests.exceptions.Timeout("Connection timed out"), resp_404],
+        ):
+            final_rec = downloader.download_file("fo_bhavcopy", date(2005, 6, 5))
+
+    assert final_rec["outcome"] == "MISSING_404"
+    assert downloader.requests_today == 2
+
+    manifest_records = downloader.load_manifest_records()
+    # Prior to fix, manifest only had 1 record (the final attempt), causing counter drift
+    assert len(manifest_records) == 2, f"Expected 2 manifest records for 2 attempts, got {len(manifest_records)}"
+
+    rec1, rec2 = manifest_records
+    assert rec1["attempt"] == 1
+    assert rec1["outcome"] == "RETRY_TIMEOUT"
+    assert rec1["requests_today"] == 1
+    assert rec1["requested_at"] != ""
+
+    assert rec2["attempt"] == 2
+    assert rec2["outcome"] == "MISSING_404"
+    assert rec2["requests_today"] == 2
+    assert rec2["requested_at"] != ""
+
 
 

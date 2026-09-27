@@ -247,7 +247,7 @@ class NseArchiveDownloader:
             if ts.startswith(today_iso):
                 # Count all network attempts (including retries) made today per Rule 5
                 if rec.get("outcome") != "SKIPPED_ALREADY_SAVED":
-                    count += int(rec.get("attempt", 1))
+                    count += 1
         return count
 
     def load_manifest_records(self) -> List[Dict[str, Any]]:
@@ -392,6 +392,24 @@ class NseArchiveDownloader:
                 last_status = 0
                 body = b""
                 if attempt <= MAX_RETRIES:
+                    retry_rec = {
+                        "job": job,
+                        "dataset": dataset,
+                        "trade_date": tdate_str,
+                        "url": url,
+                        "attempt": attempt,
+                        "http_status": 0,
+                        "outcome": "RETRY_TIMEOUT",
+                        "bytes": 0,
+                        "sha256": "",
+                        "saved_path": "",
+                        "requested_at": requested_at,
+                        "fetched_at": datetime.now(IST).isoformat(timespec="seconds"),
+                        "code_commit": self.code_commit,
+                        "requests_today": self.requests_today,
+                        "user_agent": self.user_agent,
+                    }
+                    self.append_manifest(retry_rec)
                     time.sleep(RETRY_BACKOFF_SECONDS)
                     continue
                 outcome = "FAILED"
@@ -450,6 +468,24 @@ class NseArchiveDownloader:
             # Retry on 5xx
             if last_status in (500, 502, 503, 504):
                 if attempt <= MAX_RETRIES:
+                    retry_rec = {
+                        "job": job,
+                        "dataset": dataset,
+                        "trade_date": tdate_str,
+                        "url": url,
+                        "attempt": attempt,
+                        "http_status": last_status,
+                        "outcome": f"RETRY_{last_status}",
+                        "bytes": 0,
+                        "sha256": "",
+                        "saved_path": "",
+                        "requested_at": requested_at,
+                        "fetched_at": datetime.now(IST).isoformat(timespec="seconds"),
+                        "code_commit": self.code_commit,
+                        "requests_today": self.requests_today,
+                        "user_agent": self.user_agent,
+                    }
+                    self.append_manifest(retry_rec)
                     time.sleep(RETRY_BACKOFF_SECONDS)
                     continue
                 outcome = "FAILED"
