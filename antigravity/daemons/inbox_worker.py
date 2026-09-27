@@ -250,18 +250,10 @@ def load_auth_config() -> Dict[str, Any]:
         except Exception:
             pass
 
-    return {
-        "keys": {
-            "CLAUDE": "claude_default_secure_secret_key_2026",
-            "CODEX": "codex_default_secure_secret_key_2026",
-            "ANTIGRAVITY": "antigravity_default_secure_secret_key_2026",
-            "USER": "user_default_secure_secret_key_2026"
-        },
-        "allowed_senders": ["CLAUDE", "CODEX", "ANTIGRAVITY", "USER"],
-        "allowed_responders": ["ANTIGRAVITY", "CLAUDE", "CODEX"],
-        "token_validity_sec": 300,
-        "max_future_skew_sec": 60
-    }
+    raise RuntimeError(
+        f"External authentication configuration not found at {external_path}. "
+        "Hardcoded fallback signing keys are strictly prohibited per Constitution Article 5."
+    )
 
 
 def get_agent_secret_key(agent_name: str) -> Optional[str]:

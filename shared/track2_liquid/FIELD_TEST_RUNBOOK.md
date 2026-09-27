@@ -1,7 +1,12 @@
 # Track 2 market field test — 22 September 2026
 
-Run `start_track2_paper_desk.bat` at 08:45 IST. Log into the dedicated
-Kite Chrome window if requested. The terminal displays state changes.
+> [!WARNING]
+> **DEPRECATED / RETIRED INSTRUCTION (23 September 2026 Red-Team Security Hardening):**
+> Do NOT launch or log into a dedicated Kite Chrome window or use remote-debugging ports (9333, 9444).
+> Browser credential scraping and CDP ports are permanently prohibited under AGENTS.md Security Authorization.
+> Market data ingestion must use compliant headless API bridges (Dhan v2 / Upstox v2) with explicit provenance.
+
+The terminal displays state changes.
 Leave the computer awake and connected through 15:30 IST.
 
 The same launcher opens the read-only Track 2 Control Room at
