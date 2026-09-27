@@ -1,0 +1,26 @@
+{
+  "strategy_id": "LAST_LIGHT",
+  "at": "2026-09-26T07:49:13+05:30",
+  "action": "KILLED_ON_DESIGN",
+  "from": "UNVERIFIED",
+  "to": "KILLED_ON_DESIGN",
+  "reasons": [
+    "design mean net R -0.0764 (t -6.28, n 2695) on ['2022-01-03', '2024-09-30']; expected_net_r <= 0, so EXPLOIT allocates it no slots"
+  ],
+  "inputs": {
+    "window": [
+      "2022-01-03",
+      "2024-09-30"
+    ],
+    "snapshot_sha256": "72a444d7aec15d979b54a36e54afb8108df4b1cf1a0105ef76cb63a7c320059d",
+    "n": 2695,
+    "mean_net_r": -0.07643209366229066,
+    "t_cluster": -6.275130238772323,
+    "mean_gross_r": 0.01639586731009394,
+    "mean_fee_r": 0.07970184396353869,
+    "mean_slip_r": 0.01312611700884591,
+    "result_file": "research/outputs/p7/legacy_LAST_LIGHT_20260926_034853_41500/result.json",
+    "evidence_class": "E1_CF"
+  },
+  "evidence": "E1_CF design-set record (can never promote)"
+}

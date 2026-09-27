@@ -1,0 +1,22 @@
+{
+  "strategy_id": "BAN_ENTRY_SHORT",
+  "at": "2026-09-26T13:45:14+05:30",
+  "action": "HOLDOUT_REJECTED",
+  "from": "UNVERIFIED",
+  "to": "REJECTED",
+  "reasons": [
+    "primary: t_cluster -0.26974071557155643 (threshold 2.0), mean net R -0.017929407125996385 -> FAIL",
+    "slippage_2_ticks: mean net R -0.02274636844165245 > 0 -> FAIL"
+  ],
+  "inputs": {
+    "holdout_record_sha256": "4a1cea8fe2c06bd41cac63d1166e218fe9aa85c7c26b82e871ba07fef87e7721",
+    "prereg": "C:\\Users\\yashw\\swing-trades-track2\\research\\studies\\prereg\\ban_entry_short_v1.yaml",
+    "lock": {
+      "id": "BAN_ENTRY_SHORT_v1",
+      "yaml_sha256": "867e37e34d223837a97b99e1043b6bed7a31ef5227625ac804c7953ecf4a14a2",
+      "commit": "7a9f262647fed5be32b80becff1a9f7e3b2e174b",
+      "locked_at": "2026-09-26T13:43:06+05:30"
+    }
+  },
+  "evidence": "E1 holdout study (can never promote)"
+}

@@ -109,14 +109,14 @@ def calculate_transaction_costs(
     else:
         stt = round(0.001 * turnover, 2)
 
-    # Exchange Turnover Charges (NSE: 0.00297%)
-    exchange_charges = round(0.0000297 * turnover, 2)
+    # Exchange Turnover Charges (NSE: 0.0030699% per NSE circular FA73061 effective 1 March 2026)
+    exchange_charges = round(0.000030699 * turnover, 2)
 
-    # GST: 18% on (Brokerage + Exchange Charges)
-    gst = round(0.18 * (brokerage + exchange_charges), 2)
-
-    # SEBI Turnover Charges: Rs 10 / Crore
+    # SEBI Turnover Charges: Rs 10 / Crore (0.0001%)
     sebi_charges = round(0.000001 * turnover, 2)
+
+    # GST: 18% on (Brokerage + Exchange Charges + SEBI Charges)
+    gst = round(0.18 * (brokerage + exchange_charges + sebi_charges), 2)
 
     # Stamp Duty: 0.003% on buy side (intraday)
     if side == "BUY":

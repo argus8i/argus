@@ -1,0 +1,90 @@
+# Pre-registration: EXPIRY_RELIEF_LONG v1. Written 2026-09-26 by Claude from design-window evidence only.
+# Idea from Antigravity's 26 Sep blueprint; reproduced and stress-tested by Claude (strategy_lab L1/L1D).
+# Nothing here may change after LOCK. Holdout run and overnight CNC holds approved by Yashu (26 Sep, 12:39 IST).
+# Parsed by research/studies/prereg_io.py (strict YAML subset).
+id: EXPIRY_RELIEF_LONG_v1
+status: LOCKED
+hypothesis: >
+  F&O stocks that fell 5% or more over the 20 sessions into a monthly stock-futures expiry, bought at the next
+  session's open (pre-open auction order, 1 tick worse) and held at most 5 sessions under a 3% stop with half
+  taken at +1.5R, earn a positive mean net R (unconstrained per-signal expectancy, each signal sized by Adjusted
+  A1, DhanFeeEngine CNC fees on every leg) on the holdout, AND the same signals' beta-adjusted 5-session drift
+  beats the CNC cost hurdle (so the result is not market beta).
+rationale: >
+  Stock futures and in-the-money stock options settle by physical delivery, and delivery margins on open
+  positions step up over the sessions before expiry, so leveraged holders who cannot take or give delivery close
+  out into the expiry. For stocks already falling, the close-out adds selling; after the expiry the pressure is
+  gone and the price recovers. Design evidence: the effect peaks for a signal on the expiry session and decays
+  for signals 1-3 sessions either side (T0101); the same filter on non-expiry sessions loses money (T0083).
+design_evidence:
+  trials: [T0082, T0083, T0084, T0085, T0086, T0087, T0101, T0102, T0103, T0104, T0114, T0115, T0116, T0117]
+  v1_rules_net_r: 0.4936
+  v1_rules_t_by_expiry: 3.89
+  v1_rules_rs_per_trade: 554
+  v1_rules_win_rate: 0.646
+  v1_rules_by_year: {y2022: 0.6608, y2023: 0.2745, y2024: 0.3529}
+  drift_alpha_net_pct: 1.0296
+  drift_alpha_t_by_expiry: 4.34
+  signals: 1212
+  expiries: 32
+  expiries_positive_alpha: 25
+  capacity_3_most_oversold_net_r: 0.4131
+  offsets_alpha_net: {m3: -0.13, m2: 0.27, m1: 0.73, e0: 1.03, p1: 0.32, p2: 0.16, p3: -0.19}
+primary_test:
+  statistic: t_cluster
+  cluster_unit: expiry (all signals of one expiry form one cluster)
+  se: CR1 (research/decision/stats.py clustered_se)
+  threshold: 2.0
+  also_require: mean_net_r > 0
+  second_gate: drift_alpha_net > 0 (beta-adjusted open E+1 to close E+5 return minus 0.28%, point estimate; a missing or non-finite value FAILS)
+  beta: >
+    per stock, the OLS slope of daily close-to-close returns on NIFTY 50's over the trailing 120 sessions ending
+    at E (at least 60 observations), clipped to [0.3, 2.5]; where it cannot be computed, beta = 1.0 (the
+    market-adjusted return). research/studies/strategy_lab.py Panel.beta.
+  averaged_dispositions: [FILLED]
+  weighting: equal weight per signal
+  undefined_se: FAIL (a NaN or zero standard error, or fewer than 2 distinct clusters (expiries), fails the test)
+  minimum_events: none
+  substitution: none
+pass_rule: primary_test AND second_gate AND slippage_2_ticks mean_net_r > 0
+secondary_tests:
+  - {name: slippage_2_ticks, require: mean_net_r > 0}
+  - {name: capacity_3_most_oversold, require: report_only}   # the 3 lowest 20-session returns per expiry (3 slots)
+  - {name: stop_5pct_no_target, require: report_only}
+  - {name: by_year, require: report_only}
+  - {name: expiry_weekday_change, require: report_only}      # expiries before and after NSE moved stock F&O expiry off Thursday
+  - {name: per_expiry_and_without_best_3, require: report_only}   # ~21 holdout expiries: small-cluster inference (Codex)
+data:
+  bars: {interval: daily, source: upstox_v2_daily (split/bonus back-adjusted), timestamps: session}
+  expiry_sessions: point-in-time F&O table (reference/fno_point_in_time_2022_2026.parquet); a session is a monthly expiry when it is the nearest futures expiry of more than half the F&O stocks trading futures that session
+  design: ["2022-01-03", "2024-09-30"]
+  holdout: ["2024-10-01", "2026-07-31"]      # expiries E in the window whose exit session E+5 is also in the window; never read for this rule
+  snapshot: {name: p7_design_20260926, content_sha256: 72a444d7aec15d979b54a36e54afb8108df4b1cf1a0105ef76cb63a7c320059d}
+  holdout_snapshot: {name: p7_holdout_20260926, content_sha256: 6040e0cf40909afefcf03da1fed00a10478ab98f0769ff07c95d08de9b9ece11}
+  holdout_snapshot_note: >
+    identical to the design snapshot except reference/universe_daily (rebuilt with the holdout visible) and
+    CREATED.json; sealed 2026-09-26 03:48 IST, before this lock, and pinned here so the lock fixes the data read.
+universe:
+  signal: close_E / close_(E-20) - 1 <= -5% (the stock's own 20-session return on the vendor scale)
+  entry_session_eligible: true             # universe_daily ELIGIBLE on E+1 (PIT F&O member, lagged price >= Rs 10, DTV20 >= Rs 30 Cr, right company)
+  unenforced: no ASM/GSM history on disk (stated limitation)
+trade:
+  side: BUY
+  product: CNC
+  entry: {rule: open of E+1, order: pre-open auction (09:00-09:08), slippage_ticks: 1, price_rounding: up}
+  stop: {type: SL-M sell, pct_below_entry: 3.0, price_rounding: down}
+  stop_fills: a later session opening at or below the stop fills at that open - 1 tick (STOP_GAP); a touch fills at the stop - 1 tick (STOP); stop before target on a session touching both
+  target: {fraction: 0.5, r_multiple: 1.5, order: resting limit, gap_above: fills at that session's open}
+  exit: close of E+5 - 1 tick (TIME)
+  simulator: research/studies/expiry_relief.py simulate_long (tests research/tests/test_expiry_relief.py)
+costs: {fees: DhanFeeEngine_CNC every leg, slippage_ticks_per_side: 1, sensitivity_ticks: [2]}
+sizing: {risk_budget_rs: 1500, slot_cap_rs: 38000.00, slot_cap_price: worst_admissible_entry, estimand: unconstrained_per_signal}
+known_limitations:
+  - daily bars only; a stop touched and recovered within a session is filled at the stop (no intraday path)
+  - target fill is a daily-bar approximation - a session high at or above the target fills the whole half-position at the target (or at the open when it gaps above); no volume participation check (Rs 38,000 slots in F&O stocks)
+  - about 21 holdout expiries - a small-cluster CR1 result is holdout evidence, not production certainty (Codex)
+  - selling on E+2 or later is a sale of shares bought T+1 (settlement credit timing is broker-dependent)
+  - the long leg carries market exposure; the second gate checks that the design effect is not beta
+deployability_not_part_of_the_test:
+  - pre-open auction buy order at 09:00-09:08 (Dhan); the live shadow must record real fills against the official open
+trials_registry: research/evidence/trials_registry.csv

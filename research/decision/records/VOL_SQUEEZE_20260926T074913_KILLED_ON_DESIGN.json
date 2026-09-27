@@ -1,0 +1,26 @@
+{
+  "strategy_id": "VOL_SQUEEZE",
+  "at": "2026-09-26T07:49:13+05:30",
+  "action": "KILLED_ON_DESIGN",
+  "from": "UNVERIFIED",
+  "to": "KILLED_ON_DESIGN",
+  "reasons": [
+    "design mean net R -0.0769 (t -7.70, n 4668) on ['2022-01-03', '2024-09-30']; expected_net_r <= 0, so EXPLOIT allocates it no slots"
+  ],
+  "inputs": {
+    "window": [
+      "2022-01-03",
+      "2024-09-30"
+    ],
+    "snapshot_sha256": "72a444d7aec15d979b54a36e54afb8108df4b1cf1a0105ef76cb63a7c320059d",
+    "n": 4668,
+    "mean_net_r": -0.07688280294843906,
+    "t_cluster": -7.698490447120535,
+    "mean_gross_r": -0.01115119725153052,
+    "mean_fee_r": 0.05674733571205517,
+    "mean_slip_r": 0.00898426998485337,
+    "result_file": "research/outputs/p7/legacy_VOL_SQUEEZE_20260926_044400_29764/result.json",
+    "evidence_class": "E1_CF"
+  },
+  "evidence": "E1_CF design-set record (can never promote)"
+}

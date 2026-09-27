@@ -1,0 +1,75 @@
+# Pre-registration: PEAD_DRIFT_LONG v1. DRAFT, written 2026-09-26 by Claude from design-window evidence only.
+# NOT LOCKABLE until Yashu approves the results-timestamp source (BSE official results filings, below).
+# Parsed by research/studies/prereg_io.py (strict YAML subset).
+id: PEAD_DRIFT_LONG_v1
+status: DRAFT
+hypothesis: >
+  F&O stocks whose quarterly result is greeted by a day-0 close-to-close return at least 3% above NIFTY 50's on
+  at least twice their 20-session average volume, bought at the next open (pre-open auction, 1 tick worse) and
+  held 20 sessions under a 10% disaster stop, earn a positive mean net return per trade after DhanFeeEngine CNC
+  fees on the holdout, AND the same signals' beta-adjusted 20-session drift beats the CNC hurdle.
+rationale: >
+  Post-earnings-announcement drift is one of the most replicated anomalies (US since Ball-Brown 1968 and
+  Bernard-Thomas 1989; also reported for Indian equities): prices under-react to earnings news, and institutions
+  build positions over weeks. A strong, high-volume day-0 reaction marks news the market has begun to price.
+  Design evidence with NSE timestamps: alpha +2.03% net, t 2.83 by month (T0089); with BSE timestamps (v1):
+  net +2.31% per trade, t 2.02 by month, alpha +2.18% net, t 3.2 (T0129). 2022 was negative (-1.03%).
+design_evidence:
+  trials: [T0056, T0057, T0058, T0089, T0090, T0091, T0118, T0119, T0129, T0130]
+  v1_net_pct: 2.3093
+  v1_t_by_month: 2.02
+  v1_rs_per_trade: 860
+  v1_win_rate: 0.64
+  v1_by_year: {y2022: -1.029, y2023: 6.044, y2024: 1.957}
+  drift_alpha_net_pct: 2.1817
+  drift_alpha_t: 3.2
+  trades: 200
+  months: 21
+primary_test:
+  statistic: t_cluster
+  cluster_unit: calendar month of day 0
+  se: CR1 (research/decision/stats.py clustered_se)
+  quantity: net percent return per trade (Rs 38,000 notional, fees and 1 tick per side included)
+  threshold: 2.0
+  also_require: mean_net_pct > 0
+  second_gate: drift_alpha_net > 0 (beta-adjusted open d0+1 to close d0+20 minus 0.28%, point estimate; missing or non-finite FAILS)
+  averaged_dispositions: [FILLED]
+  weighting: equal weight per signal
+  undefined_se: FAIL (a NaN or zero standard error, or fewer than 2 distinct clusters (months), fails the test)
+  minimum_events: none
+  substitution: none
+pass_rule: primary_test AND second_gate AND slippage_2_ticks mean_net_pct > 0
+secondary_tests:
+  - {name: slippage_2_ticks, require: mean_net_pct > 0}
+  - {name: by_year, require: report_only}
+data:
+  bars: {interval: daily, source: upstox_v2_daily (split/bonus back-adjusted), timestamps: session}
+  results_source:
+    name: BSE official results filings (api.bseindia.com AnnSubCategoryGetData; harvested by Antigravity 2026-09-26)
+    path: shared/track2_liquid/antigravity_staging/events_backup/bse_quarterly_results_filings_2021_2026.json
+    git_commit: e4e18d3
+    sha256: 3adefca93ca71b04aedd1d19752aa4e4743489b8bf39abf15193e1ece1de00df
+    agreement_with_nse: same public-from session for 96% of 1,918 matched results 2021-10..2024-11 (median gap 3 min)
+    approval: REQUIRED from Yashu before lock (plan decision 7, new data source)
+  design: ["2022-01-03", "2024-09-30"]
+  holdout: ["2024-10-01", "2026-07-31"]      # results with d0 in the window whose exit d0+20 is also in the window
+  snapshot: {name: p7_design_20260926, content_sha256: 72a444d7aec15d979b54a36e54afb8108df4b1cf1a0105ef76cb63a7c320059d}
+  holdout_snapshot: {name: p7_holdout_20260926, content_sha256: 6040e0cf40909afefcf03da1fed00a10478ab98f0769ff07c95d08de9b9ece11}
+universe:
+  event: the earliest BSE results filing of each 45-day group per stock; public from its timestamp
+  day0: filed at or after 15:30 -> the next session; otherwise that session
+  entry_session_eligible: true             # universe_daily ELIGIBLE on d0+1
+  unenforced: no ASM/GSM history on disk (stated limitation)
+trade:
+  side: BUY
+  product: CNC
+  entry: {rule: open of d0+1, order: pre-open auction (09:00-09:08), slippage_ticks: 1, notional_rs: 38000.00}
+  stop: {type: SL-M sell, pct_below_entry: 10.0, role: disaster stop}
+  exit: close of d0+20 - 1 tick
+  simulator: research/studies/pead.py simulate
+costs: {fees: DhanFeeEngine_CNC both legs, slippage_ticks_per_side: 1, sensitivity_ticks: [2]}
+known_limitations:
+  - the design is marginal (t 2.02; 2022 negative); about 21 holdout months give low power
+  - daily bars only; the disaster stop fills at the stop on a touch
+  - Rs 38,000 per trade for 20 sessions ties up a slot for a month
+trials_registry: research/evidence/trials_registry.csv

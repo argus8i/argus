@@ -1,0 +1,11 @@
+{
+ "lock": {
+  "id": "RESID_REV_v1",
+  "yaml_sha256": "eeec1a75130dbf209fb7420446b140bf147fce641e7020dba865f99f7e79170d",
+  "commit": "d549fb729806c0bb834a7f826c1935c03b691ce3",
+  "locked_at": "2026-09-26T03:45:51+05:30"
+ },
+ "code_identity": "d3f0d60efb8a04abab9c1506f9e24bf0ceecca751f26312f8517806a7a13488f",
+ "snapshot": "6040e0cf40909afefcf03da1fed00a10478ab98f0769ff07c95d08de9b9ece11",
+ "started_at": "2026-09-26T03:48:42+05:30"
+}

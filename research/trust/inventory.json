@@ -1,0 +1,37 @@
+{
+ "schema_version": 1,
+ "note": "Closed-world inventory (trust plan v2, P0). Everything listed must be present and verify; absence is never PASS. Changing this file is a governed change and needs a review record.",
+ "legacy_strategies": ["ORB_PROD", "RESID_REV", "ORB_SIMPLE", "ORB_MOMENTUM", "VWAP_RECLAIM", "VOL_SQUEEZE", "TRAPDOOR",
+                       "LAST_LIGHT", "RECOIL", "COMPASS", "SWEEP_RECLAIM", "LATE_MOMENTUM", "PEAD_DRIFT", "CAS_REVERSAL"],
+ "snapshots": [
+  {"name": "p7_design_20260926", "content_sha256": "72a444d7aec15d979b54a36e54afb8108df4b1cf1a0105ef76cb63a7c320059d"},
+  {"name": "p7_holdout_20260926", "content_sha256": "6040e0cf40909afefcf03da1fed00a10478ab98f0769ff07c95d08de9b9ece11"}
+ ],
+ "datasets": [
+  {"id": "daily_bars", "path": "daily"},
+  {"id": "bars_15m", "path": "bars_15m"},
+  {"id": "fo_ban", "path": "events/fo_ban.parquet"},
+  {"id": "fo_ban_days", "path": "events/fo_ban_days.parquet"},
+  {"id": "announcements", "path": "events/announcements.parquet"},
+  {"id": "board_meetings", "path": "events/board_meetings.parquet"},
+  {"id": "corporate_actions", "path": "events/corporate_actions.parquet"},
+  {"id": "fno_point_in_time", "path": "reference/fno_point_in_time_2022_2026.parquet"},
+  {"id": "cm_bhavcopy", "path": "bhavcopy/cm_bhavcopy_2021_2026.parquet"},
+  {"id": "fo_bhavcopy", "path": "bhavcopy/fo_bhavcopy_underlyings_2021_2026.parquet"},
+  {"id": "upstox_raw_manifest", "path": "raw/upstox/manifest.jsonl"}
+ ],
+ "checkouts": [
+  {"name": "operational_main_folder", "root": "main_checkout", "role": "operational", "expected_branch": "main",
+   "baseline": "cd4d58d07db42663b0ac64e3bda03757b8aefd88"},
+  {"name": "research_worktree", "root": "repo_root", "role": "research", "expected_branch": "track2/decision-engine",
+   "baseline": "352437f238af1a8864ad69a10af0d71c0866ca0c"}
+ ],
+ "baseline_note": "Commits at or before a checkout's baseline predate the trust system; they were reviewed in prose only and are reported as LEGACY, never as reviewed.",
+ "review_ledger": {"root": "main_checkout", "path": "shared/trust/reviews.jsonl"},
+ "governed_scope": ["**/*.py", "**/*.yaml", "**/*.yml", "**/*.toml", "**/*.bat", "**/*.ps1", "**/*.cmd",
+                    "**/requirements*.txt", "**/*.json", "**/*.csv"],
+ "governed_scope_note": "JSON and CSV added after CODEX-TRUST-P1-001 #2: configs, the decision register and records, and the trials registry change trusted outputs.",
+ "excluded_scope": ["**/*.md", "**/*.log"],
+ "track1_log": "CHATGPT/observation_log.csv",
+ "track2_ids_forbidden_in_track1_log": ["BAN_ENTRY_SHORT", "EXPIRY_RELIEF_LONG", "PEAD_DRIFT_LONG"]
+}

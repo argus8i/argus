@@ -1,0 +1,319 @@
+"""
+research/framework/desk.py
+==========================
+The generic paper desk. PAPER ONLY (AGENTS.md Rule 1): no broker code, no orders. Every strategy goes through the
+same rules here, so no strategy can grade its own homework:
+
+  plan       one journal row per plan day. PROSPECTIVE only when ALL hold: kind PLAN, status OK, research code
+             committed (not dirty), written before the entry deadline (09:00 IST on the entry session).
+             Otherwise LATE (or REPLAY for replays), with the reason. Refused when the pre-registration differs
+             from the one the first plan used. A second OK plan for the same day is a DUPLICATE and never scored.
+             The entry session needs a published ban list; a skipped weekday that has a CM file blocks the plan.
+  reconcile  scores each signal of the FIRST OK plan of a day exactly once, after all its hold sessions exist and
+             only when the files chain from the plan day through the hold (no missing session: market.chain).
+             Otherwise the plan stays pending (reported), or is BLOCKED with the reason (DATA_GAP,
+             ENTRY_SESSION_MISSING, CHAIN_UNKNOWN). Plans still pending long after entry are reported OVERDUE.
+  summary    per evidence class; VOID counts by reason; integrity problems (pre-registration changed); and the
+             evaluation decision on PROSPECTIVE results only (evaluate.decide with the pre-registered numbers).
+
+Two guards from CODEX-FRAMEWORK-001:
+  A2  plan and reconcile run under an operating-system lock on <journal>.lock, across threads and processes, so two
+      desks can never both read "not scored yet" and both score. The OS releases it if the holder dies, so a live
+      holder is waited for (up to 2 minutes, then refused) and never robbed.
+  A4  a PROSPECTIVE plan uses the real wall clock (wall_clock) and the real code state (code_state). A caller-
+      supplied `now` or `code` ALWAYS makes the row INJECTED_CLOCK_OR_CODE (LATE); there is no switch. Tests control
+      time by replacing wall_clock and code_state themselves.
+"""
+from __future__ import annotations
+
+import math
+import os
+import time as _time
+from collections import Counter
+from contextlib import contextmanager
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+import numpy as np
+
+from research.framework import evaluate
+from research.framework.market import MarketFiles
+from research.framework.strategy import PaperStrategy
+from research.shadow.run_day import Journal
+
+IST = timezone(timedelta(hours=5, minutes=30))
+EVIDENCE = ("PROSPECTIVE", "LATE", "REPLAY")
+PLAN_KINDS = ("PLAN", "PLAN_REPLAY")
+VOID_RATE_WARN = 0.20
+ALLOW_INJECTED = False          # RETIRED (CODEX-FRAMEWORK-002): nothing reads it; setting it changes nothing
+LOCK_WAIT_S = 120.0
+LOCK_STALE_S = 1800.0           # no longer used to take a lock (the OS lock needs no staleness rule); kept as a name
+
+
+class JournalBusy(RuntimeError):
+    """Another desk holds the journal lock (fail closed: nothing is written)."""
+
+
+def wall_clock() -> datetime:
+    return datetime.now(IST)
+
+
+def _try_lock(fd: int) -> bool:
+    """An operating-system lock on the lock file's first byte: held per open handle (so threads of one process
+    exclude each other too) and released by the OS when the holder exits or crashes, so there is never a stale lock
+    to guess about (CODEX-FRAMEWORK-002: an old file time is not proof that its owner is dead)."""
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def _unlock(fd: int) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+@contextmanager
+def journal_lock(journal_path: Path) -> Iterator[None]:
+    """Exclusive access to one journal across threads and processes. The lock file stays on disk; only the OS lock
+    on it matters. A holder that is still working is waited for (up to LOCK_WAIT_S), never robbed."""
+    lock = Path(str(journal_path) + ".lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock), os.O_CREAT | os.O_RDWR)
+    start = _time.monotonic()
+    try:
+        while True:
+            os.lseek(fd, 0, os.SEEK_SET)
+            if _try_lock(fd):
+                break
+            if _time.monotonic() - start > LOCK_WAIT_S:
+                raise JournalBusy(f"{lock} is held by another desk run for over {LOCK_WAIT_S:.0f} s")
+            _time.sleep(0.05)
+        try:
+            yield
+        finally:
+            _unlock(fd)
+    finally:
+        os.close(fd)
+
+
+def code_state() -> Dict[str, Any]:
+    """Identity of the research code and any uncommitted change to it. Unknown counts as dirty (fail closed)."""
+    try:
+        from research.studies.run_holdout import code_state as cs
+
+        st = cs()
+        return {"identity": st["identity"], "dirty": list(st["dirty"]), "head": st.get("head")}
+    except Exception as exc:
+        return {"identity": f"UNKNOWN ({type(exc).__name__})", "dirty": ["UNKNOWN"]}
+
+
+def plan_day_of(row: Dict[str, Any]) -> Optional[str]:
+    return row.get("plan_day") or row.get("expiry")          # journals written before the framework used "expiry"
+
+
+def _prereg_sha(strategy: PaperStrategy) -> str:
+    from research.studies import prereg_io
+
+    return prereg_io.normalised_sha256(strategy.prereg_path())
+
+
+# ---------------------------------------------------------------------------------------------- shared by desk + backtest
+def make_plan(strategy: PaperStrategy, md: MarketFiles, day: date) -> Tuple[Optional[date], Dict[str, Any]]:
+    """(entry session, plan). The one place a plan is made: the paper desk and the backtest both call this."""
+    entry, skipped = md.entry_session(day)
+    traded = [d.isoformat() for d in skipped if md.cm_path(d).exists()]
+    if entry is None:
+        return None, {"status": "BLOCKED", "reason": "no ban list published for any weekday in the 7 days after "
+                                                     f"{day} (fail closed)"}
+    if traded:
+        return None, {"status": "BLOCKED", "reason": f"skipped weekday(s) {traded} have a CM file: a session whose "
+                                                     "ban list is missing (fail closed)"}
+    p = dict(strategy.build_plan(md, day, entry))
+    p["skipped_weekdays"] = [d.isoformat() for d in skipped]
+    return entry, p
+
+
+def score_plan(strategy: PaperStrategy, md: MarketFiles, plan_row: Dict[str, Any], signals: List[Dict[str, Any]],
+               as_of: date) -> Tuple[str, Any]:
+    """The one place a plan is scored. ("PENDING", sessions found) until the hold has finished by as_of;
+    ("BLOCKED", {reason, detail}) when the entry session is missing or the files do not chain from the plan day
+    through the hold; else ("SCORED", (hold, [strategy.score results in signal order]))."""
+    plan_day = date.fromisoformat(plan_day_of(plan_row))
+    entry = date.fromisoformat(plan_row["entry_session"])
+    h = strategy.hold_sessions
+    hold = [d for d in md.sessions() if d >= entry][:h]
+    if len(hold) < h or hold[-1] > as_of:
+        return "PENDING", len(hold)
+    if hold[0] != entry:
+        return "BLOCKED", {"reason": "ENTRY_SESSION_MISSING", "detail": f"first session on file is {hold[0]}"}
+    ch = md.chain_window([plan_day] + hold)
+    if ch["ok"] is not True:
+        return "BLOCKED", {"reason": "DATA_GAP" if ch["ok"] is False else "CHAIN_UNKNOWN",
+                           "detail": ch["breaks"] or ch["unknown"]}
+    out = []
+    for s in signals:
+        res = dict(strategy.score(md, plan_row, s, hold))
+        if "exit_reason" not in res or "net_r" not in res:
+            raise ValueError(f"{strategy.id}.score must return exit_reason and net_r")
+        if res["net_r"] is not None and not math.isfinite(float(res["net_r"])):
+            res = {**res, "exit_reason": "VOID_NON_FINITE", "net_r": None}
+        out.append(res)
+    return "SCORED", (hold, out)
+
+
+# ---------------------------------------------------------------------------------------------- plan
+def plan(strategy: PaperStrategy, md: MarketFiles, day: date, journal_path: Optional[Path] = None, *,
+         now: Optional[datetime] = None, kind: str = "PLAN", code: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    if kind not in PLAN_KINDS:
+        raise ValueError(f"kind must be one of {PLAN_KINDS}")
+    if now is not None and now.tzinfo is None:
+        raise ValueError("now must carry a timezone (a naive time cannot be compared with the 09:00 IST deadline)")
+    injected = now is not None or code is not None
+    if injected:                                 # CODEX-FRAMEWORK-001 A4 / -002: record the truth, never the claim
+        now, code = None, None
+    jp = Path(journal_path or strategy.journal_path(replay=kind != "PLAN"))
+    with journal_lock(jp):
+        return _plan_locked(strategy, md, day, Journal(jp), now or wall_clock(), kind,
+                            code if code is not None else code_state(), injected)
+
+
+def _plan_locked(strategy: PaperStrategy, md: MarketFiles, day: date, journal: Journal, now: datetime, kind: str,
+                 code: Dict[str, Any], injected: bool) -> Dict[str, Any]:
+    rows = journal.verify()
+    sha = _prereg_sha(strategy)
+    base = {"kind": kind, "strategy": strategy.id, "plan_day": day.isoformat(),
+            "written_at": now.isoformat(timespec="seconds"), "prereg_sha256": sha,
+            "code_identity": code["identity"], "code_dirty": bool(code["dirty"])}
+
+    earlier = {r.get("prereg_sha256") for r in rows if r.get("kind") == kind and r.get("prereg_sha256")}
+    entry: Optional[date] = None
+    if earlier and earlier != {sha}:
+        p: Dict[str, Any] = {"status": "REFUSED", "reason": f"pre-registration changed after the first plan "
+                                                            f"(journal {sorted(earlier)}, now {sha})"}
+    else:
+        entry, p = make_plan(strategy, md, day)
+        prior = [r["seq"] for r in rows if r.get("kind") == kind and plan_day_of(r) == day.isoformat()
+                 and r.get("status") == "OK"]
+        if p.get("status") == "OK" and prior:
+            p = {"status": "DUPLICATE", "reason": f"an OK plan for {day} already exists (seq {prior[0]})"}
+
+    deadline = datetime.combine(entry, strategy.entry_deadline, IST) if entry else None
+    reason = None
+    if p.get("status") != "OK":
+        reason = "NOT_OK"
+    elif injected:
+        reason = "INJECTED_CLOCK_OR_CODE"
+    elif code["dirty"]:
+        reason = "CODE_DIRTY"
+    elif deadline is None or now >= deadline:
+        reason = "AFTER_DEADLINE"
+    admissible = kind == "PLAN" and reason is None
+    rec = {**base, "entry_session": entry.isoformat() if entry else None,
+           "deadline": deadline.isoformat() if deadline else None, "admissible": admissible,
+           "evidence": "REPLAY" if kind != "PLAN" else ("PROSPECTIVE" if admissible else "LATE"), **p}
+    if kind == "PLAN" and reason:
+        rec["inadmissible_reason"] = reason
+    journal.append([rec])
+    return journal.verify()[-1]
+
+
+# ---------------------------------------------------------------------------------------------- reconcile
+def reconcile(strategy: PaperStrategy, md: MarketFiles, journal_path: Optional[Path] = None, *, as_of: date,
+              replay: bool = False, now: Optional[datetime] = None) -> Dict[str, Any]:
+    jp = Path(journal_path or strategy.journal_path(replay=replay))
+    with journal_lock(jp):
+        return _reconcile_locked(strategy, md, Journal(jp), as_of, now or wall_clock())
+
+
+def _reconcile_locked(strategy: PaperStrategy, md: MarketFiles, journal: Journal, as_of: date,
+                      now: datetime) -> Dict[str, Any]:
+    rows = journal.verify()
+    done ={(r["plan_seq"], r["symbol"]) for r in rows if r.get("kind") == "RESULT"}
+    first_ok: Dict[Any, int] = {}
+    for r in rows:
+        if r.get("kind") in PLAN_KINDS and r.get("status") == "OK":
+            first_ok.setdefault((r["kind"], plan_day_of(r)), r["seq"])
+    new: List[Dict[str, Any]] = []
+    pending, blocked, overdue, ignored = 0, [], [], []
+    for pr in rows:
+        if pr.get("kind") not in PLAN_KINDS or pr.get("status") != "OK":
+            continue
+        if first_ok[(pr["kind"], plan_day_of(pr))] != pr["seq"]:
+            ignored.append(pr["seq"])
+            continue
+        entry = date.fromisoformat(pr["entry_session"])
+        todo = [s for s in pr["signals"] if (pr["seq"], s["symbol"]) not in done]
+        if not todo:
+            continue
+        state, got = score_plan(strategy, md, pr, todo, as_of)
+        if state == "PENDING":
+            pending += len(todo)
+            if (as_of - entry).days > 2 * strategy.hold_sessions + 7:
+                overdue.append({"plan_seq": pr["seq"], "entry_session": entry.isoformat(), "sessions_found": got})
+            continue
+        if state == "BLOCKED":
+            blocked.append({"plan_seq": pr["seq"], **got})
+            continue
+        hold, results = got
+        book = set(pr.get("book", pr.get("book_top3", [])))
+        for s, res in zip(todo, results):
+            new.append({"kind": "RESULT", "strategy": strategy.id, "plan_seq": pr["seq"], "symbol": s["symbol"],
+                        "side": s.get("side"), "plan_day": plan_day_of(pr), "entry_session": entry.isoformat(),
+                        "exit_session": hold[-1].isoformat(), "evidence": pr["evidence"],
+                        "in_book": s["symbol"] in book, "scored_at": now.isoformat(timespec="seconds"), **res})
+    keys = [(r["plan_seq"], r["symbol"]) for r in new]
+    if len(set(keys)) != len(keys) or set(keys) & done:
+        raise RuntimeError("a signal would be scored twice (fail closed, nothing written)")
+    if new:
+        journal.append(new)
+    return {"scored": len(new), "pending": pending, "blocked": blocked, "overdue": overdue,
+            "ignored_duplicate_plans": ignored}
+
+
+# ---------------------------------------------------------------------------------------------- summary
+def summary(strategy: PaperStrategy, journal_path: Optional[Path] = None, *, replay: bool = False) -> Dict[str, Any]:
+    rows = Journal(journal_path or strategy.journal_path(replay=replay)).verify()
+    plans = [r for r in rows if r.get("kind") in PLAN_KINDS]
+    res = [r for r in rows if r.get("kind") == "RESULT"]
+    scored = [r for r in res if r.get("net_r") is not None]
+    out: Dict[str, Any] = {}
+    for ev in EVIDENCE:
+        v = [r for r in scored if r.get("evidence") == ev]
+        book = [r["net_r"] for r in v if r.get("in_book", r.get("in_book_top3"))]
+        out[ev] = {"trades": len(v), "plan_days": len({plan_day_of(r) for r in v}),
+                   "mean_net_r": round(float(np.mean([r["net_r"] for r in v])), 4) if v else None,
+                   "book_trades": len(book), "book_mean_net_r": round(float(np.mean(book)), 4) if book else None}
+    voids = Counter(r.get("exit_reason") for r in res if r.get("net_r") is None)
+    out["void"] = sum(voids.values())
+    out["void_reasons"] = dict(voids)
+    out["plans"] = dict(Counter(f"{r['kind']}:{r.get('status')}:{r.get('evidence')}" for r in plans))
+    integrity, warnings = [], []
+    shas = {r.get("prereg_sha256") for r in plans if r.get("kind") == "PLAN" and r.get("prereg_sha256")}
+    if len(shas) > 1:
+        integrity.append(f"PREREG_CHANGED: plans used {len(shas)} different pre-registrations")
+    if len(res) >= 10 and out["void"] / len(res) > VOID_RATE_WARN:
+        warnings.append(f"VOID_RATE {out['void']}/{len(res)} above {VOID_RATE_WARN:.0%}: check the VOID reasons")
+    out["integrity"], out["warnings"] = integrity, warnings
+    prosp = [r for r in scored if r.get("evidence") == "PROSPECTIVE"]
+    ev = strategy.evaluation
+    out["decision"] = evaluate.decide([float(r["net_r"]) for r in prosp], [plan_day_of(r) for r in prosp],
+                                      review_after=int(ev["review_after"]),
+                                      futility_after=int(ev["futility_after"]), t_pass=float(ev.get("t_pass", 2.0)))
+    return out

@@ -124,9 +124,9 @@ class MultiStrategyEngine:
             norm_ofi = float(defense.get("normalized_ofi", 0.0))
 
         # -------------------------------------------------------------
-        # Strategy 1: ORB Momentum
+        # Strategy 1: ORB Momentum (Gated by Microstructure Trap Defense)
         # -------------------------------------------------------------
-        if len(candles_15m) >= 2:
+        if len(candles_15m) >= 2 and not is_trap:
             orb_res = self.orb_engine.evaluate_candidate(
                 symbol=symbol,
                 candles_15m=candles_15m,

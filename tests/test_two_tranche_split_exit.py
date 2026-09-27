@@ -179,10 +179,10 @@ def test_transaction_cost_calculator():
     assert costs_buy["turnover"] == 100000.0
     assert costs_buy["brokerage"] == 20.0  # min(20, 30) = 20
     assert costs_buy["stt"] == 0.0  # Zero STT on buy for intraday
-    assert costs_buy["exchange_charges"] == 2.97  # 0.00297%
-    assert costs_buy["gst"] == 4.13  # 18% of (20 + 2.97) = 4.1346
+    assert costs_buy["exchange_charges"] == 3.07  # 0.0030699% per NSE circular FA73061
+    assert costs_buy["gst"] == 4.17  # 18% of (20 + 3.07 + 0.10)
     assert costs_buy["stamp_duty"] == 3.0  # 0.003% of 1,00,000 = 3.0
-    assert costs_buy["total_cost"] > 30.0
+    assert costs_buy["total_cost"] == 30.34
 
     # Sell 100 shares of CDSL at 1030 (Turnover: 1,03,000)
     costs_sell = calculate_transaction_costs(1030.0, 100, side="SELL", is_intraday=True)
