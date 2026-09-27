@@ -247,6 +247,16 @@ def check_paper_desks(ctx: Mapping[str, Any]) -> Tuple[str, List[str]]:
     return ("FAIL" if problems else "PASS"), problems or ok
 
 
+def check_constitution(ctx: Mapping[str, Any]) -> Tuple[str, List[str]]:
+    """CONSTITUTION.md matches Yashu's last recorded approval, in every working copy (research/trust/constitution)."""
+    from research.trust import constitution
+
+    root = _root(ctx, "repo_root")
+    main = _root(ctx, "main_checkout")
+    others = [main] if main.resolve() != root.resolve() else []
+    return constitution.check(root, others)
+
+
 def check_isolation(ctx: Mapping[str, Any]) -> Tuple[str, List[str]]:
     inv = ctx["inventory"]
     log = _root(ctx, "main_checkout") / inv["track1_log"]
@@ -260,7 +270,7 @@ def check_isolation(ctx: Mapping[str, Any]) -> Tuple[str, List[str]]:
 CHECKS: List[Tuple[str, Callable[[Dict[str, Any]], Tuple[str, List[str]]]]] = [
     ("strategies", check_strategies), ("snapshots", check_snapshots), ("datasets", check_datasets),
     ("trials", check_trials), ("code_review", check_code), ("paper_only_gate", check_paper),
-    ("track_isolation", check_isolation), ("paper_desks", check_paper_desks),
+    ("track_isolation", check_isolation), ("paper_desks", check_paper_desks), ("constitution", check_constitution),
 ]
 
 
