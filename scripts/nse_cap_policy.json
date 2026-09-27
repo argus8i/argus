@@ -1,0 +1,30 @@
+{
+  "_schema": "NSE Request Cap Governance Policy per Yashu 26-27 Sep 2026 instructions",
+  "schedule": [
+    {
+      "from_date": "2005-01-01",
+      "to_date": "2026-09-25",
+      "max_cap": 500,
+      "archive_cap": 500,
+      "reserve": 0,
+      "comment": "Pilot and initial 3-day policy: 500 requests/day"
+    },
+    {
+      "from_date": "2026-09-26",
+      "to_date": "2026-09-26",
+      "max_cap": 970,
+      "archive_cap": 970,
+      "reserve": 0,
+      "comment": "Yashu approved +400 test on 26 Sep: 500 initial + 400 test (up to 970 archive)"
+    },
+    {
+      "from_date": "2026-09-27",
+      "to_date": "2099-12-31",
+      "max_cap": 1000,
+      "archive_cap": 970,
+      "reserve": 30,
+      "comment": "From 27 Sep onwards (Branch A active): 1,000/day total, 970 archive, 30 reserved for JOB 0 and addendum"
+    }
+  ],
+  "blocked_fallback_cap": 500
+}

@@ -41,12 +41,59 @@ import requests
 IST = timezone(timedelta(hours=5, minutes=30))
 MONTH_ABBR = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
 
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
 ARCHIVE_BASE_URL = "https://nsearchives.nseindia.com"
 DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 MIN_INTERVAL_SECONDS = 4.15
-ARCHIVE_DAILY_CAP = 500
+ARCHIVE_DAILY_CAP = 1000
 MAX_RETRIES = 2
 RETRY_BACKOFF_SECONDS = 30.0
+
+
+def load_cap_policy(
+    policy_path: Optional[Path] = None,
+    policy_date: Optional[date] = None,
+    manifest_records: Optional[List[Dict[str, Any]]] = None,
+) -> int:
+    """
+    Loads committed cap schedule from scripts/nse_cap_policy.json.
+    Clamps cap to 500 on historical pilot dates or following a 403/429 block.
+    """
+    if policy_path is None:
+        policy_path = Path(__file__).resolve().parent / "nse_cap_policy.json"
+    if not policy_path.exists():
+        return 500
+    try:
+        policy_data = json.loads(policy_path.read_text(encoding="utf-8"))
+    except Exception:
+        return 500
+
+    target_date = policy_date or datetime.now(IST).date()
+
+    if manifest_records:
+        yesterday = target_date - timedelta(days=1)
+        yesterday_iso = yesterday.isoformat()
+        for rec in manifest_records:
+            ts = str(rec.get("requested_at") or rec.get("fetched_at") or "")
+            if ts.startswith(yesterday_iso):
+                if str(rec.get("outcome", "")).startswith("STOPPED") or rec.get("http_status") in (403, 429):
+                    return int(policy_data.get("blocked_fallback_cap", 500))
+
+    target_iso = target_date.isoformat()
+    for entry in policy_data.get("schedule", []):
+        if entry.get("from_date") <= target_iso <= entry.get("to_date"):
+            return int(entry.get("max_cap", 1000))
+
+    return 500
 
 # Addition C.1: Known weekend special sessions on NSE (e.g. Budget Saturdays, Diwali Muhurat)
 KNOWN_WEEKEND_SESSIONS = [
@@ -215,6 +262,7 @@ class NseArchiveDownloader:
         user_agent: str = DEFAULT_USER_AGENT,
         session: Optional[requests.Session] = None,
         code_commit: Optional[str] = None,
+        policy_date: Optional[date] = None,
     ) -> None:
         if base_dir is None:
             repo_root = Path(__file__).resolve().parents[1]
@@ -222,8 +270,13 @@ class NseArchiveDownloader:
         self.base_dir = Path(base_dir).resolve()
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
+        self.manifest_path = self.base_dir / "manifest.jsonl"
+        self.policy_date = policy_date
+        records = self.load_manifest_records()
+        max_policy_cap = load_cap_policy(policy_date=self.policy_date, manifest_records=records)
+        self.daily_cap = min(daily_cap, max_policy_cap)
+
         self.min_interval = min_interval
-        self.daily_cap = daily_cap
         self.user_agent = user_agent
         self.code_commit = code_commit or get_git_commit()
 
@@ -233,9 +286,36 @@ class NseArchiveDownloader:
             "Accept": "*/*",
         })
 
-        self.manifest_path = self.base_dir / "manifest.jsonl"
         self._last_request_time: Optional[float] = None
         self.requests_today = self._count_today_requests()
+
+    def _is_blocked_today(self) -> bool:
+        today_iso = datetime.now(IST).date().isoformat()
+        marker_file = self.base_dir / f".blocked_{today_iso}"
+        if marker_file.exists():
+            return True
+        for rec in self.load_manifest_records():
+            ts = str(rec.get("requested_at") or rec.get("fetched_at") or "")
+            if ts.startswith(today_iso):
+                if str(rec.get("outcome", "")).startswith("STOPPED") or rec.get("http_status") in (403, 429):
+                    return True
+        return False
+
+    def _record_block_today(self, status: int, url: str) -> None:
+        today_iso = datetime.now(IST).date().isoformat()
+        marker_file = self.base_dir / f".blocked_{today_iso}"
+        try:
+            marker_file.write_text(
+                json.dumps({
+                    "date": today_iso,
+                    "status": status,
+                    "url": url,
+                    "timestamp": datetime.now(IST).isoformat(timespec="seconds"),
+                }),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
 
     def _count_today_requests(self) -> int:
         if not self.manifest_path.exists():
@@ -278,17 +358,67 @@ class NseArchiveDownloader:
     def _pace(self) -> str:
         """
         Enforces monotonic pacing >= min_interval between consecutive requests sent to the network.
+        Persists a cross-process clock and file lock so multiple instances share the same pacing.
         Returns the ISO timestamp (+05:30) of the exact moment the request is sent (requested_at).
         """
-        if self._last_request_time is not None:
-            while True:
-                elapsed = time.monotonic() - self._last_request_time
-                if elapsed >= self.min_interval:
-                    break
-                time.sleep(max(0.02, self.min_interval - elapsed))
-        now_dt = datetime.now(IST)
-        self._last_request_time = time.monotonic()
-        return now_dt.isoformat(timespec="seconds")
+        clock_file = self.base_dir / ".pacing_clock"
+        lock_file = self.base_dir / ".pacing.lock"
+
+        # Inter-process lock
+        with open(lock_file, "a+", encoding="utf-8") as lf:
+            if msvcrt is not None and hasattr(msvcrt, "locking"):
+                try:
+                    lf.seek(0)
+                    msvcrt.locking(lf.fileno(), msvcrt.LK_LOCK, 1)
+                except Exception:
+                    pass
+            elif fcntl is not None:
+                try:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+                except Exception:
+                    pass
+
+            try:
+                if clock_file.exists():
+                    try:
+                        content = clock_file.read_text(encoding="utf-8").strip()
+                        if content:
+                            last_epoch = float(content.split(",")[0])
+                            while True:
+                                elapsed = time.time() - last_epoch
+                                if elapsed >= self.min_interval:
+                                    break
+                                time.sleep(max(0.002, self.min_interval - elapsed))
+                    except Exception:
+                        pass
+                if self._last_request_time is not None:
+                    while True:
+                        elapsed = time.monotonic() - self._last_request_time
+                        if elapsed >= self.min_interval:
+                            break
+                        time.sleep(max(0.002, self.min_interval - elapsed))
+
+                now_epoch = time.time()
+                now_dt = datetime.now(IST)
+                iso_str = now_dt.isoformat(timespec="seconds")
+                try:
+                    clock_file.write_text(f"{now_epoch},{iso_str}", encoding="utf-8")
+                except Exception:
+                    pass
+                self._last_request_time = time.monotonic()
+                return iso_str
+            finally:
+                if msvcrt is not None and hasattr(msvcrt, "locking"):
+                    try:
+                        lf.seek(0)
+                        msvcrt.locking(lf.fileno(), msvcrt.LK_UNLCK, 1)
+                    except Exception:
+                        pass
+                elif fcntl is not None:
+                    try:
+                        fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+                    except Exception:
+                        pass
 
     def build_url_and_filename(self, dataset: str, trade_date: date) -> Tuple[str, str, str]:
         cfg = DATASETS[dataset]
@@ -331,6 +461,12 @@ class NseArchiveDownloader:
         # Relative path under history\ per Part 3
         # e.g., raw/nse_archive/cm_bhavcopy/2010/cm04JAN2010bhav.csv.zip
         rel_saved_path = f"raw/nse_archive/{folder}/{trade_date.year:04d}/{filename}"
+
+        # Check if host is already blocked today per Rule 6
+        if self._is_blocked_today():
+            raise StopExecutionError(
+                f"Host is blocked for today ({datetime.now(IST).date().isoformat()}) per Rule 6 (HTTP 403/429 recorded). No further requests allowed today."
+            )
 
         # Rule 11: Check resume status
         existing_records = [
@@ -380,6 +516,10 @@ class NseArchiveDownloader:
         requested_at = ""
 
         while attempt < (MAX_RETRIES + 1):
+            if self.requests_today >= self.daily_cap:
+                raise StopExecutionError(
+                    f"Daily request cap reached ({self.requests_today}/{self.daily_cap}). Halting."
+                )
             attempt += 1
             self.requests_today += 1
             requested_at = self._pace()
@@ -417,6 +557,7 @@ class NseArchiveDownloader:
 
             # Rule 6: Stop immediately on 403 or 429
             if last_status == 403:
+                self._record_block_today(403, url)
                 outcome = "STOPPED_403"
                 rec = {
                     "job": job,
@@ -439,6 +580,7 @@ class NseArchiveDownloader:
                 raise StopExecutionError(f"HTTP 403 Forbidden on {url}. Stopped immediately per Rule 6.")
 
             if last_status == 429:
+                self._record_block_today(429, url)
                 outcome = "STOPPED_429"
                 rec = {
                     "job": job,
@@ -502,10 +644,29 @@ class NseArchiveDownloader:
 
                 outcome = out_code
                 if is_valid:
-                    self.safe_write(target_file, body)
-                    saved_path = rel_saved_path
-                    saved_sha256 = hashlib.sha256(body).hexdigest()
-                    saved_bytes = len(body)
+                    if target_file.exists():
+                        matching_saved = [
+                            r for r in self.load_manifest_records()
+                            if r.get("dataset") == dataset and r.get("trade_date") == tdate_str and r.get("outcome") == "SAVED"
+                        ]
+                        if not matching_saved:
+                            # Rule 10: Never overwrite an existing unlogged file
+                            collision_name = f"{target_file.stem}_collision_{datetime.now(IST).strftime('%Y%m%d_%H%M%S')}{target_file.suffix}"
+                            collision_file = target_file.parent / collision_name
+                            self.safe_write(collision_file, body)
+                            saved_path = f"raw/nse_archive/{folder}/{trade_date.year:04d}/{collision_name}"
+                            saved_sha256 = hashlib.sha256(body).hexdigest()
+                            saved_bytes = len(body)
+                        else:
+                            self.safe_write(target_file, body)
+                            saved_path = rel_saved_path
+                            saved_sha256 = hashlib.sha256(body).hexdigest()
+                            saved_bytes = len(body)
+                    else:
+                        self.safe_write(target_file, body)
+                        saved_path = rel_saved_path
+                        saved_sha256 = hashlib.sha256(body).hexdigest()
+                        saved_bytes = len(body)
                 elif out_code == "FAILED_BAD_CONTENT":
                     # Save quarantined bad content for inspection
                     bad_file = self.base_dir / "bad_content" / folder / f"{trade_date.year:04d}" / f"{filename}.bad"
