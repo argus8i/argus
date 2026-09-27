@@ -76,6 +76,9 @@ def _mto_date(content: bytes) -> Optional[str]:
 REQUIRED = {"cm_bhavcopy": ("TckrSymb", "SctySrs", "OpnPric", "HghPric", "LwPric", "ClsPric", "PrvsClsgPric",
                             "TtlTrfVal", "TradDt"),
             "fo_bhavcopy": ("TckrSymb", "FinInstrmTp", "XpryDt", "ClsPric", "TradDt")}
+NUMERIC_REQUIRED = {"cm_bhavcopy": ("OpnPric", "HghPric", "LwPric", "ClsPric", "PrvsClsgPric", "TtlTrfVal"),
+                    "fo_bhavcopy": ("ClsPric",)}
+HTTP_FOR = {"SAVED": 200, "MISSING_404": 404}      # a logged outcome must match the server's answer
 MTO_MIN_FIELDS = 7
 
 
@@ -94,6 +97,9 @@ def _check_bytes(raw: bytes, dataset: str, source: str) -> Dict[str, Any]:
         missing = [c for c in need if c not in df.columns]
         if missing:
             return {"error": f"MISSING_COLUMNS {missing}"}
+        bad = {c: int(df[c].isna().sum()) for c in NUMERIC_REQUIRED[dataset] if df[c].isna().any()}
+        if bad or not (df["ClsPric"] > 0).any():         # CODEX-FRAMEWORK-003: names alone are not data
+            return {"bad_values": f"non-numeric or missing values {bad}" if bad else "no positive close price"}
         return {"dates": set(df["TradDt"]), "rows": int(len(df))}
     except Exception as exc:                          # BadZipFile, UnknownFormat, parse errors: all UNREADABLE
         return {"error": f"{type(exc).__name__}: {exc}"}
@@ -145,6 +151,8 @@ def audit(history: Path, cache: Optional[Path] = None, expected: tuple = EXPECTE
         res = _check_bytes(raw, ds, str(p))
         if "error" in res:
             problems.append({"kind": "UNREADABLE", **base, "error": res["error"]})
+        elif "bad_values" in res:
+            problems.append({"kind": "BAD_VALUES", **base, "detail": res["bad_values"]})
         elif res["rows"] == 0:
             problems.append({"kind": "EMPTY", **base})
         elif res["dates"] != {td}:
@@ -160,6 +168,11 @@ def audit(history: Path, cache: Optional[Path] = None, expected: tuple = EXPECTE
     outcome: Dict[str, Dict[str, str]] = defaultdict(dict)
     for r in rows:
         o, ds, td = r.get("outcome"), r.get("dataset"), r.get("trade_date")
+        if o in HTTP_FOR and r.get("http_status") != HTTP_FOR[o]:
+            # CODEX-FRAMEWORK-003: "404 holiday" logged with HTTP 200 (or a SAVED without 200) proves nothing
+            problems.append({"kind": "OUTCOME_STATUS_MISMATCH", "dataset": ds, "trade_date": td, "outcome": o,
+                             "http_status": r.get("http_status")})
+            continue
         if ds in DATASETS and td and o in ("SAVED", "MISSING_404") and outcome[td].get(ds) != "SAVED":
             outcome[td][ds] = o
     holidays = []

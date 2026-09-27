@@ -22,8 +22,14 @@ def test_os_journal_lock_excludes_another_process(tmp_path):
              "from research.framework.desk import journal_lock\n"
              "j,r=map(Path,sys.argv[1:])\n"
              "with journal_lock(j):\n    r.write_text('ready')\n    time.sleep(0.65)\n")
+    # Adapted (Claude): the child gets the repo on PYTHONPATH itself; Codex ran the suite with PYTHONPATH set, the
+    # normal suite does not, and `-P` removes the working directory, so the child could not import research.
+    import os
+    from pathlib import Path
+
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[2]))
     proc = subprocess.Popen([sys.executable, "-P", "-c", child, str(journal), str(ready)],
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
     try:
         until = time.monotonic() + 5
         while not ready.exists() and time.monotonic() < until and proc.poll() is None:
