@@ -145,6 +145,25 @@ def test_peer_response_route_substitution_rejected(msg_test_env):
     result = wait_for_agent_response(correlation_id, "CLAUDE", timeout_sec=2)
     assert result["success"] is False
     assert "recipient" in result["error"].lower() or "route" in result["error"].lower()
+
+
+def test_invalid_request_cannot_overwrite_prior_response(msg_test_env):
+    _, correlation_id = send_to_agent(
+        sender="CLAUDE", recipient="CODEX", subject="PING", body="original"
+    )
+    InboxWorker().run_single_pass()
+    outbox_file = os.path.join(msg_test_env["outbox"], f"{correlation_id}_resp.json")
+    with open(outbox_file, "rb") as f:
+        original = f.read()
+    forged = make_signed_request(
+        sender="CLAUDE", subject="PING", body="spoof",
+        message_id=f"msg_{uuid.uuid4().hex[:12]}", correlation_id=correlation_id,
+    )
+    forged["auth_signature"] = "0" * 64
+    write_json_atomic(os.path.join(msg_test_env["inbox"], forged["message_id"] + ".json"), forged)
+    InboxWorker().run_single_pass()
+    with open(outbox_file, "rb") as f:
+        assert f.read() == original
 from typing import Any, Dict, Optional
 
 

@@ -260,9 +260,8 @@ def get_agent_secret_key(agent_name: str) -> Optional[str]:
     """Returns the external secret key for a specific agent."""
     cfg = load_auth_config()
     keys = cfg.get("keys", {})
-    if isinstance(keys, dict) and agent_name in keys:
-        return keys[agent_name]
-    return cfg.get("secret_key")
+    key = keys.get(agent_name) if isinstance(keys, dict) else None
+    return key if isinstance(key, str) and key else None
 
 
 RUNTIME_METADATA_FIELDS = {"auth_signature", "claimed_at_ist", "worker_pid", "processing_started_at_ist"}
@@ -789,7 +788,7 @@ class InboxWorker:
 
         return "COMPLETED", resp_payload, artifact_hashes, None
 
-    def process_message(self, claimed_path: str, msg: Dict[str, Any]):
+    def _process_message_locked(self, claimed_path: str, msg: Dict[str, Any]):
         """Executes message, writes outbox response, and archives message safely."""
         corr_id = msg.get("correlation_id", uuid.uuid4().hex)
         safe_corr_name = get_safe_filename(corr_id, "_resp.json")
@@ -798,6 +797,12 @@ class InboxWorker:
         if not antigravity_key:
             raise RuntimeError("Antigravity gateway signing key is unavailable")
         route_agent = msg.get("recipient")
+
+        # An invalid second request must not overwrite an already signed reply.
+        # Check before schema validation, whose failure also emits a response.
+        if os.path.exists(outbox_file):
+            self.route_to_dead_letter(claimed_path, msg, f"CORRELATION_ID_COLLISION: Response already exists for '{corr_id}'")
+            return
 
         # 1. Schema, Identifier, and Authentication Validation
         is_valid, schema_err = validate_message_schema(msg)
@@ -841,21 +846,10 @@ class InboxWorker:
             self.route_to_dead_letter(claimed_path, msg, err_resp["error"])
             return
 
-        # 3. Collision Check: Prevent overwriting distinct previous responses
-        if os.path.exists(outbox_file):
-            try:
-                with open(outbox_file, "r", encoding="utf-8") as ef:
-                    existing_resp = json.load(ef)
-                if existing_resp.get("correlation_id") == corr_id and existing_resp.get("status") in ["COMPLETED", "FAILED"]:
-                    self.route_to_dead_letter(claimed_path, msg, f"CORRELATION_ID_COLLISION: Response already exists for '{corr_id}'")
-                    return
-            except Exception:
-                pass
-
-        # 4. Execute Task
+        # 3. Execute Task
         status, payload, artifact_hashes, error_msg = self.execute_task(msg, claimed_path)
 
-        # 5. Write Outbox Response Envelope with Full HMAC Signature
+        # 4. Write Outbox Response Envelope with Full HMAC Signature
         resp_envelope = {
             "message_id": f"resp_{uuid.uuid4().hex[:12]}",
             "correlation_id": corr_id,
@@ -872,7 +866,7 @@ class InboxWorker:
         resp_envelope["auth_signature"] = compute_envelope_hmac(resp_envelope, antigravity_key)
         write_json_atomic(outbox_file, resp_envelope)
 
-        # 6. Archive or Dead-Letter
+        # 5. Archive or Dead-Letter
         msg_id = msg.get("message_id")
         if status == "COMPLETED":
             msg["status"] = "COMPLETED"
@@ -886,6 +880,16 @@ class InboxWorker:
                 pass
         else:
             self.route_to_dead_letter(claimed_path, msg, error_msg or f"TASK_{status}")
+
+    def process_message(self, claimed_path: str, msg: Dict[str, Any]):
+        """Serialize requests sharing a correlation ID across worker processes."""
+        corr_id = msg.get("correlation_id", "")
+        outbox_file = os.path.join(OUTBOX_DIR, get_safe_filename(corr_id, "_resp.json"))
+        try:
+            with FileLock(outbox_file, timeout_sec=5.0, stale_sec=3600.0):
+                self._process_message_locked(claimed_path, msg)
+        except TimeoutError:
+            self.route_to_dead_letter(claimed_path, msg, "CORRELATION_LOCK_BUSY")
 
     def run_single_pass(self) -> int:
         """Processes all currently pending messages in the inbox once. Returns count processed."""

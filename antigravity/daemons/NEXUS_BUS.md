@@ -6,6 +6,9 @@ Antigravity is the central gateway. Any of `ANTIGRAVITY`, `CLAUDE`, `CODEX`, or
 Claude and Codex are invoked as **headless CLI sessions**, not as messages
 appearing in the currently open IDE chat windows. A gateway signature attests
 the CLI output; it is not a signature independently produced by that model.
+All local processes currently run under the same Windows account and can read
+the external key file. HMAC therefore verifies key possession and message
+integrity, not which human-visible IDE pane originated a request.
 
 From the repository root, for a route-only check:
 
