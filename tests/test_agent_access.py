@@ -45,3 +45,30 @@ def test_failed_checkpoint_prevents_permission_flags(monkeypatch):
     monkeypatch.setattr(agent_access, "create_checkpoint", fail)
     with pytest.raises(OSError, match="disk full"):
         agent_access.prepare_dispatch("ANTIGRAVITY")
+
+
+def test_checkpoint_excludes_track2_history_but_keeps_other_history(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    # Track 2 heavy history path
+    t2_history = root / "shared" / "track2_liquid" / "history"
+    t2_history.mkdir(parents=True, exist_ok=True)
+    (t2_history / "massive_bhavcopy.csv").write_bytes(b"huge binary archive data")
+
+    # Generic history folder (e.g. documentation or audit history)
+    doc_history = root / "docs" / "history"
+    doc_history.mkdir(parents=True, exist_ok=True)
+    (doc_history / "changelog.txt").write_bytes(b"historical documentation")
+
+    out = agent_access.create_checkpoint(root, tmp_path / "backups")
+    with zipfile.ZipFile(out) as z:
+        manifest = json.loads(z.read("manifest.json"))
+        # shared/track2_liquid/history must be excluded
+        assert "shared/track2_liquid/history" in manifest["excluded"]
+        assert "workspace/shared/track2_liquid/history/massive_bhavcopy.csv" not in z.namelist()
+        # docs/history must NOT be excluded; it must be backed up
+        assert "shared/track2_liquid/history" in manifest["excluded"]
+        assert "docs/history" not in manifest["excluded"]
+        assert "workspace/docs/history/changelog.txt" in z.namelist()
+        assert z.read("workspace/docs/history/changelog.txt") == b"historical documentation"
+

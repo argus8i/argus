@@ -14,7 +14,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 BACKUPS = ROOT.parent / "swing-trades-checkpoints"
-EXCLUDED_DIRS = {".venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache"}
+EXCLUDED_DIR_NAMES = {
+    ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache",
+    "checkpoints", "swing-trades-checkpoints", "fixtures_quarantine"
+}
+EXCLUDED_REL_PATHS = {
+    "shared/track2_liquid/history",
+}
+# Backward compatibility alias
+EXCLUDED_DIRS = EXCLUDED_DIR_NAMES
 
 
 def create_checkpoint(root=None, destination=None):
@@ -27,12 +35,18 @@ def create_checkpoint(root=None, destination=None):
     pending = destination / (stamp + ".partial")
     final = destination / (stamp + ".zip")
     manifest = {"root": str(root), "created_utc": stamp, "excluded": [], "files": {}}
+    target_history_path = (root / "shared/track2_liquid/history").resolve()
     with zipfile.ZipFile(pending, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
         for base, dirs, files in os.walk(root, followlinks=False):
             for name in list(dirs):
                 p = Path(base) / name
-                if name in EXCLUDED_DIRS:
-                    manifest["excluded"].append(str(p.relative_to(root)))
+                rel = p.relative_to(root).as_posix()
+                if (
+                    name in EXCLUDED_DIR_NAMES
+                    or rel in EXCLUDED_REL_PATHS
+                    or p.resolve() == target_history_path
+                ):
+                    manifest["excluded"].append(rel)
                     dirs.remove(name)
                 elif p.is_symlink() or (hasattr(p, "is_junction") and p.is_junction()):
                     raise RuntimeError(f"Checkpoint requires explicit handling of directory link: {p}")
