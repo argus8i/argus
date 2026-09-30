@@ -93,6 +93,7 @@ def sync_surveillance_to_research(
 
     verified_bytes: Dict[str, bytes] = {}
     verified_hashes: Dict[str, str] = {}
+    raw_rel_paths: Dict[str, str] = {}
 
     for kind in ("asm", "gsm"):
         meta = sources[kind]
@@ -132,14 +133,20 @@ def sync_surveillance_to_research(
 
         verified_bytes[kind] = b
         verified_hashes[kind] = actual_sha
+        raw_rel_paths[kind] = raw_rel
 
     # Destination immutability check: never overwrite existing files
     target_asm = target_surv_dir / f"{d_iso}_asm.json"
     target_gsm = target_surv_dir / f"{d_iso}_gsm.json"
     target_snap = target_surv_dir / snapshot_filename
     receipt_path = target_surv_dir / f"bridge_receipt_{d_iso}.json"
+    target_raw_asm = target_surv_dir / raw_rel_paths["asm"]
+    target_raw_gsm = target_surv_dir / raw_rel_paths["gsm"]
 
-    for dest_file in (target_asm, target_gsm, target_snap, receipt_path):
+    dest_files = [target_asm, target_gsm, target_snap, receipt_path, target_raw_asm, target_raw_gsm]
+    unique_dests = list(dict.fromkeys(dest_files))
+
+    for dest_file in unique_dests:
         if dest_file.exists():
             return {
                 "ok": False,
@@ -155,6 +162,14 @@ def sync_surveillance_to_research(
         atomic_write_bytes(target_gsm, verified_bytes["gsm"])
         files_written.append(str(target_gsm))
 
+        if target_raw_asm != target_asm:
+            atomic_write_bytes(target_raw_asm, verified_bytes["asm"])
+            files_written.append(str(target_raw_asm))
+
+        if target_raw_gsm != target_gsm:
+            atomic_write_bytes(target_raw_gsm, verified_bytes["gsm"])
+            files_written.append(str(target_raw_gsm))
+
         atomic_write_bytes(target_snap, snapshot_path.read_bytes())
         files_written.append(str(target_snap))
 
@@ -168,6 +183,8 @@ def sync_surveillance_to_research(
             "target_files": {
                 "asm": {"path": str(target_asm), "sha256": verified_hashes["asm"]},
                 "gsm": {"path": str(target_gsm), "sha256": verified_hashes["gsm"]},
+                "raw_asm": {"path": str(target_raw_asm), "sha256": verified_hashes["asm"]},
+                "raw_gsm": {"path": str(target_raw_gsm), "sha256": verified_hashes["gsm"]},
             },
             "status": "VERIFIED_ATOMIC",
         }
