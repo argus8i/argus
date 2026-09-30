@@ -964,6 +964,29 @@ class InboxWorker:
                     "elapsed_sec": res.get("elapsed", 0.0),
                 }, {}, err_msg
 
+            # Persist latest deep health status
+            try:
+                dh_path = os.path.join(MESSAGES_ROOT, "deep_health_latest.json")
+                cur_dh = {}
+                if os.path.exists(dh_path):
+                    with open(dh_path, "r", encoding="utf-8") as f:
+                        cur_dh = json.load(f)
+                agents = cur_dh.get("agents", {})
+                agents[recipient] = {
+                    "status": "PASS",
+                    "verified": True,
+                    "review_id": verification.get("review_id"),
+                    "elapsed_sec": round(res.get("elapsed", 0.0), 2),
+                    "timestamp_ist": get_current_ist(),
+                }
+                all_pass = all(agents.get(a, {}).get("status") == "PASS" for a in ["CODEX", "CLAUDE", "ANTIGRAVITY"])
+                cur_dh["status"] = "PASS" if all_pass else "PARTIAL"
+                cur_dh["timestamp_ist"] = get_current_ist()
+                cur_dh["agents"] = agents
+                write_json_atomic(dh_path, cur_dh)
+            except Exception:
+                pass
+
             return "COMPLETED", {
                 "agent": recipient,
                 "model_response": res.get("output"),
