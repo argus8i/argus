@@ -391,3 +391,127 @@ def test_pre_armed_conditional_intent_and_dedup_hydration(tmp_path):
     assert f"approve_{intent.intent_id}_USER" in oms_reboot._dedup_cache
     assert f"approve_{intent.intent_id}_AUTONOMOUS" in oms_reboot._dedup_cache
 
+
+def test_risk_per_share_exceeds_budget_skips_trade():
+    """
+    Enforce Rs 1,500 per-trade risk cap:
+    If floor(1500 / risk_per_share) == 0, SKIP the trade (return a reject), never force 1 share.
+    """
+    candidate = {
+        "symbol": "HIGH_RISK",
+        "entry_price": 5000.0,
+        "stop_loss": 3000.0,  # risk_per_share = 2000.0 > 1500.0 -> floor(1500 / 2000) == 0
+        "risk_rs": 1500.0,
+        "max_slot_notional_rs": 38000.0,
+    }
+    intent = ExecutionIntent.create_from_candidate(candidate)
+    assert intent is None, "Candidate with risk_per_share > 1500 must be skipped, not forced to 1 share"
+
+
+def test_caller_supplied_shares_exceeding_risk_rejected():
+    """
+    Enforce Rs 1,500 per-trade risk cap:
+    For caller-supplied shares, reject if shares x risk_per_share > 1,500.
+    """
+    candidate = {
+        "symbol": "OVERSIZED",
+        "entry_price": 100.0,
+        "stop_loss": 90.0,  # risk_per_share = 10.0
+        "shares": 200,      # 200 * 10 = 2000.0 > 1500.0
+        "risk_rs": 1500.0,
+        "max_slot_notional_rs": 38000.0,
+    }
+    intent = ExecutionIntent.create_from_candidate(candidate)
+    assert intent is None, "Caller-supplied shares exceeding Rs 1,500 risk must be rejected"
+
+
+def test_entry_price_above_slot_cap_skips_cleanly():
+    """
+    An entry price above the slot cap must be a clean SKIP/REJECT for that one candidate,
+    not an unhandled ValueError.
+    """
+    candidate = {
+        "symbol": "EXPENSIVE_STOCK",
+        "entry_price": 45000.0,  # > 38000.0 slot cap
+        "stop_loss": 44500.0,
+        "risk_rs": 1500.0,
+        "max_slot_notional_rs": 38000.0,
+    }
+    intent = ExecutionIntent.create_from_candidate(candidate)
+    assert intent is None, "Entry price above slot cap must return None cleanly without raising ValueError"
+
+
+def test_hybrid_execution_oms_handles_expensive_stock_without_crashing(tmp_path):
+    """
+    Verifies that HybridExecutionOMS handles an entry price above the slot cap
+    as a clean skip/rejection without crashing.
+    """
+    oms = HybridExecutionOMS(output_dir=tmp_path)
+    expensive_candidate = {
+        "symbol": "MRF",
+        "entry_price": 140000.0,  # Far exceeds Rs 38,000 slot cap
+        "stop_loss": 138000.0,
+        "volume_multiplier": 3.5,
+        "max_slot_notional_rs": 38000.0,
+    }
+    intent, msg = oms.submit_candidate(expensive_candidate)
+    assert intent is None, "Expensive candidate must not produce an active intent"
+    assert "REJECTED" in msg
+    assert "price exceeds slot notional" in msg or "sizing rejected" in msg
+    # Verify OMS state remains healthy and can process normal candidates afterwards
+    normal_candidate = {
+        "symbol": "CDSL",
+        "entry_price": 1000.0,
+        "stop_loss": 980.0,
+        "volume_multiplier": 3.5,
+        "var_elm_rate": 0.20,
+    }
+    intent2, msg2 = oms.submit_candidate(normal_candidate)
+    assert intent2 is not None
+    assert intent2.symbol == "CDSL"
+
+
+def test_paper_desk_handles_expensive_stock_without_crashing():
+    """
+    Verifies that the paper desk (via evaluate_symbol) handles an entry price
+    above the slot cap as a clean SIZING_REJECTED without crashing.
+    """
+    from antigravity.models.track2_orb_signal_adapter import evaluate_symbol
+    from antigravity.models.market_regime_filter import MarketRegimeSnapshot, MarketRegimeState
+
+    expensive_candle_record = {
+        "symbol": "MRF",
+        "bars": [
+            {"timestamp": "2026-09-22 09:15:00", "open": 139000.0, "high": 140000.0, "low": 138500.0, "close": 139500.0, "volume": 500},
+            {"timestamp": "2026-09-22 09:30:00", "open": 139600.0, "high": 140500.0, "low": 139200.0, "close": 140200.0, "volume": 1500},
+        ]
+    }
+    baseline = {
+        "historical_bucket_volume_median": 400.0,
+        "atr14_points": 1000.0,
+        "dtv_med20_cr": 50.0,
+    }
+    regime = MarketRegimeSnapshot(
+        state=MarketRegimeState.BULLISH_EXPANSION,
+        nifty_ltp=25000.0,
+        nifty_or_high=24950.0,
+        nifty_or_low=24800.0,
+        ad_ratio=2.0,
+        advances=35,
+        declines=15,
+        reason="NIFTY_ABOVE_OR_HIGH",
+        allow_standard_orb=True,
+        min_volume_multiple=2.5,
+    )
+    result = evaluate_symbol(
+        symbol="MRF",
+        candle_record=expensive_candle_record,
+        baseline=baseline,
+        regime=regime,
+        order_rules={"risk_rs": 1500.0, "min_volume_multiple": 2.0},
+    )
+    assert result["symbol"] == "MRF"
+    assert result["decision"] == "SIZING_REJECTED"
+    assert result["paper_instruction"] is None
+
+

@@ -89,7 +89,7 @@ class CapacityConfig:
     """One allocation configuration for every process (R16). Its fingerprint is
     pinned in the ledger; a process with different numbers cannot open it."""
     capital_rs: float = 250_000.0
-    cash_buffer_rs: float = 136_000.0
+    cash_buffer_rs: float = 75_000.0
     slots: int = 3
     risk_per_trade_rs: float = 1_500.0
     max_per_sector: int = 2

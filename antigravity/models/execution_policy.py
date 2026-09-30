@@ -107,7 +107,7 @@ class ExecutionIntent:
         candidate: Dict[str, Any],
         mode: ExecutionMode = ExecutionMode.CO_PILOT,
         expiry_seconds: float = 30.0,
-    ) -> ExecutionIntent:
+    ) -> Optional[ExecutionIntent]:
         """Constructs and validates an ExecutionIntent from a candidate signal dictionary."""
         sym = str(candidate["symbol"]).upper().strip()
         entry = round(float(candidate["entry_price"]), 2)
@@ -122,23 +122,37 @@ class ExecutionIntent:
         risk_rs = float(candidate.get("actual_risk_rs", candidate.get("risk_rs", 1500.0)))
         raw_shares = candidate.get("shares")
         max_slot_notional = float(candidate.get("max_slot_notional_rs", 38000.0))
+
+        # Check if entry price alone exceeds slot notional cap (clean skip/reject without unhandled ValueError)
+        if entry > max_slot_notional:
+            return None
+
         if raw_shares is not None:
             shares = int(raw_shares)
             if shares <= 0:
-                raise ValueError(f"Order shares must be positive, got {shares}")
+                return None
+            # Enforce Rs 1,500 per-trade risk cap on caller-supplied shares
+            if round(shares * risk_per_share, 2) > min(1500.0, risk_rs):
+                return None
             if (shares * entry) > max_slot_notional:
                 capped = int(max_slot_notional / entry)
                 if capped <= 0:
-                    raise ValueError(f"Entry price ({entry}) exceeds max slot notional ({max_slot_notional})")
+                    return None
                 shares = capped
         else:
-            shares = int(risk_rs / risk_per_share)
+            # If floor(1500 / risk_per_share) == 0, SKIP the trade (return a reject), never force 1 share
+            shares = math.floor(min(1500.0, risk_rs) / risk_per_share)
+            if shares <= 0:
+                return None
             if (shares * entry) > max_slot_notional:
                 capped = int(max_slot_notional / entry)
                 if capped <= 0:
-                    raise ValueError(f"Entry price ({entry}) exceeds max slot notional ({max_slot_notional})")
+                    return None
                 shares = capped
-            shares = max(1, shares)
+
+        # Fail-closed guard: ensure positive shares and risk <= 1500
+        if shares <= 0 or round(shares * risk_per_share, 2) > 1500.0:
+            return None
 
         actual_risk = round(shares * risk_per_share, 2)
         notional = round(shares * entry, 2)

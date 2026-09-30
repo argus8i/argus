@@ -314,6 +314,9 @@ class HybridExecutionOMS:
             except Exception as exc:
                 return None, f"REJECTED: Sizing or validation failed: {exc}"
 
+            if intent is None:
+                return None, f"REJECTED: Candidate {sym} sizing rejected, risk cap exceeded, or price exceeds slot notional"
+
             # 3. Risk Governor Gate with Capacity Ledger (Claude Pillar 2 & Codex R02/R03)
             active_pos, pending_pos = self._get_active_and_pending_exposures()
 
