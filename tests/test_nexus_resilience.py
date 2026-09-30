@@ -504,7 +504,8 @@ def test_hung_but_alive_supervisor_recovered_by_watchdog(monkeypatch, tmp_path):
         "worker_alive": False
     }
     monkeypatch.setattr(nw, "get_status", lambda: mock_status)
-    monkeypatch.setattr(nw, "_pid_is_running", lambda pid, expected_create_time=None: True if pid == hung_pid else False)
+    hung_alive = [True]
+    monkeypatch.setattr(nw, "_pid_is_running", lambda pid, expected_create_time=None: hung_alive[0] if pid == hung_pid else False)
 
     dummy_lock = tmp_path / "supervisor.lock"
     dummy_lock.write_text("dummy_lock")
@@ -513,10 +514,13 @@ def test_hung_but_alive_supervisor_recovered_by_watchdog(monkeypatch, tmp_path):
 
     monkeypatch.setattr(nw, "SUPERVISOR_LOCK_FILE", str(dummy_lock))
     monkeypatch.setattr(nw, "SUPERVISOR_PID_FILE", str(dummy_pid))
+    monkeypatch.setattr(nw, "SUPERVISOR_LOG_FILE", str(tmp_path / "supervisor.log"))
+    monkeypatch.setattr(nw, "WATCHDOG_LOG_FILE", str(tmp_path / "watchdog.log"))
 
     killed_pids = []
     def fake_kill(pid, sig):
         killed_pids.append(pid)
+        hung_alive[0] = False
 
     monkeypatch.setattr(nw.os, "kill", fake_kill)
 

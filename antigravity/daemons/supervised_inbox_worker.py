@@ -273,6 +273,7 @@ class SupervisedInboxWorker:
                     self.crash_timestamps = [t for t in self.crash_timestamps if (now - t) <= CRASH_WINDOW_SEC]
                     if len(self.crash_timestamps) >= MAX_CONSECUTIVE_CRASHES:
                         log_supervisor(f"CIRCUIT BREAKER TRIPPED: {len(self.crash_timestamps)} crashes within {CRASH_WINDOW_SEC}s. Halting supervisor to prevent crash loop.")
+                        self.circuit_breaker_tripped = True
                         self._write_pid_file(status="CIRCUIT_BREAKER_TRIPPED")
                         self.shutdown_requested = True
                         break
@@ -295,7 +296,8 @@ class SupervisedInboxWorker:
 
         finally:
             self._terminate_child()
-            self._remove_pid_file()
+            if not getattr(self, "circuit_breaker_tripped", False):
+                self._remove_pid_file()
             if os.path.exists(SUPERVISOR_STOP_FILE):
                 try:
                     os.remove(SUPERVISOR_STOP_FILE)
@@ -322,13 +324,13 @@ def get_status() -> Dict[str, Any]:
         sup_alive = _pid_is_running(sup_pid, expected_create_time=sup_ct)
         worker_alive = _pid_is_running(worker_pid, expected_create_time=worker_ct) if worker_pid else False
 
-        # Detect hung supervisor (alive in OS, but event loop frozen/deadlocked)
-        if sup_alive and last_hb and (time.time() - last_hb) > MAX_HEARTBEAT_STALE_SEC:
-            return {"status": "SUPERVISOR_HUNG", "running": False, "details": data, "worker_alive": worker_alive}
-
+        # If supervisor is running a living worker, it is RUNNING (worker may be quiet during long model calls)
         if sup_alive and worker_alive:
             return {"status": "RUNNING", "running": True, "details": data, "worker_alive": True}
         elif sup_alive and not worker_alive:
+            # Detect hung supervisor only when worker is dead and supervisor fails to recover/heartbeat
+            if last_hb and (time.time() - last_hb) > MAX_HEARTBEAT_STALE_SEC:
+                return {"status": "SUPERVISOR_HUNG", "running": False, "details": data, "worker_alive": False}
             return {"status": "WORKER_DOWN", "running": True, "details": data, "worker_alive": False}
         else:
             return {"status": "STALE_PID", "running": False, "details": data, "worker_alive": worker_alive}
@@ -350,9 +352,11 @@ def stop_daemon():
         return
 
     sup_pid = status.get("details", {}).get("supervisor_pid")
+    sup_ct = status.get("details", {}).get("supervisor_create_time_nt")
     worker_pid = status.get("details", {}).get("worker_pid")
+    worker_ct = status.get("details", {}).get("worker_create_time_nt")
 
-    if sup_pid and _pid_is_running(sup_pid):
+    if sup_pid and _pid_is_running(sup_pid, expected_create_time=sup_ct):
         print(f"[SUPERVISOR] Sending termination signal to supervisor PID={sup_pid}...")
         # 1. Create stop file indicator
         try:
@@ -374,12 +378,12 @@ def stop_daemon():
         # 3. Wait up to 5 seconds for supervisor to clean up and exit
         t0 = time.time()
         while time.time() - t0 < 5.0:
-            if not _pid_is_running(sup_pid):
+            if not _pid_is_running(sup_pid, expected_create_time=sup_ct):
                 break
             time.sleep(0.2)
 
         # 4. If still running, force terminate ONLY this PID
-        if _pid_is_running(sup_pid):
+        if _pid_is_running(sup_pid, expected_create_time=sup_ct):
             print(f"[SUPERVISOR] Force-terminating supervisor PID={sup_pid}...")
             try:
                 os.kill(sup_pid, signal.SIGTERM)
@@ -387,13 +391,13 @@ def stop_daemon():
                 pass
 
     # 5. Also terminate child worker if still alive
-    worker_pid = status.get("details", {}).get("worker_pid")
-    if worker_pid and _pid_is_running(worker_pid):
+    if worker_pid and _pid_is_running(worker_pid, expected_create_time=worker_ct):
         print(f"[SUPERVISOR] Terminating worker child process PID={worker_pid}...")
         try:
             os.kill(worker_pid, signal.SIGTERM)
         except Exception:
             pass
+
 
     # 6. Clean up files so status transitions cleanly to STOPPED
     for fpath in [SUPERVISOR_PID_FILE, SUPERVISOR_STOP_FILE, SUPERVISOR_LOCK_FILE + ".lock"]:
