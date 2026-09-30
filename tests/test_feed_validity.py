@@ -191,3 +191,16 @@ def test_snapshot_age_seconds_basic():
     )
     assert age == pytest.approx(45.0)
     assert snapshot_age_seconds({"local_write_time": "junk"}, now=NOW) is None
+
+
+def test_future_snapshot_fails_closed():
+    future_exceeds = NOW + timedelta(seconds=30)
+    ok, reason = check_feed(snap(local_write_time=future_exceeds.strftime("%Y-%m-%d %H:%M:%S")), now=NOW)
+    assert not ok
+    assert "FUTURE_TIMESTAMP" in reason
+
+    future_within_skew = NOW + timedelta(seconds=2)
+    ok, reason = check_feed(snap(local_write_time=future_within_skew.strftime("%Y-%m-%d %H:%M:%S")), now=NOW)
+    assert ok is True
+    assert reason is None
+

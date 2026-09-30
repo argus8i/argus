@@ -38,6 +38,10 @@ STALE_STATUSES = frozenset({
 # have crashed, leaving the last good file on disk looking perfectly healthy.
 MAX_SNAPSHOT_AGE_SEC = 120.0
 
+# Maximum allowed clock-skew for a snapshot claiming a future timestamp.
+# Any snapshot further in the future than this tolerance fails closed.
+MAX_FUTURE_SKEW_SEC = 5.0
+
 SNAPSHOT_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
@@ -45,7 +49,8 @@ def snapshot_age_seconds(
     snapshot: Dict[str, Any],
     now: Optional[datetime] = None,
 ) -> Optional[float]:
-    """Age of the snapshot in seconds, or None if it cannot be determined."""
+    """Age of the snapshot in seconds (positive if in the past, negative if in the future),
+    or None if it cannot be determined."""
     ts_str = snapshot.get("local_write_time")
     if not ts_str or not isinstance(ts_str, str):
         return None
@@ -53,13 +58,14 @@ def snapshot_age_seconds(
         ts = datetime.strptime(ts_str.strip(), SNAPSHOT_TIME_FORMAT)
     except (ValueError, TypeError):
         return None
-    return abs(((now or datetime.now()) - ts).total_seconds())
+    return ((now or datetime.now()) - ts).total_seconds()
 
 
 def check_feed(
     snapshot: Any,
     now: Optional[datetime] = None,
     max_age_sec: float = MAX_SNAPSHOT_AGE_SEC,
+    max_future_skew_sec: float = MAX_FUTURE_SKEW_SEC,
 ) -> Tuple[bool, Optional[str]]:
     """Return (usable, reason_if_not).
 
@@ -95,6 +101,8 @@ def check_feed(
     age = snapshot_age_seconds(snapshot, now=now)
     if age is None:
         return False, "NO_TIMESTAMP"
+    if age < -max_future_skew_sec:
+        return False, f"FUTURE_TIMESTAMP_{abs(age):.0f}S_EXCEEDS_TOLERANCE_{max_future_skew_sec:.0f}S"
     if age > max_age_sec:
         return False, f"SNAPSHOT_AGE_{age:.0f}S_EXCEEDS_{max_age_sec:.0f}S"
 
