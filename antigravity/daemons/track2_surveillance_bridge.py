@@ -13,6 +13,12 @@ Fail-Closed Rules:
    with the SHA-256 digests recorded in the official snapshot manifest.
 4. Performs atomic writes to destination so incomplete writes are impossible.
 5. Emits an immutable bridge receipt with cryptographic hashes of all synced files.
+
+Operational Status:
+Kept OFF by default. The research reader (`research.framework.market.MarketFiles`) reads
+`shared/track2_liquid/surveillance/` directly via `research.data.paths.surveillance_dir()`.
+When executed, this bridge provides cryptographic replication into `history/raw/nse/surveillance/`
+with verified bit-for-bit parity against `MarketFiles.surveillance()`.
 """
 from __future__ import annotations
 

@@ -2,17 +2,30 @@ r"""
 test_nexus_resilience.py - Verification Tests for Nexus Bus Resilience & Watchdog
 ================================================================================
 Tests:
-  1. Supervisor status contract & PID validation.
-  2. Clean shutdown via stop_daemon() without orphaned processes.
-  3. Watchdog automated recovery on simulated outage.
-  4. End-to-end PING / PONG processing on recovered daemon.
-  5. Orchestrator dashboard Bus Health telemetry reporting.
+  1. Strict test filesystem isolation (MESSAGES_ROOT, PID, lock, log paths in tmp_path).
+  2. Supervisor status contract & PID validation.
+  3. Clean shutdown without orphaned processes.
+  4. Watchdog automated recovery on simulated outage.
+  5. End-to-end PING / PONG processing on recovered daemon.
+  6. Orchestrator dashboard Bus Health telemetry reporting.
+  7. Read-only peer dispatch execution contract (refuses artifact writing).
+  8. Pre-execution nonce commit in SQLite WAL store (at-most-once semantics).
+  9. Preservation of live supervisor mutual-exclusion locks during worker restart.
+  10. NT creation-time PID recycling detection.
+  11. Dead supervisor lock cleanup and recovery.
+  12. AST invariant: single authorized launch site via Windows Task Scheduler.
+  13. Hung supervisor force-termination and recovery.
+  14. Access-denied fail-closed liveness check.
+  15. Mid-dispatch worker crash replay prevention.
+  16. Live production messages directory purity & supervisor.pid integrity invariant.
 """
 
 import os
 import sys
 import time
 import json
+import builtins
+import io
 import pytest
 
 WORKSPACE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -23,8 +36,6 @@ from antigravity.daemons.supervised_inbox_worker import (
     get_status,
     stop_daemon,
     get_current_ist,
-    SUPERVISOR_PID_FILE,
-    SUPERVISOR_LOCK_FILE,
 )
 from antigravity.daemons.nexus_watchdog import check_and_recover
 from antigravity.daemons.tri_agent_bus import (
@@ -34,38 +45,186 @@ from antigravity.daemons.tri_agent_bus import (
 from antigravity.orchestrator.status import get_hub_status
 
 
+@pytest.fixture(autouse=True)
+def isolate_nexus_filesystem(tmp_path, monkeypatch):
+    """
+    Enforces strict test isolation:
+    1. Redirects ALL messages directories, pid, lock, log, and replay store paths to tmp_path.
+    2. Installs an active filesystem interceptor that forbids any write, append, delete,
+       or creation targeting the live production antigravity/messages directory.
+    """
+    real_messages_root = os.path.normpath(os.path.join(WORKSPACE_DIR, "antigravity", "messages"))
+
+    sandbox_root = tmp_path / "messages"
+    inbox = sandbox_root / "inbox"
+    outbox = sandbox_root / "outbox"
+    archive = sandbox_root / "archive"
+    dead_letter = sandbox_root / "dead_letter"
+    backups = sandbox_root / "backups"
+    replay_db = sandbox_root / "replay_store.db"
+    sup_pid = sandbox_root / "supervisor.pid"
+    sup_lock = sandbox_root / "supervisor.lock"
+    sup_log = sandbox_root / "supervisor.log"
+    sup_stop = sandbox_root / "supervisor.stop"
+    watchdog_log = sandbox_root / "watchdog.log"
+
+    for d in [inbox, outbox, archive, dead_letter, backups]:
+        d.mkdir(parents=True, exist_ok=True)
+
+    import antigravity.daemons.inbox_worker as iw
+    import antigravity.daemons.supervised_inbox_worker as siw
+    import antigravity.daemons.nexus_watchdog as nw
+    import antigravity.daemons.tri_agent_bus as tab
+    import antigravity.orchestrator.status as aos
+
+    # 1. Patch inbox_worker
+    monkeypatch.setattr(iw, "MESSAGES_ROOT", str(sandbox_root))
+    monkeypatch.setattr(iw, "INBOX_DIR", str(inbox))
+    monkeypatch.setattr(iw, "OUTBOX_DIR", str(outbox))
+    monkeypatch.setattr(iw, "ARCHIVE_DIR", str(archive))
+    monkeypatch.setattr(iw, "DEAD_LETTER_DIR", str(dead_letter))
+    monkeypatch.setattr(iw, "BACKUPS_DIR", str(backups))
+    monkeypatch.setattr(iw, "REPLAY_DB_PATH", str(replay_db))
+
+    # 2. Patch supervised_inbox_worker
+    monkeypatch.setattr(siw, "MESSAGES_ROOT", str(sandbox_root))
+    monkeypatch.setattr(siw, "SUPERVISOR_PID_FILE", str(sup_pid))
+    monkeypatch.setattr(siw, "SUPERVISOR_LOCK_FILE", str(sup_lock))
+    monkeypatch.setattr(siw, "SUPERVISOR_LOG_FILE", str(sup_log))
+    monkeypatch.setattr(siw, "SUPERVISOR_STOP_FILE", str(sup_stop))
+
+    # 3. Patch nexus_watchdog
+    monkeypatch.setattr(nw, "MESSAGES_ROOT", str(sandbox_root))
+    monkeypatch.setattr(nw, "SUPERVISOR_PID_FILE", str(sup_pid))
+    monkeypatch.setattr(nw, "SUPERVISOR_LOCK_FILE", str(sup_lock))
+    monkeypatch.setattr(nw, "SUPERVISOR_LOG_FILE", str(sup_log))
+    monkeypatch.setattr(nw, "WATCHDOG_LOG_FILE", str(watchdog_log))
+
+    # 4. Patch tri_agent_bus
+    monkeypatch.setattr(tab, "MESSAGES_ROOT", str(sandbox_root))
+    monkeypatch.setattr(tab, "INBOX_DIR", str(inbox))
+    monkeypatch.setattr(tab, "OUTBOX_DIR", str(outbox))
+    monkeypatch.setattr(tab, "ARCHIVE_DIR", str(archive))
+    monkeypatch.setattr(tab, "DEAD_LETTER_DIR", str(dead_letter))
+    monkeypatch.setattr(tab, "BACKUPS_DIR", str(backups))
+
+    # 5. Patch orchestrator status
+    monkeypatch.setattr(aos, "MESSAGES_ROOT", str(sandbox_root))
+    monkeypatch.setattr(aos, "INBOX_DIR", str(inbox))
+    monkeypatch.setattr(aos, "OUTBOX_DIR", str(outbox))
+    monkeypatch.setattr(aos, "ARCHIVE_DIR", str(archive))
+    monkeypatch.setattr(aos, "DEAD_LETTER_DIR", str(dead_letter))
+
+    # 6. Active write/delete guard forbidding mutations to live messages directory
+    orig_open = builtins.open
+    def guarded_open(file, *args, **kwargs):
+        try:
+            resolved = os.path.normpath(os.path.abspath(str(file)))
+            if resolved.startswith(real_messages_root):
+                mode = args[0] if args else kwargs.get("mode", "r")
+                if any(m in mode for m in ("w", "a", "+", "x")):
+                    raise PermissionError(f"TEST ISOLATION BREACH: Attempted write to live messages folder: {resolved}")
+        except PermissionError:
+            raise
+        except Exception:
+            pass
+        return orig_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", guarded_open)
+    monkeypatch.setattr(io, "open", guarded_open)
+
+    orig_remove = os.remove
+    def guarded_remove(path, *args, **kwargs):
+        if os.path.normpath(os.path.abspath(str(path))).startswith(real_messages_root):
+            raise PermissionError(f"TEST ISOLATION BREACH: Attempted os.remove on live path: {path}")
+        return orig_remove(path, *args, **kwargs)
+    monkeypatch.setattr(os, "remove", guarded_remove)
+
+    orig_unlink = os.unlink
+    def guarded_unlink(path, *args, **kwargs):
+        if os.path.normpath(os.path.abspath(str(path))).startswith(real_messages_root):
+            raise PermissionError(f"TEST ISOLATION BREACH: Attempted os.unlink on live path: {path}")
+        return orig_unlink(path, *args, **kwargs)
+    monkeypatch.setattr(os, "unlink", guarded_unlink)
+
+
 def test_supervisor_status_contract():
-    """Verifies that get_status() returns required health fields."""
+    """Verifies that get_status() returns required health fields across lifecycle states."""
+    import antigravity.daemons.supervised_inbox_worker as siw
+    from antigravity.daemons.inbox_worker import get_process_create_time_nt
+
+    # 1. Stopped state (PID file absent)
     st = get_status()
     assert isinstance(st, dict)
     assert "status" in st
     assert "running" in st
-    assert st["status"] in ("RUNNING", "WORKER_DOWN", "STALE_PID", "STOPPED", "ERROR")
+    assert st["status"] == "STOPPED"
+    assert st["running"] is False
+
+    # 2. Running state (PID file present with alive process)
+    my_pid = os.getpid()
+    ct = get_process_create_time_nt(my_pid)
+    data = {
+        "supervisor_pid": my_pid,
+        "supervisor_create_time_nt": ct,
+        "worker_pid": my_pid,
+        "worker_create_time_nt": ct,
+        "last_heartbeat_ts": time.time(),
+        "status": "RUNNING"
+    }
+    with open(siw.SUPERVISOR_PID_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+    st2 = get_status()
+    assert st2["running"] is True
+    assert st2["status"] == "RUNNING"
+    assert st2["worker_alive"] is True
 
 
-def test_watchdog_recovers_if_down():
+def test_watchdog_recovers_if_down(monkeypatch):
     """Verifies that the 5-minute watchdog detects outages and recovers the daemon."""
-    res = check_and_recover(verbose=False)
+    import antigravity.daemons.nexus_watchdog as nw
+    from antigravity.daemons.inbox_worker import get_process_create_time_nt
+
+    sup_pid_file = nw.SUPERVISOR_PID_FILE
+    assert not os.path.exists(sup_pid_file)
+
+    def fake_start():
+        pid = os.getpid()
+        ct = get_process_create_time_nt(pid)
+        data = {
+            "supervisor_pid": pid,
+            "supervisor_create_time_nt": ct,
+            "worker_pid": pid,
+            "worker_create_time_nt": ct,
+            "last_heartbeat_ts": time.time(),
+            "started_at_ist": get_current_ist(),
+            "status": "RUNNING"
+        }
+        with open(sup_pid_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        return True
+
+    monkeypatch.setattr(nw, "start_supervisor_task", fake_start)
+    monkeypatch.setattr(nw, "_pid_is_running", lambda pid, expected_create_time=None: True)
+
+    res = nw.check_and_recover(verbose=False)
     assert res["healthy"] is True
-    st = get_status()
+    st = nw.get_status()
     assert st["running"] is True
     assert st["status"] == "RUNNING"
     assert st.get("worker_alive") is True
 
 
 def test_end_to_end_ping_pong_after_recovery():
-    """Verifies that signed messages process cleanly after automated recovery."""
-    st = get_status()
-    if not st["running"]:
-        check_and_recover(verbose=False)
-
+    """Verifies that signed messages process cleanly in an isolated environment."""
     msg_id, corr_id = send_to_agent(
         sender="CLAUDE",
         recipient="ANTIGRAVITY",
         subject="PING",
         body="RESILIENCE_TEST",
         track="SHARED",
-        timeout_sec=30.0,
+        timeout_sec=10.0,
     )
     assert msg_id.startswith("msg_")
     assert corr_id.startswith("corr_")
@@ -74,7 +233,8 @@ def test_end_to_end_ping_pong_after_recovery():
         correlation_id=corr_id,
         recipient="ANTIGRAVITY",
         timeout_sec=10.0,
-        poll_interval_sec=0.25,
+        poll_interval_sec=0.1,
+        auto_process_worker=True,
     )
     assert resp["success"] is True
     assert resp["status"] == "COMPLETED"
@@ -84,6 +244,34 @@ def test_end_to_end_ping_pong_after_recovery():
 
 def test_dashboard_bus_health_telemetry():
     """Verifies that get_hub_status() contains Bus Health and last processed message."""
+    import antigravity.daemons.nexus_watchdog as nw
+    import antigravity.daemons.inbox_worker as iw
+    from antigravity.daemons.inbox_worker import get_process_create_time_nt
+
+    pid = os.getpid()
+    ct = get_process_create_time_nt(pid)
+    data = {
+        "supervisor_pid": pid,
+        "supervisor_create_time_nt": ct,
+        "worker_pid": pid,
+        "worker_create_time_nt": ct,
+        "last_heartbeat_ts": time.time(),
+        "status": "RUNNING"
+    }
+    with open(nw.SUPERVISOR_PID_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+    archive_msg = {
+        "message_id": "msg_test_01",
+        "sender": "CLAUDE",
+        "recipient": "ANTIGRAVITY",
+        "subject": "PING",
+        "status": "COMPLETED",
+        "completed_at_ist": get_current_ist()
+    }
+    with open(os.path.join(iw.ARCHIVE_DIR, "msg_test_01.json"), "w", encoding="utf-8") as f:
+        json.dump(archive_msg, f, indent=2)
+
     hub = get_hub_status()
     assert "bus" in hub
     bus = hub["bus"]
@@ -92,6 +280,7 @@ def test_dashboard_bus_health_telemetry():
     if bus["health"] == "OK":
         assert bus["supervisor_pid"] is not None
         assert bus["worker_pid"] is not None
+        assert bus["last_message"]["message_id"] == "msg_test_01"
 
 
 def test_peer_dispatch_refuses_file_writing():
@@ -116,7 +305,7 @@ def test_peer_dispatch_refuses_file_writing():
 
 def test_nonce_committed_before_execution_at_most_once():
     """Verifies that nonces are recorded in SQLite WAL store BEFORE task execution to enforce at-most-once semantics."""
-    from antigravity.daemons.inbox_worker import verify_message_auth, MESSAGES_ROOT, DurableReplayStore
+    from antigravity.daemons.inbox_worker import verify_message_auth
     import uuid
 
     test_nonce = f"nonce_{uuid.uuid4().hex[:12]}"
@@ -150,7 +339,7 @@ def test_nonce_committed_before_execution_at_most_once():
 def test_watchdog_never_duplicates_live_supervisor_on_worker_down(monkeypatch, tmp_path):
     """Verifies that WORKER_DOWN is treated as 'supervisor is restarting its worker, wait' and NEVER deletes locks or spawns a second supervisor."""
     import antigravity.daemons.nexus_watchdog as nw
-    
+
     mock_status = {
         "status": "WORKER_DOWN",
         "running": True,
@@ -158,9 +347,8 @@ def test_watchdog_never_duplicates_live_supervisor_on_worker_down(monkeypatch, t
         "worker_alive": False
     }
     monkeypatch.setattr(nw, "get_status", lambda: mock_status)
-    monkeypatch.setattr(nw, "_pid_is_running", lambda pid: True if pid == 99999 else False)
+    monkeypatch.setattr(nw, "_pid_is_running", lambda pid, expected_create_time=None: True if pid == 99999 else False)
 
-    # Mock lock file presence
     dummy_lock = tmp_path / "supervisor.lock"
     dummy_lock.write_text("dummy_lock")
     monkeypatch.setattr(nw, "SUPERVISOR_LOCK_FILE", str(dummy_lock))
@@ -171,17 +359,14 @@ def test_watchdog_never_duplicates_live_supervisor_on_worker_down(monkeypatch, t
         spawn_called = True
         return None
 
-    monkeypatch.setattr(nw, "start_supervisor_task", fake_spawn, raising=False)
+    monkeypatch.setattr(nw, "start_supervisor_task", fake_spawn)
     monkeypatch.setattr(nw.subprocess, "Popen", fake_spawn)
 
     res = nw.check_and_recover(verbose=False)
 
-    # Must treat as healthy/wait, NOT an outage restart
     assert res.get("healthy") is True
     assert res.get("action") in ("WAIT_WORKER_RESTART", "NOOP", "SUPERVISOR_ALIVE_WAIT")
-    # Must NEVER have deleted the lock file of a live supervisor
     assert dummy_lock.exists(), "SUPERVISOR_LOCK_FILE must not be deleted when supervisor is alive!"
-    # Must NEVER have spawned a duplicate supervisor
     assert spawn_called is False, "A second supervisor was spawned while supervisor was alive!"
 
 
@@ -210,7 +395,6 @@ def test_watchdog_never_deletes_locks_when_supervisor_alive(monkeypatch, tmp_pat
 
     res = nw.check_and_recover(verbose=False)
 
-    # Because PID 88888 is alive, files must NOT be deleted
     assert dummy_lock.exists(), "supervisor.lock was deleted while supervisor process was alive!"
     assert dummy_lock_lock.exists(), "supervisor.lock.lock was deleted while supervisor process was alive!"
     assert dummy_pid.exists(), "supervisor.pid was deleted while supervisor process was alive!"
@@ -244,7 +428,6 @@ def test_watchdog_cleans_locks_and_recovers_when_supervisor_is_dead(monkeypatch,
         "worker_alive": False
     }
     monkeypatch.setattr(nw, "get_status", lambda: mock_status)
-    # Supervisor is confirmed dead
     monkeypatch.setattr(nw, "_pid_is_running", lambda pid, expected_create_time=None: False)
 
     dummy_lock = tmp_path / "supervisor.lock"
@@ -267,11 +450,9 @@ def test_watchdog_cleans_locks_and_recovers_when_supervisor_is_dead(monkeypatch,
 
     res = nw.check_and_recover(verbose=False)
 
-    # When supervisor is DEAD, locks MUST be cleaned up so new supervisor can acquire
     assert not dummy_lock.exists(), "supervisor.lock was not cleared when supervisor died!"
     assert not dummy_lock_lock.exists(), "supervisor.lock.lock was not cleared when supervisor died!"
     assert not dummy_pid.exists(), "supervisor.pid was not cleared when supervisor died!"
-    # Recovery must have been triggered via start_supervisor_task()
     assert spawn_called is True, "start_supervisor_task was not triggered when supervisor died!"
 
 
@@ -281,13 +462,7 @@ def test_ast_single_launch_site_for_supervisor():
     import ast
     from pathlib import Path
 
-    allowed_sites = {
-        ("antigravity/daemons/nexus_watchdog.py", "start_supervisor_task"),
-        ("antigravity/daemons/supervised_inbox_worker.py", "__main__"),
-    }
-
     spawning_apis = {"Popen", "run", "call", "check_call", "system", "spawnlp", "spawnl", "startfile"}
-
     py_files = list(Path(WORKSPACE_DIR, "antigravity").rglob("*.py"))
     violations = []
 
@@ -307,10 +482,8 @@ def test_ast_single_launch_site_for_supervisor():
                     func_name = node.func.id
 
                 if func_name in spawning_apis:
-                    # Check if arguments reference supervised_inbox_worker
                     arg_str = ast.dump(node)
                     if "supervised_inbox_worker" in arg_str:
-                        # Popen is forbidden everywhere for the supervisor
                         if func_name == "Popen":
                             violations.append(f"{rel_path}:{node.lineno} calls Popen on supervised_inbox_worker")
                         elif "schtasks" not in arg_str:
@@ -357,11 +530,8 @@ def test_hung_but_alive_supervisor_recovered_by_watchdog(monkeypatch, tmp_path):
 
     res = nw.check_and_recover(verbose=False)
 
-    # Hung supervisor MUST be force-terminated
     assert hung_pid in killed_pids, "Hung supervisor was not killed by watchdog!"
-    # Locks must be cleared
     assert not dummy_lock.exists(), "supervisor.lock was not cleared after killing hung supervisor!"
-    # Recovery must be triggered
     assert spawn_called is True, "Watchdog failed to trigger schtasks restart for hung supervisor!"
 
 
@@ -370,20 +540,17 @@ def test_access_denied_liveness_fails_closed(monkeypatch):
     from antigravity.daemons.inbox_worker import _pid_is_running
     import ctypes
 
-    # Mock OpenProcess returning NULL and GetLastError returning 5 (ERROR_ACCESS_DENIED)
     class FakeKernel:
         def OpenProcess(self, access, inherit, pid):
-            return 0  # NULL handle
+            return 0
         def GetLastError(self):
-            return 5  # ERROR_ACCESS_DENIED
+            return 5
 
     monkeypatch.setattr(ctypes.windll, "kernel32", FakeKernel())
-
-    # Must fail closed: return True (assume process is alive / unknown)
     assert _pid_is_running(99999) is True
 
 
-def test_kill_during_dispatch_preserves_nonce_and_at_most_once(tmp_path):
+def test_kill_during_dispatch_preserves_nonce_and_at_most_once():
     """Verifies that if a worker is killed mid-execution, re-processing the same message fails with REPLAY_ATTACK because the nonce was committed before execution started."""
     from antigravity.daemons.inbox_worker import (
         verify_message_auth,
@@ -421,5 +588,34 @@ def test_kill_during_dispatch_preserves_nonce_and_at_most_once(tmp_path):
     assert "REPLAY_ATTACK" in err2
 
 
+def test_live_messages_directory_untouched():
+    """
+    Verification Invariant:
+    Proves that running resilience tests never writes, creates, or deletes any files
+    in the live production antigravity/messages folder, and specifically confirms that
+    the live supervisor.pid has not been modified.
+    """
+    real_messages_root = os.path.normpath(os.path.join(WORKSPACE_DIR, "antigravity", "messages"))
+    live_pid_file = os.path.join(real_messages_root, "supervisor.pid")
 
+    # 1. Assert live supervisor.pid exists and contains valid running supervisor data
+    assert os.path.exists(live_pid_file), "Live supervisor.pid must exist"
+    with open(live_pid_file, "r", encoding="utf-8") as f:
+        pid_data = json.load(f)
+    live_sup_pid = pid_data.get("supervisor_pid")
+    assert live_sup_pid is not None and live_sup_pid > 0
+    # Must NOT be test mock PID
+    assert live_sup_pid not in (55555, 88888, 77777, 99999, 42)
 
+    # 2. Direct attempt to write to live_messages_root must be blocked by the isolation guard
+    with pytest.raises(PermissionError) as exc_info:
+        test_leak_file = os.path.join(real_messages_root, "test_leak.tmp")
+        with open(test_leak_file, "w", encoding="utf-8") as f:
+            f.write("leak")
+    assert "TEST ISOLATION BREACH" in str(exc_info.value)
+    assert not os.path.exists(os.path.join(real_messages_root, "test_leak.tmp"))
+
+    # 3. Confirm live supervisor.pid contents are intact and uncorrupted
+    with open(live_pid_file, "r", encoding="utf-8") as f:
+        pid_data_after = json.load(f)
+    assert pid_data == pid_data_after, "Live supervisor.pid was modified during test run!"
