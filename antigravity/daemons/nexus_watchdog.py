@@ -37,6 +37,40 @@ from antigravity.daemons.supervised_inbox_worker import (
 WATCHDOG_LOG_FILE = os.path.join(MESSAGES_ROOT, "watchdog.log")
 
 
+def _redirect_streams_for_windowless_execution():
+    """Ensures stdout, stderr, and uncaught exceptions are written to watchdog.log under pythonw.exe."""
+    class LogStream:
+        def __init__(self, filepath, stream_name):
+            self.filepath = filepath
+            self.stream_name = stream_name
+        def write(self, s):
+            if not s:
+                return
+            try:
+                os.makedirs(os.path.dirname(self.filepath), exist_ok=True)
+                with open(self.filepath, "a", encoding="utf-8") as f:
+                    f.write(s)
+            except Exception:
+                pass
+        def flush(self):
+            pass
+
+    if sys.stdout is None or not hasattr(sys.stdout, "write"):
+        sys.stdout = LogStream(WATCHDOG_LOG_FILE, "STDOUT")
+    if sys.stderr is None or not hasattr(sys.stderr, "write"):
+        sys.stderr = LogStream(WATCHDOG_LOG_FILE, "STDERR")
+
+    def _unhandled_exception_hook(exc_type, exc_val, exc_tb):
+        import traceback
+        tb_lines = "".join(traceback.format_exception(exc_type, exc_val, exc_tb))
+        log_watchdog(f"CRITICAL UNHANDLED EXCEPTION:\n{tb_lines}")
+
+    sys.excepthook = _unhandled_exception_hook
+
+
+_redirect_streams_for_windowless_execution()
+
+
 def log_watchdog(message: str):
     """Logs timestamped entry to stdout, supervisor.log, and watchdog.log."""
     ist_time = get_current_ist()
@@ -98,7 +132,8 @@ def check_and_recover(verbose: bool = True) -> Dict[str, Any]:
         return {"healthy": True, "action": "WAIT_WORKER_RESTART", "status": st}
 
     sup_pid = st.get("details", {}).get("supervisor_pid")
-    if sup_pid and _pid_is_running(sup_pid):
+    sup_ct = st.get("details", {}).get("supervisor_create_time_nt")
+    if sup_pid and _pid_is_running(sup_pid, expected_create_time=sup_ct):
         if verbose:
             log_watchdog(f"Health check: Status={status_label}, but Supervisor PID={sup_pid} is STILL ALIVE. Waiting without deleting lock files or spawning duplicate.")
         return {"healthy": True, "action": "SUPERVISOR_ALIVE_WAIT", "status": st}
@@ -130,7 +165,8 @@ def check_and_recover(verbose: bool = True) -> Dict[str, Any]:
 
     # Clean up orphaned child worker from the dead supervisor if still running
     old_worker_pid = st.get("details", {}).get("worker_pid")
-    if old_worker_pid and _pid_is_running(old_worker_pid):
+    old_worker_ct = st.get("details", {}).get("worker_create_time_nt")
+    if old_worker_pid and _pid_is_running(old_worker_pid, expected_create_time=old_worker_ct):
         try:
             os.kill(old_worker_pid, signal.SIGTERM)
             log_watchdog(f"Cleaned up orphaned worker PID={old_worker_pid}.")

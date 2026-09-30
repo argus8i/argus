@@ -196,7 +196,7 @@ def test_watchdog_never_deletes_locks_when_supervisor_alive(monkeypatch, tmp_pat
         "worker_alive": False
     }
     monkeypatch.setattr(nw, "get_status", lambda: mock_status)
-    monkeypatch.setattr(nw, "_pid_is_running", lambda pid: True if pid == 88888 else False)
+    monkeypatch.setattr(nw, "_pid_is_running", lambda pid, expected_create_time=None: True if pid == 88888 else False)
 
     dummy_lock = tmp_path / "supervisor.lock"
     dummy_lock.write_text("dummy_lock")
@@ -214,5 +214,65 @@ def test_watchdog_never_deletes_locks_when_supervisor_alive(monkeypatch, tmp_pat
     assert dummy_lock.exists(), "supervisor.lock was deleted while supervisor process was alive!"
     assert dummy_lock_lock.exists(), "supervisor.lock.lock was deleted while supervisor process was alive!"
     assert dummy_pid.exists(), "supervisor.pid was deleted while supervisor process was alive!"
+
+
+def test_pid_is_running_detects_pid_recycling():
+    """Verifies that _pid_is_running detects when Windows recycles a PID to a different process."""
+    from antigravity.daemons.inbox_worker import _pid_is_running, get_process_create_time_nt
+
+    current_pid = os.getpid()
+    actual_ct = get_process_create_time_nt(current_pid)
+    assert actual_ct is not None, "get_process_create_time_nt must return a valid 64-bit NT timestamp on Windows"
+
+    # 1. Matching PID + matching create time must be alive
+    assert _pid_is_running(current_pid, expected_create_time=actual_ct) is True
+
+    # 2. Matching PID + DIFFERENT create time (simulating recycled PID) must return False
+    bogus_ct = actual_ct + 50000000  # 5 seconds later
+    assert _pid_is_running(current_pid, expected_create_time=bogus_ct) is False
+
+
+def test_watchdog_cleans_locks_and_recovers_when_supervisor_is_dead(monkeypatch, tmp_path):
+    """Verifies the opposite rule: when supervisor is genuinely DEAD, stale locks are cleared and recovery runs."""
+    import antigravity.daemons.nexus_watchdog as nw
+
+    dead_pid = 77777
+    mock_status = {
+        "status": "STALE_PID",
+        "running": False,
+        "details": {"supervisor_pid": dead_pid, "supervisor_create_time_nt": 12345, "worker_pid": None},
+        "worker_alive": False
+    }
+    monkeypatch.setattr(nw, "get_status", lambda: mock_status)
+    # Supervisor is confirmed dead
+    monkeypatch.setattr(nw, "_pid_is_running", lambda pid, expected_create_time=None: False)
+
+    dummy_lock = tmp_path / "supervisor.lock"
+    dummy_lock.write_text("dummy_lock")
+    dummy_lock_lock = tmp_path / "supervisor.lock.lock"
+    dummy_lock_lock.write_text("lock_lock")
+    dummy_pid = tmp_path / "supervisor.pid"
+    dummy_pid.write_text(json.dumps({"supervisor_pid": dead_pid}))
+
+    monkeypatch.setattr(nw, "SUPERVISOR_LOCK_FILE", str(dummy_lock))
+    monkeypatch.setattr(nw, "SUPERVISOR_PID_FILE", str(dummy_pid))
+
+    spawn_called = False
+    def fake_start():
+        nonlocal spawn_called
+        spawn_called = True
+        return True
+
+    monkeypatch.setattr(nw, "start_supervisor_task", fake_start)
+
+    res = nw.check_and_recover(verbose=False)
+
+    # When supervisor is DEAD, locks MUST be cleaned up so new supervisor can acquire
+    assert not dummy_lock.exists(), "supervisor.lock was not cleared when supervisor died!"
+    assert not dummy_lock_lock.exists(), "supervisor.lock.lock was not cleared when supervisor died!"
+    assert not dummy_pid.exists(), "supervisor.pid was not cleared when supervisor died!"
+    # Recovery must have been triggered via start_supervisor_task()
+    assert spawn_called is True, "start_supervisor_task was not triggered when supervisor died!"
+
 
 

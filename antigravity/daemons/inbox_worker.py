@@ -48,25 +48,83 @@ DEFAULT_EXTERNAL_KEY_PATH = r"C:\Users\yashw\.gemini\antigravity\agent_keys.json
 CLAIM_TIMEOUT_SEC = 60.0  # Grace period for claims whose worker has exited.
 
 
-def _pid_is_running(pid: object) -> bool:
-    """Fail closed when process liveness cannot be established."""
+def get_process_create_time_nt(pid: Optional[int]) -> Optional[int]:
+    """Returns the 64-bit NT creation timestamp (FILETIME) of the process, or None."""
+    if os.name != "nt" or not isinstance(pid, int) or pid <= 0:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.windll.kernel32
+        handle = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return None
+        try:
+            class FILETIME(ctypes.Structure):
+                _fields_ = [('dwLowDateTime', wintypes.DWORD), ('dwHighDateTime', wintypes.DWORD)]
+            creation = FILETIME()
+            exit_t = FILETIME()
+            kernel_t = FILETIME()
+            user_t = FILETIME()
+            if kernel.GetProcessTimes(handle, ctypes.byref(creation), ctypes.byref(exit_t), ctypes.byref(kernel_t), ctypes.byref(user_t)):
+                return (creation.dwHighDateTime << 32) | creation.dwLowDateTime
+            return None
+        finally:
+            kernel.CloseHandle(handle)
+    except Exception:
+        return None
+
+
+def _pid_is_running(pid: object, expected_create_time: Optional[int] = None) -> bool:
+    """Fail closed when process liveness cannot be established, but detect PID recycling."""
     if type(pid) is not int or pid <= 0:
         return True
     if pid == os.getpid():
+        if expected_create_time is not None:
+            my_create = get_process_create_time_nt(pid)
+            if my_create is not None and my_create != expected_create_time:
+                return False
         return True
     try:
         if os.name == "nt":
             import ctypes
+            from ctypes import wintypes
             kernel = ctypes.windll.kernel32
             handle = kernel.OpenProcess(0x1000, False, pid)
             if not handle:
-                # Access denied is not proof that the process exited.
+                # ERROR_INVALID_PARAMETER (87) means process does not exist
                 return ctypes.GetLastError() != 87
             try:
                 exit_code = ctypes.c_ulong()
                 if not kernel.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
                     return True
-                return exit_code.value == 259  # STILL_ACTIVE
+                if exit_code.value != 259:  # 259 == STILL_ACTIVE
+                    return False
+
+                # If process is still active, verify creation time to defeat PID recycling
+                if expected_create_time is not None:
+                    class FILETIME(ctypes.Structure):
+                        _fields_ = [('dwLowDateTime', wintypes.DWORD), ('dwHighDateTime', wintypes.DWORD)]
+                    creation = FILETIME()
+                    exit_t = FILETIME()
+                    kernel_t = FILETIME()
+                    user_t = FILETIME()
+                    if kernel.GetProcessTimes(handle, ctypes.byref(creation), ctypes.byref(exit_t), ctypes.byref(kernel_t), ctypes.byref(user_t)):
+                        actual_ct = (creation.dwHighDateTime << 32) | creation.dwLowDateTime
+                        if actual_ct != expected_create_time:
+                            # PID was recycled to a different process!
+                            return False
+
+                # Check process image name to ensure it's still a python runtime
+                buf = ctypes.create_unicode_buffer(512)
+                size = wintypes.DWORD(512)
+                if kernel.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                    exe_name = buf.value.lower()
+                    if "python" not in exe_name:
+                        # PID was recycled to non-python process!
+                        return False
+
+                return True
             finally:
                 kernel.CloseHandle(handle)
         os.kill(pid, 0)
@@ -161,6 +219,7 @@ class FileLock:
                 self.fd = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
                 lock_data = json.dumps({
                     "pid": os.getpid(),
+                    "create_time_nt": get_process_create_time_nt(os.getpid()),
                     "acquired_at": time.time(),
                     "target": self.target_path
                 }).encode("utf-8")
@@ -183,7 +242,8 @@ class FileLock:
             with open(self.lock_path, "r", encoding="utf-8") as f:
                 owner = json.load(f)
             pid = owner.get("pid")
-            if not _pid_is_running(pid):
+            ct = owner.get("create_time_nt")
+            if not _pid_is_running(pid, expected_create_time=ct):
                 try:
                     os.remove(self.lock_path)
                     return True

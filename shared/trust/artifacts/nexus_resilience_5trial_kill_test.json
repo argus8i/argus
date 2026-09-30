@@ -1,0 +1,72 @@
+[
+  {
+    "trial": 1,
+    "timestamp_ist": "2026-09-30 16:05:03 IST",
+    "target_killed": "Supervisor PID=39208",
+    "kill_method": "taskkill /F /PID 39208",
+    "kill_exit_code": 0,
+    "immediate_status": "STALE_PID",
+    "recovered": true,
+    "recovery_duration_sec": 48.39,
+    "new_supervisor_pid": 32540,
+    "new_worker_pid": 37836,
+    "ping_verified": true,
+    "ping_latency_sec": 0.616
+  },
+  {
+    "trial": 2,
+    "timestamp_ist": "2026-09-30 16:06:03 IST",
+    "target_killed": "Supervisor PID=32540",
+    "kill_method": "taskkill /F /PID 32540",
+    "kill_exit_code": 0,
+    "immediate_status": "STALE_PID",
+    "recovered": true,
+    "recovery_duration_sec": 59.35,
+    "new_supervisor_pid": 41760,
+    "new_worker_pid": 36808,
+    "ping_verified": true,
+    "ping_latency_sec": 0.615
+  },
+  {
+    "trial": 3,
+    "timestamp_ist": "2026-09-30 16:07:03 IST",
+    "target_killed": "Supervisor PID=41760",
+    "kill_method": "taskkill /F /PID 41760",
+    "kill_exit_code": 0,
+    "immediate_status": "STALE_PID",
+    "recovered": true,
+    "recovery_duration_sec": 59.34,
+    "new_supervisor_pid": 13752,
+    "new_worker_pid": 6972,
+    "ping_verified": true,
+    "ping_latency_sec": 0.818
+  },
+  {
+    "trial": 4,
+    "timestamp_ist": "2026-09-30 16:08:03 IST",
+    "target_killed": "Supervisor PID=13752",
+    "kill_method": "taskkill /F /PID 13752",
+    "kill_exit_code": 0,
+    "immediate_status": "STALE_PID",
+    "recovered": true,
+    "recovery_duration_sec": 59.36,
+    "new_supervisor_pid": 30520,
+    "new_worker_pid": 21980,
+    "ping_verified": true,
+    "ping_latency_sec": 0.614
+  },
+  {
+    "trial": 5,
+    "timestamp_ist": "2026-09-30 16:09:03 IST",
+    "target_killed": "Supervisor PID=30520",
+    "kill_method": "taskkill /F /PID 30520",
+    "kill_exit_code": 0,
+    "immediate_status": "STALE_PID",
+    "recovered": true,
+    "recovery_duration_sec": 59.37,
+    "new_supervisor_pid": 30392,
+    "new_worker_pid": 20948,
+    "ping_verified": true,
+    "ping_latency_sec": 0.616
+  }
+]

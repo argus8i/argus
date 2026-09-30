@@ -40,6 +40,7 @@ from antigravity.daemons.inbox_worker import (
     get_current_ist,
     ensure_directories,
     _pid_is_running,
+    get_process_create_time_nt,
 )
 
 SUPERVISOR_LOCK_FILE = os.path.join(MESSAGES_ROOT, "supervisor.lock")
@@ -52,6 +53,40 @@ MAX_BACKOFF_SEC = 30.0
 BACKOFF_FACTOR = 2.0
 MAX_CONSECUTIVE_CRASHES = 5
 CRASH_WINDOW_SEC = 120.0
+
+
+def _redirect_streams_for_windowless_execution():
+    """Ensures stdout, stderr, and uncaught exceptions are written to supervisor.log under pythonw.exe."""
+    class LogStream:
+        def __init__(self, filepath, stream_name):
+            self.filepath = filepath
+            self.stream_name = stream_name
+        def write(self, s):
+            if not s:
+                return
+            try:
+                os.makedirs(os.path.dirname(self.filepath), exist_ok=True)
+                with open(self.filepath, "a", encoding="utf-8") as f:
+                    f.write(s)
+            except Exception:
+                pass
+        def flush(self):
+            pass
+
+    if sys.stdout is None or not hasattr(sys.stdout, "write"):
+        sys.stdout = LogStream(SUPERVISOR_LOG_FILE, "STDOUT")
+    if sys.stderr is None or not hasattr(sys.stderr, "write"):
+        sys.stderr = LogStream(SUPERVISOR_LOG_FILE, "STDERR")
+
+    def _unhandled_exception_hook(exc_type, exc_val, exc_tb):
+        import traceback
+        tb_lines = "".join(traceback.format_exception(exc_type, exc_val, exc_tb))
+        log_supervisor(f"CRITICAL UNHANDLED EXCEPTION:\n{tb_lines}")
+
+    sys.excepthook = _unhandled_exception_hook
+
+
+_redirect_streams_for_windowless_execution()
 
 
 def log_supervisor(message: str):
@@ -103,9 +138,15 @@ class SupervisedInboxWorker:
                     pass
 
     def _write_pid_file(self, status: str = "RUNNING"):
+        sup_pid = os.getpid()
+        sup_ct = get_process_create_time_nt(sup_pid)
+        worker_pid = self.worker_proc.pid if self.worker_proc else None
+        worker_ct = get_process_create_time_nt(worker_pid) if worker_pid else None
         data = {
-            "supervisor_pid": os.getpid(),
-            "worker_pid": self.worker_proc.pid if self.worker_proc else None,
+            "supervisor_pid": sup_pid,
+            "supervisor_create_time_nt": sup_ct,
+            "worker_pid": worker_pid,
+            "worker_create_time_nt": worker_ct,
             "started_at_ist": get_current_ist(),
             "status": status
         }
@@ -251,10 +292,12 @@ def get_status() -> Dict[str, Any]:
         with open(SUPERVISOR_PID_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
         sup_pid = data.get("supervisor_pid")
+        sup_ct = data.get("supervisor_create_time_nt")
         worker_pid = data.get("worker_pid")
+        worker_ct = data.get("worker_create_time_nt")
 
-        sup_alive = _pid_is_running(sup_pid)
-        worker_alive = _pid_is_running(worker_pid) if worker_pid else False
+        sup_alive = _pid_is_running(sup_pid, expected_create_time=sup_ct)
+        worker_alive = _pid_is_running(worker_pid, expected_create_time=worker_ct) if worker_pid else False
 
         if sup_alive and worker_alive:
             return {"status": "RUNNING", "running": True, "details": data, "worker_alive": True}
