@@ -45,22 +45,26 @@ FIELD_TEST_ROOT = TRACK2_ROOT / "field_tests"
 def get_candidate_universe(dynamic_path: Path | None = None) -> set[str]:
     """
     Dynamically loads the active candidate universe from shared/track2_liquid/dynamic_universe.json.
-    Falls back cleanly to the baseline 8-scrip universe if the dynamic artifact is not yet present.
+    Falls back cleanly to the baseline 8-scrip universe ONLY if the dynamic artifact is not yet present on disk.
+    If the file exists but is corrupted or invalid, fails closed by raising an error.
     """
     path = dynamic_path or DYNAMIC_UNIVERSE_PATH
-    if path.is_file() and not path.is_symlink():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            scrip_list = (
-                data.get("symbols")
-                or [c.get("symbol") for c in data.get("candidates", []) if isinstance(c, dict)]
-                or [c.get("symbol") for c in data.get("research_candidates", []) if isinstance(c, dict)]
-            )
-            if isinstance(scrip_list, list) and len(scrip_list) >= 4:
-                return {str(s).strip().upper() for s in scrip_list if s}
-        except Exception:
-            pass
-    return set(CANDIDATES)
+    if not path.exists():
+        return set(CANDIDATES)
+
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"Dynamic universe path is invalid or symlink: {path}")
+
+    # File exists: strictly parse and validate; do NOT swallow corruption errors
+    data = json.loads(path.read_text(encoding="utf-8"))
+    scrip_list = (
+        data.get("symbols")
+        or [c.get("symbol") for c in data.get("candidates", []) if isinstance(c, dict)]
+        or [c.get("symbol") for c in data.get("research_candidates", []) if isinstance(c, dict)]
+    )
+    if isinstance(scrip_list, list) and len(scrip_list) >= 4:
+        return {str(s).strip().upper() for s in scrip_list if s}
+    raise ValueError("Dynamic universe file does not contain valid scrip list with >= 4 symbols.")
 
 
 def aware_time(value: Any) -> datetime:

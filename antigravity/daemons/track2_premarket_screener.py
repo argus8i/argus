@@ -314,11 +314,11 @@ class PremarketScreener:
                     if p.stat().st_size < 64:
                         continue
 
-                    # Validate date freshness from filename (reject snapshots older than 30 days)
+                    # Validate date freshness from filename (reject snapshots older than 4 days to allow for 3-day weekends)
                     date_match = re.search(r"(\d{4}-\d{2}-\d{2})", p.name)
                     if date_match:
                         file_date = date.fromisoformat(date_match.group(1))
-                        if (date.today() - file_date).days > 30:
+                        if (date.today() - file_date).days > 4:
                             continue
 
                     with open(p, "r", encoding="utf-8") as f:

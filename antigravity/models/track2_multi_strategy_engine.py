@@ -73,10 +73,14 @@ class MultiStrategyEngine:
         risk_budget_rs: float = 1500.0,
         max_portfolio_slots: int = 3,
         max_per_sector: int = 2,
+        max_single_slot_notional_rs: float = 38000.0,
+        total_capital_allocation_rs: float = 114000.0,
     ):
         self.risk_budget_rs = risk_budget_rs
         self.max_portfolio_slots = max_portfolio_slots
         self.max_per_sector = max_per_sector
+        self.max_single_slot_notional_rs = max_single_slot_notional_rs
+        self.total_capital_allocation_rs = total_capital_allocation_rs
 
         # Instantiate sub-strategies
         self.orb_engine = MultiTimeframeAlphaEngine()
@@ -460,6 +464,7 @@ class MultiStrategyEngine:
         selected: List[UnifiedTradeSignal] = []
         sector_counts: Dict[str, int] = dict(existing_sector_counts or {})
         seen_symbols = set()
+        total_allocated = 0.0
 
         for sig in sorted_signals:
             if len(selected) >= slots:
@@ -472,8 +477,34 @@ class MultiStrategyEngine:
             if current_sec_count >= self.max_per_sector:
                 continue
 
-            selected.append(sig)
+            # Cap individual signal to single-slot notional cap
+            allocated_sig = sig
+            if sig.notional_value_rs > self.max_single_slot_notional_rs and sig.entry_price > 0:
+                capped_shares = max(1, int(self.max_single_slot_notional_rs / sig.entry_price))
+                allocated_sig = UnifiedTradeSignal(
+                    symbol=sig.symbol,
+                    strategy_type=sig.strategy_type,
+                    conviction_score=sig.conviction_score,
+                    entry_price=sig.entry_price,
+                    stop_price=sig.stop_price,
+                    target_tranche1=sig.target_tranche1,
+                    target_tranche2=sig.target_tranche2,
+                    shares=capped_shares,
+                    notional_value_rs=round(capped_shares * sig.entry_price, 2),
+                    actual_risk_rs=round(capped_shares * abs(sig.entry_price - sig.stop_price), 2),
+                    risk_pct=sig.risk_pct,
+                    volume_multiple=sig.volume_multiple,
+                    sector=sig.sector,
+                    details=sig.details,
+                    is_shadow=sig.is_shadow,
+                )
+
+            if total_allocated + allocated_sig.notional_value_rs > self.total_capital_allocation_rs:
+                continue
+
+            selected.append(allocated_sig)
             seen_symbols.add(sig.symbol)
             sector_counts[sig.sector] = current_sec_count + 1
+            total_allocated += allocated_sig.notional_value_rs
 
         return selected

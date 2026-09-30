@@ -22,6 +22,15 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+if "ARGUS_REVIEW_OPS_ROOT" not in os.environ:
+    os.environ["ARGUS_REVIEW_OPS_ROOT"] = PROJECT_ROOT
+
+if "ARGUS_REVIEW_RESEARCH_ROOT" not in os.environ:
+    for candidate in [r"C:\Users\yashw\swing-trades-claude-004", r"C:\Users\yashw\swing-trades-track2"]:
+        if os.path.exists(candidate):
+            os.environ["ARGUS_REVIEW_RESEARCH_ROOT"] = candidate
+            break
+
 
 @pytest.fixture(autouse=True, scope="session")
 def _redirect_audit_log_away_from_canonical_path():

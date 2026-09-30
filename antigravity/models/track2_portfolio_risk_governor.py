@@ -140,7 +140,7 @@ class PortfolioRiskGovernor:
         corpus_rs: float = 250000.0,
         risk_per_trade_rs: float = 1500.0,
         max_concurrent_positions: int = 3,
-        cash_buffer_rs: float = 75000.0,
+        cash_buffer_rs: float = 136000.0,
         max_positions_per_sector: int = 2,
         sector_mapping: Optional[Mapping[str, str]] = None,
         enforce_slot_cap: bool = True,
@@ -148,15 +148,12 @@ class PortfolioRiskGovernor:
         """
         Calibrates the PortfolioRiskGovernor specifically for a retail/prop corpus (e.g. Rs 2L - 3L).
         
-        Hardened calibration for Rs 2,50,000 (Codex Audit 2026-09-23):
-          - Single-trade risk: Rs 1,500 (1R = 0.60% of corpus)
+        Hardened calibration for Rs 2,50,000 Adjusted A1 (Yashu Mandate):
+          - Single-trade risk: Rs 1,500 (1R)
           - Max concurrent positions: 3
-          - Aggregate open risk cap: 3 * Rs 1,500 = Rs 4,500 (1.80% of corpus)
-          - Unencumbered Cash Buffer: Rs 75,000 (30.0% of corpus)
-          - Max active deployable notional: Rs 1,75,000 (Rs 58,333.33 per slot if enforce_slot_cap=True)
-          - Mathematical Shortfall Proof: At max allowable VAR+ELM of 30.0%,
-            max blocked delivery retention = 0.30 * Rs 1,75,000 = Rs 52,500 < Rs 75,000 cash buffer.
-            Net margin surplus = +Rs 22,500. SEBI shortfall probability identically 0.00%.
+          - Aggregate open risk cap: 3 * Rs 1,500 = Rs 4,500
+          - Unencumbered Cash Buffer: Rs 1,36,000
+          - Max active deployable notional: Rs 1,14,000 (Rs 38,000.00 per slot)
           - Max positions per sector: 2
         """
         if corpus_rs <= 0 or cash_buffer_rs < 0 or corpus_rs <= cash_buffer_rs:
@@ -266,7 +263,7 @@ class PortfolioRiskGovernor:
             # Extract or derive risk
             item_risk = item.get("open_risk_rs")
             if item_risk is None:
-                i_entry = item.get("entry_price") or item.get("limit_price")
+                i_entry = item.get("limit_price") or item.get("entry_price")
                 i_stop = item.get("stop_price") or item.get("initial_stop")
                 i_qty = item.get("quantity") or item.get("shares")
                 if (
@@ -296,7 +293,7 @@ class PortfolioRiskGovernor:
 
             item_notional = item.get("notional_rs")
             if item_notional is None:
-                i_price = item.get("entry_price") or item.get("limit_price") or item.get("ltp")
+                i_price = item.get("limit_price") or item.get("entry_price") or item.get("ltp")
                 i_qty = item.get("quantity") or item.get("shares")
                 if isinstance(i_price, (int, float)) and isinstance(i_qty, int) and i_price > 0 and i_qty > 0:
                     item_notional = round(i_price * i_qty, 2)

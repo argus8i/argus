@@ -82,14 +82,13 @@ class BandRevisionMonitor:
         ticker_history = self.history.get(ticker, [])
 
         old_band = None
-        status = "NO_CHANGE"
-        message = f"{ticker}: Normal band at {new_band}%"
-
         # Compare strictly against the prior trading day's record (different date)
         prior_records = [r for r in ticker_history if r.get("date") != date_str]
         if prior_records:
             last_record = prior_records[-1]
             old_band = last_record["band_pct"]
+            status = "NO_CHANGE"
+            message = f"{ticker}: Normal band at {new_band}%"
 
             # Tolerance of 0.25% for tick rounding differences
             if new_band < (old_band - 0.5):
@@ -102,6 +101,9 @@ class BandRevisionMonitor:
             elif new_band > (old_band + 0.5):
                 status = "BAND_WIDENED"
                 message = f"{ticker}: Circuit band widened from {old_band}% to {new_band}% on {date_str}."
+        else:
+            status = "NO_PRIOR_HISTORY"
+            message = f"{ticker}: Initial band baseline established at {new_band}% (no prior history)."
 
         # Update existing record for date_str or append to history idempotently
         current_state = BandState(
