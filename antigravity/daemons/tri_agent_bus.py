@@ -429,6 +429,7 @@ def ask_antigravity_detailed(
     prompt: str,
     timeout_sec: int = 300,
     min_chars: int = MIN_REVIEW_CHARS,
+    chat_only: bool = False,
 ) -> Dict[str, Any]:
     """Invokes the Antigravity reasoning model non-interactively.
 
@@ -464,14 +465,16 @@ def ask_antigravity_detailed(
     console_path = os.path.join(work_dir, "console.log")
 
     try:
+        cli_flags = ["--project", "3ccee98c-0ec8-497b-a076-f86d4ef452ae", "--sandbox"] if chat_only else prepare_dispatch("ANTIGRAVITY")
+        boundary = CHAT_BOUNDARIES if chat_only else TASK_BOUNDARIES
         with open(console_path, "w", encoding="utf-8") as console:
             proc = subprocess.run(
                 [
                     AGY_BIN,
-                    *prepare_dispatch("ANTIGRAVITY"),
+                    *cli_flags,
                     "--disable-slash-commands",
                     "--model", "gemini-3.8-flash-low",
-                    "-p", TASK_BOUNDARIES + prompt
+                    "-p", boundary + prompt
                 ],
                 cwd=WORKSPACE,
                 stdout=console,
@@ -539,7 +542,7 @@ def send_to_agent(
     expected_artifact_hash: Optional[str] = None,
     pre_task_hash: Optional[str] = None,
     completion_marker: Optional[str] = None,
-    timeout_sec: float = 120.0,
+    timeout_sec: float = 300.0,
     message_id: Optional[str] = None,
     auth_secret: Optional[str] = None,
     nonce: Optional[str] = None,
@@ -709,7 +712,7 @@ def wait_for_antigravity_response(
     t0 = time.time()
     worker = InboxWorker() if auto_process_worker else None
 
-    while (time.time() - t0) < timeout_sec:
+    while True:
         if auto_process_worker and worker:
             worker.run_single_pass()
 
@@ -743,7 +746,27 @@ def wait_for_antigravity_response(
                 "elapsed_sec": elapsed,
                 "error": None
             }
-        time.sleep(poll_interval_sec)
+        remaining = timeout_sec - (time.time() - t0)
+        if remaining <= 0:
+            break
+        time.sleep(min(poll_interval_sec, remaining))
+
+    # A response may be published during the last sleep or exactly at the deadline.
+    resp = read_antigravity_response(correlation_id)
+    if resp:
+        ver = verify_task_completion(
+            resp, expected_file=expected_file, completion_marker=completion_marker,
+            expected_hash=expected_hash, pre_task_hash=pre_task_hash,
+            expected_correlation_id=correlation_id,
+            expected_responder=expected_responder, track=track,
+        )
+        return {
+            "success": bool(ver.get("verified")),
+            "status": "COMPLETED" if ver.get("verified") else ver.get("status", "VERIFICATION_FAILED"),
+            "response": resp, "verification": ver,
+            "elapsed_sec": round(time.time() - t0, 3),
+            "error": None if ver.get("verified") else ver.get("reason"),
+        }
 
     return {
         "success": False,

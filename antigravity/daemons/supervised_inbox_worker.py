@@ -53,6 +53,7 @@ MAX_BACKOFF_SEC = 30.0
 BACKOFF_FACTOR = 2.0
 MAX_CONSECUTIVE_CRASHES = 5
 CRASH_WINDOW_SEC = 120.0
+MAX_HEARTBEAT_STALE_SEC = 120.0
 
 
 def _redirect_streams_for_windowless_execution():
@@ -142,16 +143,32 @@ class SupervisedInboxWorker:
         sup_ct = get_process_create_time_nt(sup_pid)
         worker_pid = self.worker_proc.pid if self.worker_proc else None
         worker_ct = get_process_create_time_nt(worker_pid) if worker_pid else None
+        now_ts = time.time()
         data = {
             "supervisor_pid": sup_pid,
             "supervisor_create_time_nt": sup_ct,
             "worker_pid": worker_pid,
             "worker_create_time_nt": worker_ct,
             "started_at_ist": get_current_ist(),
+            "last_heartbeat_ts": now_ts,
+            "last_heartbeat_ist": get_current_ist(),
             "status": status
         }
         with open(SUPERVISOR_PID_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+
+    def _update_heartbeat(self):
+        try:
+            if not os.path.exists(SUPERVISOR_PID_FILE):
+                return
+            with open(SUPERVISOR_PID_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["last_heartbeat_ts"] = time.time()
+            data["last_heartbeat_ist"] = get_current_ist()
+            with open(SUPERVISOR_PID_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass
 
     def _remove_pid_file(self):
         try:
@@ -213,7 +230,12 @@ class SupervisedInboxWorker:
 
                 # Stream worker output while process is alive
                 crash_output = []
+                last_hb_ts = time.time()
                 while self.worker_proc.poll() is None:
+                    now = time.time()
+                    if (now - last_hb_ts) >= 5.0:
+                        self._update_heartbeat()
+                        last_hb_ts = now
                     if os.path.exists(SUPERVISOR_STOP_FILE):
                         log_supervisor("Stop request detected during execution. Terminating worker child...")
                         self.shutdown_requested = True
@@ -295,9 +317,14 @@ def get_status() -> Dict[str, Any]:
         sup_ct = data.get("supervisor_create_time_nt")
         worker_pid = data.get("worker_pid")
         worker_ct = data.get("worker_create_time_nt")
+        last_hb = data.get("last_heartbeat_ts")
 
         sup_alive = _pid_is_running(sup_pid, expected_create_time=sup_ct)
         worker_alive = _pid_is_running(worker_pid, expected_create_time=worker_ct) if worker_pid else False
+
+        # Detect hung supervisor (alive in OS, but event loop frozen/deadlocked)
+        if sup_alive and last_hb and (time.time() - last_hb) > MAX_HEARTBEAT_STALE_SEC:
+            return {"status": "SUPERVISOR_HUNG", "running": False, "details": data, "worker_alive": worker_alive}
 
         if sup_alive and worker_alive:
             return {"status": "RUNNING", "running": True, "details": data, "worker_alive": True}

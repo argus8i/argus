@@ -275,4 +275,151 @@ def test_watchdog_cleans_locks_and_recovers_when_supervisor_is_dead(monkeypatch,
     assert spawn_called is True, "start_supervisor_task was not triggered when supervisor died!"
 
 
+def test_ast_single_launch_site_for_supervisor():
+    """AST Invariant Test: Verifies that no Popen or unauthorized process spawning calls invoke supervised_inbox_worker.
+    The only permitted call sites are schtasks /Run in nexus_watchdog.py and supervised_inbox_worker.py --start."""
+    import ast
+    from pathlib import Path
+
+    allowed_sites = {
+        ("antigravity/daemons/nexus_watchdog.py", "start_supervisor_task"),
+        ("antigravity/daemons/supervised_inbox_worker.py", "__main__"),
+    }
+
+    spawning_apis = {"Popen", "run", "call", "check_call", "system", "spawnlp", "spawnl", "startfile"}
+
+    py_files = list(Path(WORKSPACE_DIR, "antigravity").rglob("*.py"))
+    violations = []
+
+    for fpath in py_files:
+        rel_path = fpath.relative_to(WORKSPACE_DIR).as_posix()
+        try:
+            tree = ast.parse(fpath.read_text(encoding="utf-8"), filename=str(fpath))
+        except Exception:
+            continue
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                func_name = ""
+                if isinstance(node.func, ast.Attribute):
+                    func_name = node.func.attr
+                elif isinstance(node.func, ast.Name):
+                    func_name = node.func.id
+
+                if func_name in spawning_apis:
+                    # Check if arguments reference supervised_inbox_worker
+                    arg_str = ast.dump(node)
+                    if "supervised_inbox_worker" in arg_str:
+                        # Popen is forbidden everywhere for the supervisor
+                        if func_name == "Popen":
+                            violations.append(f"{rel_path}:{node.lineno} calls Popen on supervised_inbox_worker")
+                        elif "schtasks" not in arg_str:
+                            violations.append(f"{rel_path}:{node.lineno} spawns supervised_inbox_worker without schtasks")
+
+    assert not violations, f"Forbidden supervisor launch sites detected:\n" + "\n".join(violations)
+
+
+def test_hung_but_alive_supervisor_recovered_by_watchdog(monkeypatch, tmp_path):
+    """Verifies that if a supervisor is alive in the OS but hung (>120s heartbeat), watchdog force-terminates it and restores service."""
+    import antigravity.daemons.nexus_watchdog as nw
+
+    hung_pid = 55555
+    mock_status = {
+        "status": "SUPERVISOR_HUNG",
+        "running": False,
+        "details": {"supervisor_pid": hung_pid, "supervisor_create_time_nt": 12345, "worker_pid": None},
+        "worker_alive": False
+    }
+    monkeypatch.setattr(nw, "get_status", lambda: mock_status)
+    monkeypatch.setattr(nw, "_pid_is_running", lambda pid, expected_create_time=None: True if pid == hung_pid else False)
+
+    dummy_lock = tmp_path / "supervisor.lock"
+    dummy_lock.write_text("dummy_lock")
+    dummy_pid = tmp_path / "supervisor.pid"
+    dummy_pid.write_text(json.dumps({"supervisor_pid": hung_pid}))
+
+    monkeypatch.setattr(nw, "SUPERVISOR_LOCK_FILE", str(dummy_lock))
+    monkeypatch.setattr(nw, "SUPERVISOR_PID_FILE", str(dummy_pid))
+
+    killed_pids = []
+    def fake_kill(pid, sig):
+        killed_pids.append(pid)
+
+    monkeypatch.setattr(nw.os, "kill", fake_kill)
+
+    spawn_called = False
+    def fake_start():
+        nonlocal spawn_called
+        spawn_called = True
+        return True
+
+    monkeypatch.setattr(nw, "start_supervisor_task", fake_start)
+
+    res = nw.check_and_recover(verbose=False)
+
+    # Hung supervisor MUST be force-terminated
+    assert hung_pid in killed_pids, "Hung supervisor was not killed by watchdog!"
+    # Locks must be cleared
+    assert not dummy_lock.exists(), "supervisor.lock was not cleared after killing hung supervisor!"
+    # Recovery must be triggered
+    assert spawn_called is True, "Watchdog failed to trigger schtasks restart for hung supervisor!"
+
+
+def test_access_denied_liveness_fails_closed(monkeypatch):
+    """Verifies that if OpenProcess fails with ERROR_ACCESS_DENIED, _pid_is_running fails closed (returns True, never assumes dead)."""
+    from antigravity.daemons.inbox_worker import _pid_is_running
+    import ctypes
+
+    # Mock OpenProcess returning NULL and GetLastError returning 5 (ERROR_ACCESS_DENIED)
+    class FakeKernel:
+        def OpenProcess(self, access, inherit, pid):
+            return 0  # NULL handle
+        def GetLastError(self):
+            return 5  # ERROR_ACCESS_DENIED
+
+    monkeypatch.setattr(ctypes.windll, "kernel32", FakeKernel())
+
+    # Must fail closed: return True (assume process is alive / unknown)
+    assert _pid_is_running(99999) is True
+
+
+def test_kill_during_dispatch_preserves_nonce_and_at_most_once(tmp_path):
+    """Verifies that if a worker is killed mid-execution, re-processing the same message fails with REPLAY_ATTACK because the nonce was committed before execution started."""
+    from antigravity.daemons.inbox_worker import (
+        verify_message_auth,
+        compute_envelope_hmac,
+        get_agent_secret_key,
+        get_current_ist,
+    )
+    import uuid
+
+    nonce = f"mid_dispatch_{uuid.uuid4().hex[:12]}"
+    msg = {
+        "message_id": "msg_mid_dispatch_01",
+        "correlation_id": "corr_mid_dispatch_01",
+        "sender": "ANTIGRAVITY",
+        "recipient": "CODEX",
+        "track": "SHARED",
+        "created_at_ist": get_current_ist(),
+        "subject": "PING",
+        "body": "mid dispatch test",
+        "status": "CREATED",
+        "attempt_count": 0,
+        "nonce": nonce,
+    }
+    key = get_agent_secret_key("ANTIGRAVITY")
+    msg["auth_signature"] = compute_envelope_hmac(msg, key)
+
+    # 1. First verification commits nonce to SQLite WAL store
+    ok, err = verify_message_auth(msg)
+    assert ok is True
+
+    # 2. Worker simulated crash mid-execution. Message is re-read by recovered worker.
+    # 3. Second verification MUST fail closed as REPLAY_ATTACK
+    ok2, err2 = verify_message_auth(msg)
+    assert ok2 is False
+    assert "REPLAY_ATTACK" in err2
+
+
+
 

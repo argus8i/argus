@@ -131,9 +131,19 @@ def check_and_recover(verbose: bool = True) -> Dict[str, Any]:
             log_watchdog(f"Health check: Status=WORKER_DOWN (Supervisor PID={sup_pid} is alive and actively recovering child worker). Waiting...")
         return {"healthy": True, "action": "WAIT_WORKER_RESTART", "status": st}
 
+    # If supervisor is hung (event loop deadlocked for >120s), force-terminate to allow recovery
+    if status_label == "SUPERVISOR_HUNG":
+        sup_pid = st.get("details", {}).get("supervisor_pid")
+        log_watchdog(f"HUNG SUPERVISOR DETECTED: Supervisor PID={sup_pid} event loop frozen (>120s). Force-terminating hung process...")
+        if sup_pid:
+            try:
+                os.kill(sup_pid, signal.SIGTERM)
+            except Exception:
+                pass
+
     sup_pid = st.get("details", {}).get("supervisor_pid")
     sup_ct = st.get("details", {}).get("supervisor_create_time_nt")
-    if sup_pid and _pid_is_running(sup_pid, expected_create_time=sup_ct):
+    if status_label != "SUPERVISOR_HUNG" and sup_pid and _pid_is_running(sup_pid, expected_create_time=sup_ct):
         if verbose:
             log_watchdog(f"Health check: Status={status_label}, but Supervisor PID={sup_pid} is STILL ALIVE. Waiting without deleting lock files or spawning duplicate.")
         return {"healthy": True, "action": "SUPERVISOR_ALIVE_WAIT", "status": st}
