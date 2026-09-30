@@ -13,6 +13,7 @@ import os
 import sys
 import time
 import json
+import signal
 import subprocess
 import argparse
 from datetime import datetime, timezone, timedelta
@@ -50,6 +51,32 @@ def log_watchdog(message: str):
             pass
 
 
+TASK_NAME = "ARGUS_Nexus_Supervisor"
+
+
+def start_supervisor_task() -> bool:
+    """Starts the supervisor process exclusively through Windows Task Scheduler.
+    This guarantees the supervisor runs detached in its own session and never belongs
+    to any caller's process tree."""
+    log_watchdog(f"Triggering supervisor via scheduled task: schtasks /Run /TN {TASK_NAME}")
+    try:
+        res = subprocess.run(
+            ["schtasks", "/Run", "/TN", TASK_NAME],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        log_watchdog(f"schtasks output: {res.stdout.strip()}")
+        return True
+    except subprocess.CalledProcessError as e:
+        err = e.stderr.strip() if e.stderr else str(e)
+        log_watchdog(f"ERROR: schtasks /Run failed: {err}")
+        return False
+    except Exception as e:
+        log_watchdog(f"ERROR triggering scheduled task: {e}")
+        return False
+
+
 def check_and_recover(verbose: bool = True) -> Dict[str, Any]:
     """Inspects daemon liveness and performs automated detached recovery if down."""
     st = get_status()
@@ -63,69 +90,66 @@ def check_and_recover(verbose: bool = True) -> Dict[str, Any]:
             log_watchdog(f"Health check OK: Status=RUNNING (Supervisor PID={sup_pid}, Worker PID={w_pid})")
         return {"healthy": True, "action": "NOOP", "status": st}
 
-    # Outage detected!
-    log_watchdog(f"OUTAGE DETECTED: Status={status_label}. Initiating automated recovery restart...")
+    # If worker is down, supervisor is alive and actively restarting it with backoff
+    if status_label == "WORKER_DOWN":
+        sup_pid = st.get("details", {}).get("supervisor_pid")
+        if verbose:
+            log_watchdog(f"Health check: Status=WORKER_DOWN (Supervisor PID={sup_pid} is alive and actively recovering child worker). Waiting...")
+        return {"healthy": True, "action": "WAIT_WORKER_RESTART", "status": st}
 
-    # 1. Clean up stale lock/pid files if process is dead
+    sup_pid = st.get("details", {}).get("supervisor_pid")
+    if sup_pid and _pid_is_running(sup_pid):
+        if verbose:
+            log_watchdog(f"Health check: Status={status_label}, but Supervisor PID={sup_pid} is STILL ALIVE. Waiting without deleting lock files or spawning duplicate.")
+        return {"healthy": True, "action": "SUPERVISOR_ALIVE_WAIT", "status": st}
+
+    # Outage confirmed: supervisor is truly dead.
+    log_watchdog(f"OUTAGE DETECTED: Status={status_label}. Initiating automated recovery restart via Task Scheduler...")
+
+    # 1. Clean up stale lock/pid files ONLY because supervisor is confirmed DEAD
     if os.path.exists(SUPERVISOR_LOCK_FILE):
         lock_path = SUPERVISOR_LOCK_FILE + ".lock"
         if os.path.exists(lock_path):
             try:
                 os.remove(lock_path)
-                log_watchdog("Cleaned up stale supervisor lock file.")
+                log_watchdog("Cleaned up stale supervisor lock file (.lock).")
             except OSError:
                 pass
         try:
             os.remove(SUPERVISOR_LOCK_FILE)
+            log_watchdog("Cleaned up stale supervisor lock file.")
         except OSError:
             pass
 
-    if status_label in ("STALE_PID", "STOPPED", "ERROR"):
-        if os.path.exists(SUPERVISOR_PID_FILE):
-            try:
-                os.remove(SUPERVISOR_PID_FILE)
-                log_watchdog("Cleaned up stale supervisor PID file.")
-            except OSError:
-                pass
+    if os.path.exists(SUPERVISOR_PID_FILE):
+        try:
+            os.remove(SUPERVISOR_PID_FILE)
+            log_watchdog("Cleaned up stale supervisor PID file.")
+        except OSError:
+            pass
 
-    # 2. Spawn supervisor detached from caller / console group
-    supervisor_script = os.path.join(os.path.dirname(__file__), "supervised_inbox_worker.py")
-    venv_python = os.path.join(WORKSPACE_DIR, ".venv", "Scripts", "python.exe")
-    python_bin = venv_python if os.path.exists(venv_python) else sys.executable
-    cmd = [python_bin, "-u", supervisor_script]
+    # Clean up orphaned child worker from the dead supervisor if still running
+    old_worker_pid = st.get("details", {}).get("worker_pid")
+    if old_worker_pid and _pid_is_running(old_worker_pid):
+        try:
+            os.kill(old_worker_pid, signal.SIGTERM)
+            log_watchdog(f"Cleaned up orphaned worker PID={old_worker_pid}.")
+        except Exception:
+            pass
 
-    creationflags = 0
-    if os.name == "nt":
-        creationflags = (
-            subprocess.CREATE_NEW_PROCESS_GROUP
-            | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
-            | 0x08000000  # CREATE_NO_WINDOW
-        )
+    # 2. Trigger supervisor exclusively via Windows Task Scheduler
+    success = start_supervisor_task()
+    if not success:
+        return {"healthy": False, "action": "FAILED", "error": "schtasks failed to launch supervisor"}
 
-    log_watchdog(f"Spawning detached supervisor process: {' '.join(cmd)}")
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=WORKSPACE_DIR,
-            creationflags=creationflags,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=True
-        )
-        log_watchdog(f"Detached supervisor process spawned with initial PID={proc.pid}")
-    except Exception as e:
-        err_msg = f"FATAL: Failed to spawn supervisor process: {e}"
-        log_watchdog(err_msg)
-        return {"healthy": False, "action": "FAILED", "error": err_msg}
-
-    # 3. Wait for supervisor to initialize and report RUNNING
+    # 3. Wait for supervisor to initialize and report RUNNING or WORKER_DOWN
     t0 = time.time()
     recovered = False
     new_status = {}
-    while time.time() - t0 < 5.0:
+    while time.time() - t0 < 8.0:
         time.sleep(0.5)
         new_status = get_status()
-        if new_status.get("running") and new_status.get("status") == "RUNNING":
+        if new_status.get("running") and new_status.get("status") in ("RUNNING", "WORKER_DOWN"):
             recovered = True
             break
 
@@ -135,7 +159,7 @@ def check_and_recover(verbose: bool = True) -> Dict[str, Any]:
         log_watchdog(f"RECOVERY SUCCESS: Supervisor active with PID={sup_pid}, Worker PID={w_pid}")
         return {"healthy": True, "action": "RECOVERED", "status": new_status}
     else:
-        log_watchdog(f"RECOVERY WARNING: Supervisor not confirmed RUNNING within 5.0s (current: {new_status})")
+        log_watchdog(f"RECOVERY WARNING: Supervisor not confirmed RUNNING within 8.0s (current: {new_status})")
         return {"healthy": False, "action": "TIMEOUT", "status": new_status}
 
 

@@ -22,6 +22,7 @@ if WORKSPACE_DIR not in sys.path:
 from antigravity.daemons.supervised_inbox_worker import (
     get_status,
     stop_daemon,
+    get_current_ist,
     SUPERVISOR_PID_FILE,
     SUPERVISOR_LOCK_FILE,
 )
@@ -125,7 +126,7 @@ def test_nonce_committed_before_execution_at_most_once():
         "sender": "ANTIGRAVITY",
         "recipient": "CODEX",
         "track": "SHARED",
-        "created_at_ist": "2026-09-30 15:30:00 IST",
+        "created_at_ist": get_current_ist(),
         "subject": "PING",
         "body": "Test",
         "status": "CREATED",
@@ -144,4 +145,74 @@ def test_nonce_committed_before_execution_at_most_once():
     ok2, err2 = verify_message_auth(test_msg)
     assert ok2 is False
     assert "REPLAY_ATTACK" in err2
+
+
+def test_watchdog_never_duplicates_live_supervisor_on_worker_down(monkeypatch, tmp_path):
+    """Verifies that WORKER_DOWN is treated as 'supervisor is restarting its worker, wait' and NEVER deletes locks or spawns a second supervisor."""
+    import antigravity.daemons.nexus_watchdog as nw
+    
+    mock_status = {
+        "status": "WORKER_DOWN",
+        "running": True,
+        "details": {"supervisor_pid": 99999, "worker_pid": None},
+        "worker_alive": False
+    }
+    monkeypatch.setattr(nw, "get_status", lambda: mock_status)
+    monkeypatch.setattr(nw, "_pid_is_running", lambda pid: True if pid == 99999 else False)
+
+    # Mock lock file presence
+    dummy_lock = tmp_path / "supervisor.lock"
+    dummy_lock.write_text("dummy_lock")
+    monkeypatch.setattr(nw, "SUPERVISOR_LOCK_FILE", str(dummy_lock))
+
+    spawn_called = False
+    def fake_spawn(*args, **kwargs):
+        nonlocal spawn_called
+        spawn_called = True
+        return None
+
+    monkeypatch.setattr(nw, "start_supervisor_task", fake_spawn, raising=False)
+    monkeypatch.setattr(nw.subprocess, "Popen", fake_spawn)
+
+    res = nw.check_and_recover(verbose=False)
+
+    # Must treat as healthy/wait, NOT an outage restart
+    assert res.get("healthy") is True
+    assert res.get("action") in ("WAIT_WORKER_RESTART", "NOOP", "SUPERVISOR_ALIVE_WAIT")
+    # Must NEVER have deleted the lock file of a live supervisor
+    assert dummy_lock.exists(), "SUPERVISOR_LOCK_FILE must not be deleted when supervisor is alive!"
+    # Must NEVER have spawned a duplicate supervisor
+    assert spawn_called is False, "A second supervisor was spawned while supervisor was alive!"
+
+
+def test_watchdog_never_deletes_locks_when_supervisor_alive(monkeypatch, tmp_path):
+    """Verifies that even if status is not RUNNING, lock files are NEVER deleted if supervisor PID is alive."""
+    import antigravity.daemons.nexus_watchdog as nw
+
+    mock_status = {
+        "status": "STALE_PID",
+        "running": False,
+        "details": {"supervisor_pid": 88888, "worker_pid": None},
+        "worker_alive": False
+    }
+    monkeypatch.setattr(nw, "get_status", lambda: mock_status)
+    monkeypatch.setattr(nw, "_pid_is_running", lambda pid: True if pid == 88888 else False)
+
+    dummy_lock = tmp_path / "supervisor.lock"
+    dummy_lock.write_text("dummy_lock")
+    dummy_lock_lock = tmp_path / "supervisor.lock.lock"
+    dummy_lock_lock.write_text("lock_lock")
+    dummy_pid = tmp_path / "supervisor.pid"
+    dummy_pid.write_text(json.dumps({"supervisor_pid": 88888}))
+
+    monkeypatch.setattr(nw, "SUPERVISOR_LOCK_FILE", str(dummy_lock))
+    monkeypatch.setattr(nw, "SUPERVISOR_PID_FILE", str(dummy_pid))
+
+    res = nw.check_and_recover(verbose=False)
+
+    # Because PID 88888 is alive, files must NOT be deleted
+    assert dummy_lock.exists(), "supervisor.lock was deleted while supervisor process was alive!"
+    assert dummy_lock_lock.exists(), "supervisor.lock.lock was deleted while supervisor process was alive!"
+    assert dummy_pid.exists(), "supervisor.pid was deleted while supervisor process was alive!"
+
 

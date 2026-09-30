@@ -4,13 +4,18 @@ supervised_inbox_worker.py - Supervised Daemon Process for Antigravity Inbox Wor
 Provides continuous process supervision, crash recovery, and health monitoring
 for Antigravity's durable bidirectional messaging daemon.
 
+CRITICAL INCEPTION & LIFECYCLE INVARIANT:
+Nobody starts the supervisor by Popen or by hand from an interactive agent session.
+The watchdog and every agent start it ONLY via `schtasks /Run /TN ARGUS_Nexus_Supervisor`,
+so it never belongs to anyone's process tree and survives console/terminal closure.
+
 Features:
   1. Mutual exclusion: strictly one supervisor and worker active at a time via FileLock.
   2. Health tracking: records supervisor and worker PIDs and heartbeat timestamps.
   3. Automatic crash recovery: restarts worker with exponential backoff on crash.
   4. Orphan recovery: automatically runs recover_orphaned_claims() after crashes.
   5. Clean signal handling: handles SIGINT / SIGTERM gracefully, terminating worker child.
-  6. CLI actions: run, --status, --stop.
+  6. CLI actions: --status, --start (via Task Scheduler), --stop.
 """
 
 import os
@@ -334,12 +339,20 @@ def stop_daemon():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Antigravity Supervised Inbox Worker")
     parser.add_argument("--status", action="store_true", help="Check status of the daemon")
+    parser.add_argument("--start", action="store_true", help="Start daemon via Windows Task Scheduler (ARGUS_Nexus_Supervisor)")
     parser.add_argument("--stop", action="store_true", help="Stop the running daemon")
     args = parser.parse_args()
 
     if args.status:
         st = get_status()
         print(json.dumps(st, indent=2))
+    elif args.start:
+        print("[SUPERVISOR] Starting daemon via Windows Task Scheduler (ARGUS_Nexus_Supervisor)...")
+        res = subprocess.run(["schtasks", "/Run", "/TN", "ARGUS_Nexus_Supervisor"], capture_output=True, text=True)
+        if res.returncode == 0:
+            print(f"[SUPERVISOR] SUCCESS: {res.stdout.strip()}")
+        else:
+            print(f"[SUPERVISOR] ERROR: {res.stderr.strip() if res.stderr else res.stdout.strip()}")
     elif args.stop:
         stop_daemon()
     else:
