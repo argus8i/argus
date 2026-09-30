@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, os.environ["ARGUS_NEXUS_REVIEW_ROOT"])
+PROJECT_ROOT = os.environ.get("ARGUS_NEXUS_REVIEW_ROOT", str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, PROJECT_ROOT)
 from antigravity.daemons import inbox_worker as iw, tri_agent_bus as bus, supervised_inbox_worker as sw
 
 

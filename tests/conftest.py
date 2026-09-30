@@ -25,6 +25,9 @@ if PROJECT_ROOT not in sys.path:
 if "ARGUS_REVIEW_OPS_ROOT" not in os.environ:
     os.environ["ARGUS_REVIEW_OPS_ROOT"] = PROJECT_ROOT
 
+if "ARGUS_NEXUS_REVIEW_ROOT" not in os.environ:
+    os.environ["ARGUS_NEXUS_REVIEW_ROOT"] = PROJECT_ROOT
+
 if "ARGUS_REVIEW_RESEARCH_ROOT" not in os.environ:
     for candidate in [r"C:\Users\yashw\swing-trades-claude-004", r"C:\Users\yashw\swing-trades-track2"]:
         if os.path.exists(candidate):
