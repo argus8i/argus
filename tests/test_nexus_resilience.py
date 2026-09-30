@@ -91,3 +91,57 @@ def test_dashboard_bus_health_telemetry():
     if bus["health"] == "OK":
         assert bus["supervisor_pid"] is not None
         assert bus["worker_pid"] is not None
+
+
+def test_peer_dispatch_refuses_file_writing():
+    """Verifies that peer review dispatches cannot write artifacts (fail-closed read-only)."""
+    from antigravity.daemons.inbox_worker import InboxWorker
+
+    msg = {
+        "message_id": "msg_test_peer_write_01",
+        "correlation_id": "corr_test_peer_write_01",
+        "sender": "ANTIGRAVITY",
+        "recipient": "CLAUDE",
+        "track": "SHARED",
+        "subject": "REVIEW",
+        "body": "Attempted file write",
+        "expected_response_file": "shared/reviews/unauthorized.md",
+    }
+    worker = InboxWorker()
+    status, payload, artifact_hashes, err = worker.execute_task(msg)
+    assert status == "INCOMPLETE"
+    assert "PEER_ARTIFACT_UNSUPPORTED" in err
+
+
+def test_nonce_committed_before_execution_at_most_once():
+    """Verifies that nonces are recorded in SQLite WAL store BEFORE task execution to enforce at-most-once semantics."""
+    from antigravity.daemons.inbox_worker import verify_message_auth, MESSAGES_ROOT, DurableReplayStore
+    import uuid
+
+    test_nonce = f"nonce_{uuid.uuid4().hex[:12]}"
+    test_msg = {
+        "message_id": "msg_test_nonce_01",
+        "correlation_id": "corr_test_nonce_01",
+        "sender": "ANTIGRAVITY",
+        "recipient": "CODEX",
+        "track": "SHARED",
+        "created_at_ist": "2026-09-30 15:30:00 IST",
+        "subject": "PING",
+        "body": "Test",
+        "status": "CREATED",
+        "attempt_count": 0,
+        "nonce": test_nonce,
+    }
+    from antigravity.daemons.inbox_worker import compute_envelope_hmac, get_agent_secret_key
+    key = get_agent_secret_key("ANTIGRAVITY")
+    test_msg["auth_signature"] = compute_envelope_hmac(test_msg, key)
+
+    # First verification must succeed and record the nonce
+    ok, err = verify_message_auth(test_msg)
+    assert ok is True
+
+    # Immediate replay must fail as REPLAY_ATTACK because nonce was already committed
+    ok2, err2 = verify_message_auth(test_msg)
+    assert ok2 is False
+    assert "REPLAY_ATTACK" in err2
+

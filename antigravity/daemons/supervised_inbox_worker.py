@@ -45,6 +45,8 @@ SUPERVISOR_STOP_FILE = os.path.join(MESSAGES_ROOT, "supervisor.stop")
 MIN_BACKOFF_SEC = 1.0
 MAX_BACKOFF_SEC = 30.0
 BACKOFF_FACTOR = 2.0
+MAX_CONSECUTIVE_CRASHES = 5
+CRASH_WINDOW_SEC = 120.0
 
 
 def log_supervisor(message: str):
@@ -70,6 +72,7 @@ class SupervisedInboxWorker:
         self.worker_proc: Optional[subprocess.Popen] = None
         self.shutdown_requested = False
         self.backoff_sec = MIN_BACKOFF_SEC
+        self.crash_timestamps: list = []
 
     def _setup_signal_handlers(self):
         def handle_signal(signum, frame):
@@ -94,12 +97,12 @@ class SupervisedInboxWorker:
                 except OSError:
                     pass
 
-    def _write_pid_file(self):
+    def _write_pid_file(self, status: str = "RUNNING"):
         data = {
             "supervisor_pid": os.getpid(),
             "worker_pid": self.worker_proc.pid if self.worker_proc else None,
             "started_at_ist": get_current_ist(),
-            "status": "RUNNING"
+            "status": status
         }
         with open(SUPERVISOR_PID_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
@@ -158,6 +161,7 @@ class SupervisedInboxWorker:
                     time.sleep(self.backoff_sec)
                     continue
 
+                spawn_time = time.time()
                 self._write_pid_file()
                 log_supervisor(f"Worker spawned successfully with PID={self.worker_proc.pid}")
 
@@ -189,6 +193,21 @@ class SupervisedInboxWorker:
 
                 if self.shutdown_requested:
                     break
+
+                # Circuit breaker check: detect rapid repeated crashes
+                now = time.time()
+                run_duration = now - spawn_time
+                if run_duration >= 60.0:
+                    self.backoff_sec = MIN_BACKOFF_SEC
+                    self.crash_timestamps = []
+                else:
+                    self.crash_timestamps.append(now)
+                    self.crash_timestamps = [t for t in self.crash_timestamps if (now - t) <= CRASH_WINDOW_SEC]
+                    if len(self.crash_timestamps) >= MAX_CONSECUTIVE_CRASHES:
+                        log_supervisor(f"CIRCUIT BREAKER TRIPPED: {len(self.crash_timestamps)} crashes within {CRASH_WINDOW_SEC}s. Halting supervisor to prevent crash loop.")
+                        self._write_pid_file(status="CIRCUIT_BREAKER_TRIPPED")
+                        self.shutdown_requested = True
+                        break
 
                 # Unexpected exit / crash recovery
                 log_supervisor("CRASH/EXIT DETECTED: Triggering automatic recovery...")
