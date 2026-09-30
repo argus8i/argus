@@ -34,11 +34,13 @@ from antigravity.daemons.inbox_worker import (
     InboxWorker,
     get_current_ist,
     ensure_directories,
+    _pid_is_running,
 )
 
 SUPERVISOR_LOCK_FILE = os.path.join(MESSAGES_ROOT, "supervisor.lock")
 SUPERVISOR_PID_FILE = os.path.join(MESSAGES_ROOT, "supervisor.pid")
 SUPERVISOR_LOG_FILE = os.path.join(MESSAGES_ROOT, "supervisor.log")
+SUPERVISOR_STOP_FILE = os.path.join(MESSAGES_ROOT, "supervisor.stop")
 
 MIN_BACKOFF_SEC = 1.0
 MAX_BACKOFF_SEC = 30.0
@@ -49,7 +51,10 @@ def log_supervisor(message: str):
     """Appends a timestamped log entry to supervisor.log and stdout."""
     ist_time = get_current_ist()
     formatted = f"[{ist_time}] [SUPERVISOR] {message}"
-    print(formatted, flush=True)
+    try:
+        print(formatted, flush=True)
+    except (OSError, ValueError):
+        pass
     try:
         os.makedirs(os.path.dirname(SUPERVISOR_LOG_FILE), exist_ok=True)
         with open(SUPERVISOR_LOG_FILE, "a", encoding="utf-8") as f:
@@ -117,11 +122,26 @@ class SupervisedInboxWorker:
         self._setup_signal_handlers()
 
         try:
+            # Clean up any leftover stop file from previous runs
+            if os.path.exists(SUPERVISOR_STOP_FILE):
+                try:
+                    os.remove(SUPERVISOR_STOP_FILE)
+                except OSError:
+                    pass
+
             while not self.shutdown_requested:
+                if os.path.exists(SUPERVISOR_STOP_FILE):
+                    log_supervisor("Stop request detected (supervisor.stop). Initiating clean shutdown...")
+                    self.shutdown_requested = True
+                    break
+
                 worker_script = os.path.join(os.path.dirname(__file__), "inbox_worker.py")
                 cmd = [sys.executable, "-u", worker_script]
 
                 log_supervisor(f"Spawning inbox worker: {' '.join(cmd)}")
+                creationflags = 0
+                if os.name == "nt":
+                    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
                 try:
                     self.worker_proc = subprocess.Popen(
                         cmd,
@@ -130,7 +150,8 @@ class SupervisedInboxWorker:
                         stderr=subprocess.STDOUT,
                         text=True,
                         encoding="utf-8",
-                        errors="replace"
+                        errors="replace",
+                        creationflags=creationflags
                     )
                 except Exception as e:
                     log_supervisor(f"ERROR spawning worker process: {e}")
@@ -143,6 +164,12 @@ class SupervisedInboxWorker:
                 # Stream worker output while process is alive
                 crash_output = []
                 while self.worker_proc.poll() is None:
+                    if os.path.exists(SUPERVISOR_STOP_FILE):
+                        log_supervisor("Stop request detected during execution. Terminating worker child...")
+                        self.shutdown_requested = True
+                        self._terminate_child()
+                        break
+
                     line = self.worker_proc.stdout.readline()
                     if line:
                         line_str = line.strip()
@@ -150,7 +177,10 @@ class SupervisedInboxWorker:
                             crash_output.append(line_str)
                             if len(crash_output) > 50:
                                 crash_output.pop(0)
-                            print(f"  [WORKER-{self.worker_proc.pid}] {line_str}", flush=True)
+                            try:
+                                print(f"  [WORKER-{self.worker_proc.pid}] {line_str}", flush=True)
+                            except (OSError, ValueError):
+                                pass
                     else:
                         time.sleep(0.1)
 
@@ -179,6 +209,11 @@ class SupervisedInboxWorker:
         finally:
             self._terminate_child()
             self._remove_pid_file()
+            if os.path.exists(SUPERVISOR_STOP_FILE):
+                try:
+                    os.remove(SUPERVISOR_STOP_FILE)
+                except OSError:
+                    pass
             self.lock.release()
             log_supervisor("Supervisor shut down cleanly.")
 
@@ -192,16 +227,17 @@ def get_status() -> Dict[str, Any]:
         with open(SUPERVISOR_PID_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
         sup_pid = data.get("supervisor_pid")
+        worker_pid = data.get("worker_pid")
 
-        # Check if supervisor PID is alive on Windows
-        import ctypes
-        kernel32 = ctypes.windll.kernel32
-        handle = kernel32.OpenProcess(0x1000, False, sup_pid)  # PROCESS_QUERY_LIMITED_INFORMATION
-        if handle:
-            kernel32.CloseHandle(handle)
-            return {"status": "RUNNING", "running": True, "details": data}
+        sup_alive = _pid_is_running(sup_pid)
+        worker_alive = _pid_is_running(worker_pid) if worker_pid else False
+
+        if sup_alive and worker_alive:
+            return {"status": "RUNNING", "running": True, "details": data, "worker_alive": True}
+        elif sup_alive and not worker_alive:
+            return {"status": "WORKER_DOWN", "running": True, "details": data, "worker_alive": False}
         else:
-            return {"status": "STALE_PID", "running": False, "details": data}
+            return {"status": "STALE_PID", "running": False, "details": data, "worker_alive": worker_alive}
     except Exception as e:
         return {"status": "ERROR", "running": False, "error": str(e)}
 
@@ -209,17 +245,71 @@ def get_status() -> Dict[str, Any]:
 def stop_daemon():
     """Signals the running supervisor to terminate cleanly."""
     status = get_status()
-    if not status.get("running"):
-        print("[SUPERVISOR] Daemon is not running.")
+    if status.get("status") == "STOPPED":
+        print("[SUPERVISOR] Daemon is already stopped.")
+        for fpath in [SUPERVISOR_STOP_FILE, SUPERVISOR_LOCK_FILE + ".lock"]:
+            if os.path.exists(fpath):
+                try:
+                    os.remove(fpath)
+                except OSError:
+                    pass
         return
 
-    sup_pid = status["details"]["supervisor_pid"]
-    print(f"[SUPERVISOR] Sending termination signal to supervisor PID={sup_pid}...")
-    try:
-        os.kill(sup_pid, signal.SIGTERM)
-        print("[SUPERVISOR] Termination signal sent.")
-    except Exception as e:
-        print(f"[SUPERVISOR] Failed to signal process: {e}")
+    sup_pid = status.get("details", {}).get("supervisor_pid")
+    worker_pid = status.get("details", {}).get("worker_pid")
+
+    if sup_pid and _pid_is_running(sup_pid):
+        print(f"[SUPERVISOR] Sending termination signal to supervisor PID={sup_pid}...")
+        # 1. Create stop file indicator
+        try:
+            with open(SUPERVISOR_STOP_FILE, "w", encoding="utf-8") as f:
+                f.write(f"STOP requested at {get_current_ist()} for PID={sup_pid}\n")
+        except Exception:
+            pass
+
+        # 2. Send signal
+        try:
+            if os.name == "nt" and hasattr(signal, "CTRL_BREAK_EVENT"):
+                os.kill(sup_pid, signal.CTRL_BREAK_EVENT)
+            else:
+                os.kill(sup_pid, signal.SIGTERM)
+            print("[SUPERVISOR] Termination signal sent.")
+        except Exception as e:
+            print(f"[SUPERVISOR] Note on process signal: {e}")
+
+        # 3. Wait up to 5 seconds for supervisor to clean up and exit
+        t0 = time.time()
+        while time.time() - t0 < 5.0:
+            if not _pid_is_running(sup_pid):
+                break
+            time.sleep(0.2)
+
+        # 4. If still running, force terminate ONLY this PID
+        if _pid_is_running(sup_pid):
+            print(f"[SUPERVISOR] Force-terminating supervisor PID={sup_pid}...")
+            try:
+                os.kill(sup_pid, signal.SIGTERM)
+            except Exception:
+                pass
+
+    # 5. Also terminate child worker if still alive
+    worker_pid = status.get("details", {}).get("worker_pid")
+    if worker_pid and _pid_is_running(worker_pid):
+        print(f"[SUPERVISOR] Terminating worker child process PID={worker_pid}...")
+        try:
+            os.kill(worker_pid, signal.SIGTERM)
+        except Exception:
+            pass
+
+    # 6. Clean up files so status transitions cleanly to STOPPED
+    for fpath in [SUPERVISOR_PID_FILE, SUPERVISOR_STOP_FILE, SUPERVISOR_LOCK_FILE + ".lock"]:
+        if os.path.exists(fpath):
+            try:
+                os.remove(fpath)
+            except OSError:
+                pass
+
+    print("[SUPERVISOR] Stop operation completed.")
 
 
 if __name__ == "__main__":

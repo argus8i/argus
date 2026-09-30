@@ -130,8 +130,43 @@ def get_hub_status() -> Dict[str, Any]:
         except Exception:
             pass
 
+    # 5. Bus Health & Last Processed Message
+    from antigravity.daemons.supervised_inbox_worker import get_status as get_daemon_status
+    daemon_st = get_daemon_status()
+    bus_running = daemon_st.get("running", False) and daemon_st.get("status") == "RUNNING"
+    bus_health = "OK" if bus_running else "DOWN"
+
+    last_processed = None
+    archive_paths = glob.glob(os.path.join(ARCHIVE_DIR, "*.json"))
+    if archive_paths:
+        latest_archive = max(archive_paths, key=os.path.getmtime)
+        try:
+            with open(latest_archive, "r", encoding="utf-8") as f:
+                last_msg_data = json.load(f)
+            last_processed = {
+                "message_id": last_msg_data.get("message_id"),
+                "sender": last_msg_data.get("sender"),
+                "recipient": last_msg_data.get("recipient"),
+                "subject": last_msg_data.get("subject"),
+                "status": last_msg_data.get("status"),
+                "completed_at_ist": last_msg_data.get("completed_at_ist") or last_msg_data.get("created_at_ist"),
+                "file": os.path.basename(latest_archive),
+            }
+        except Exception:
+            pass
+
+    bus_info = {
+        "health": bus_health,
+        "daemon_status": daemon_st.get("status", "UNKNOWN"),
+        "supervisor_pid": daemon_st.get("details", {}).get("supervisor_pid"),
+        "worker_pid": daemon_st.get("details", {}).get("worker_pid"),
+        "worker_alive": daemon_st.get("worker_alive", False),
+        "last_message": last_processed,
+    }
+
     return {
         "timestamp_ist": get_current_ist(),
+        "bus": bus_info,
         "adapters": {
             "antigravity": antigravity_health,
             "claude": claude_health,
@@ -158,23 +193,32 @@ def print_dashboard():
     print(f"  Time: {st['timestamp_ist']} | Central Orchestrator: Antigravity")
     print("=" * 78)
 
-    print("\n[1] AGENT ADAPTER HEALTH:")
+    bus = st["bus"]
+    bus_icon = "[OK]" if bus["health"] == "OK" else "[DOWN]"
+    print(f"\n[1] BUS HEALTH: {bus_icon} Status={bus['health']} (Supervisor PID={bus['supervisor_pid']} | Worker PID={bus['worker_pid']})")
+    lm = bus.get("last_message")
+    if lm:
+        print(f"  Last Message: {lm['message_id']} [{lm['sender']} -> {lm['recipient']}] ({lm['subject']}) Status={lm['status']} at {lm['completed_at_ist']}")
+    else:
+        print("  Last Message: None recorded in archive")
+
+    print("\n[2] AGENT ADAPTER HEALTH:")
     for role, info in st["adapters"].items():
         status_icon = "[OK]" if info["status"] == "READY" else "[WARN]"
         print(f"  {status_icon} {info['agent']:<12}: Status={info['status']:<10} Binary={info['binary_exists']} Key={info['key_configured']}")
 
-    print("\n[2] QUEUE TELEMETRY:")
+    print("\n[3] QUEUE TELEMETRY:")
     q = st["queues"]
     print(f"  Pending: {q['inbox_pending']} | In-Progress: {q['inbox_claimed']} | Outbox: {q['outbox_responses']} | Completed: {q['archived_completed']} | Dead-Letter: {q['dead_letter_failures']}")
 
-    print("\n[3] LATEST REVIEWER SUBMISSIONS:")
+    print("\n[4] LATEST REVIEWER SUBMISSIONS:")
     for rev, rev_info in st["latest_reviews"].items():
         if rev_info:
             print(f"  * {rev}: {rev_info['file']} ({rev_info['size_bytes']} bytes)")
         else:
             print(f"  * {rev}: None recorded")
 
-    print("\n[4] SYNTHESIS & DISSENT STATUS:")
+    print("\n[5] SYNTHESIS & DISSENT STATUS:")
     syn = st["synthesis"]
     print(f"  Latest Synthesis Status: {syn['status']}")
     if syn.get("unresolved_objections"):
@@ -185,7 +229,7 @@ def print_dashboard():
         print("  Unresolved Objections: None (Consensus cleared)")
 
     if st["recent_failures"]:
-        print("\n[5] DEAD-LETTER FAILURES:")
+        print("\n[6] DEAD-LETTER FAILURES:")
         for fail in st["recent_failures"]:
             print(f"  * [{fail['file']}] {fail['error']}")
     print("=" * 78)
