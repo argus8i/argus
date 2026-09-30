@@ -374,12 +374,28 @@ def get_status() -> Dict[str, Any]:
                     "details": bdata,
                     "cooldown_remaining_sec": round(remaining, 1)
                 }
-            return {
-                "status": "COOLDOWN_EXPIRED",
-                "running": False,
-                "details": bdata,
-                "cooldown_remaining_sec": 0.0
-            }
+            # Cooldown has elapsed. Check if a healthy supervisor has been restarted.
+            if os.path.exists(SUPERVISOR_PID_FILE):
+                try:
+                    with open(SUPERVISOR_PID_FILE, "r", encoding="utf-8") as pf:
+                        pdata = json.load(pf)
+                    p_sup_pid = pdata.get("supervisor_pid")
+                    p_sup_ct = pdata.get("supervisor_create_time_nt")
+                    if p_sup_pid and _pid_is_running(p_sup_pid, expected_create_time=p_sup_ct):
+                        # Healthy supervisor is actively running; retire the expired breaker file
+                        try:
+                            os.remove(breaker_path)
+                        except OSError:
+                            pass
+                except Exception:
+                    pass
+            if os.path.exists(breaker_path):
+                return {
+                    "status": "COOLDOWN_EXPIRED",
+                    "running": False,
+                    "details": bdata,
+                    "cooldown_remaining_sec": 0.0
+                }
         except Exception:
             pass
 

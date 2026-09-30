@@ -667,7 +667,13 @@ def send_to_agent(
 
     inbox_path = os.path.join(INBOX_DIR, safe_msg_file)
     write_json_atomic(inbox_path, envelope)
-    return msg_id, corr_id
+    # Re-read persisted message to return the winner's correlation_id if raced
+    try:
+        with open(inbox_path, "r", encoding="utf-8") as f:
+            persisted = json.load(f)
+        return msg_id, persisted.get("correlation_id", corr_id)
+    except Exception:
+        return msg_id, corr_id
 
 
 def send_to_antigravity(*args: Any, **kwargs: Any) -> Tuple[str, str]:

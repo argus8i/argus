@@ -25,6 +25,7 @@ import sqlite3
 import subprocess
 import threading
 import concurrent.futures
+import weakref
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple, Callable
@@ -194,19 +195,78 @@ def write_json_atomic(filepath: str, data: Dict[str, Any]):
         json.dump(data, f, indent=2, ensure_ascii=False)
         f.flush()
         os.fsync(f.fileno())
-    for attempt in range(5):
+    # For inbox messages, serialize write attempts to avoid racing overwrites of identical message_ids
+    norm_dir = os.path.normpath(os.path.dirname(filepath))
+    is_inbox = os.path.basename(norm_dir) == "inbox" and filepath.endswith(".json")
+    if is_inbox:
+        thread_lock = _get_process_thread_lock(filepath)
+        written = False
+        with thread_lock:
+            if os.path.exists(filepath):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+                return
+            for attempt in range(5):
+                try:
+                    os.replace(tmp_path, filepath)
+                    written = True
+                    break
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.02)
+        if written:
+            _notify_active_inbox_workers()
+        return
+    else:
+        for attempt in range(5):
+            try:
+                os.replace(tmp_path, filepath)
+                return
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.02)
+
+
+_ACTIVE_INBOX_WORKERS: weakref.WeakSet = weakref.WeakSet()
+_ACTIVE_INBOX_WORKERS_LOCK = threading.Lock()
+
+def _register_active_worker(worker: Any):
+    with _ACTIVE_INBOX_WORKERS_LOCK:
+        _ACTIVE_INBOX_WORKERS.add(worker)
+
+def _unregister_active_worker(worker: Any):
+    with _ACTIVE_INBOX_WORKERS_LOCK:
+        _ACTIVE_INBOX_WORKERS.discard(worker)
+
+def _notify_active_inbox_workers():
+    with _ACTIVE_INBOX_WORKERS_LOCK:
+        workers = list(_ACTIVE_INBOX_WORKERS)
+    for w in workers:
         try:
-            os.replace(tmp_path, filepath)
-            return
-        except PermissionError:
-            if attempt == 4:
-                raise
-            time.sleep(0.02)
+            w.intake_now()
+        except Exception as e:
+            logger.error("Error during worker intake_now notification: %s", e)
+
+
+_PROCESS_LOCKS: Dict[str, threading.Lock] = {}
+_PROCESS_LOCKS_MUTEX = threading.Lock()
+
+def _get_process_thread_lock(target_path: str) -> threading.Lock:
+    norm = os.path.normcase(os.path.abspath(target_path))
+    with _PROCESS_LOCKS_MUTEX:
+        if norm not in _PROCESS_LOCKS:
+            _PROCESS_LOCKS[norm] = threading.Lock()
+        return _PROCESS_LOCKS[norm]
 
 
 class FileLock:
     """
-    Truly atomic per-file mutual exclusion using OS-level O_CREAT | O_EXCL.
+    Truly atomic per-file mutual exclusion using OS-level O_CREAT | O_EXCL
+    and explicit release markers.
     Guarantees that exactly one process can hold the lock at any given time.
     """
     def __init__(self, target_path: str, timeout_sec: float = 10.0, stale_sec: float = 60.0):
@@ -226,7 +286,8 @@ class FileLock:
                     "pid": os.getpid(),
                     "create_time_nt": get_process_create_time_nt(os.getpid()),
                     "acquired_at": time.time(),
-                    "target": self.target_path
+                    "target": self.target_path,
+                    "released": False
                 }).encode("utf-8")
                 os.write(self.fd, lock_data)
                 return True
@@ -235,37 +296,42 @@ class FileLock:
                     continue
                 if (time.time() - t0) >= self.timeout_sec:
                     return False
-                time.sleep(0.05)
+                time.sleep(0.02)
             except OSError:
                 if (time.time() - t0) >= self.timeout_sec:
                     return False
-                time.sleep(0.05)
+                time.sleep(0.02)
 
     def _break_stale_lock(self) -> bool:
         try:
             with open(self.lock_path, "r", encoding="utf-8") as f:
                 owner = json.load(f)
+
+            # If explicitly marked as released by previous owner:
+            if owner.get("released"):
+                try:
+                    os.remove(self.lock_path)
+                    return True
+                except OSError:
+                    return False
+
             pid = owner.get("pid")
             ct = owner.get("create_time_nt")
             # If owner process is verifiably running, lock is active - never break it!
-            if _pid_is_running(pid, expected_create_time=ct):
+            if pid and _pid_is_running(pid, expected_create_time=ct):
                 return False
             # Owner is dead - safe to remove lock
-            try:
-                os.remove(self.lock_path)
-                return True
-            except OSError:
-                return False
-        except (json.JSONDecodeError, ValueError):
-            # Malformed/torn lock: do not delete a potentially live owner's lock during atomic write
-            # Only break if it's genuinely abandoned beyond stale_sec
-            try:
-                mtime = os.path.getmtime(self.lock_path)
-                if (time.time() - mtime) > self.stale_sec:
+            if pid and not _pid_is_running(pid, expected_create_time=ct):
+                try:
                     os.remove(self.lock_path)
                     return True
-            except OSError:
-                pass
+                except OSError:
+                    return False
+            # Unknown owner (pid missing) - fail closed (R6)
+            return False
+        except (json.JSONDecodeError, ValueError):
+            # Malformed/torn lock: unknown ownership - fail-closed (R6)!
+            # A torn or unknown owner never allows takeover based on age alone.
             return False
         except OSError:
             pass
@@ -273,6 +339,14 @@ class FileLock:
 
     def release(self):
         if self.fd is not None:
+            try:
+                # Mark as released before closing handle
+                os.lseek(self.fd, 0, os.SEEK_SET)
+                rel_bytes = b'{"released": true}'
+                os.write(self.fd, rel_bytes)
+                os.ftruncate(self.fd, len(rel_bytes))
+            except OSError:
+                pass
             try:
                 os.close(self.fd)
             except OSError:
@@ -346,7 +420,7 @@ class DurableReplayStore:
                 row = cur.fetchone()
                 if row is not None:
                     if allow_recovery and row["state"] == "RECOVERED_RETRY_PENDING" and (row["message_id"] == message_id or not row["message_id"]):
-                        conn.execute("UPDATE seen_nonces SET state = 'PROCESSING', recorded_at = ? WHERE nonce = ?", (now, nonce))
+                        conn.execute("UPDATE seen_nonces SET state = 'RECOVERED_RETRY_CONSUMED', recorded_at = ? WHERE nonce = ?", (now, nonce))
                         conn.commit()
                         return True, None
                     return False, f"REPLAY_ATTACK: Nonce '{nonce}' has already been processed."
@@ -368,6 +442,30 @@ class DurableReplayStore:
                 conn.execute(
                     "UPDATE seen_nonces SET state = 'RECOVERED_RETRY_PENDING' WHERE nonce = ?",
                     (nonce,)
+                )
+                conn.commit()
+        except Exception:
+            pass
+
+    def mark_nonce_completed(self, nonce: str):
+        """Marks a nonce as completed."""
+        try:
+            with sqlite3.connect(self.db_path, timeout=10.0) as conn:
+                conn.execute(
+                    "UPDATE seen_nonces SET state = 'COMPLETED', recorded_at = ? WHERE nonce = ?",
+                    (time.time(), nonce)
+                )
+                conn.commit()
+        except Exception:
+            pass
+
+    def mark_nonce_failed(self, nonce: str):
+        """Marks a nonce as failed."""
+        try:
+            with sqlite3.connect(self.db_path, timeout=10.0) as conn:
+                conn.execute(
+                    "UPDATE seen_nonces SET state = 'FAILED', recorded_at = ? WHERE nonce = ?",
+                    (time.time(), nonce)
                 )
                 conn.commit()
         except Exception:
@@ -416,7 +514,7 @@ def get_agent_secret_key(agent_name: str) -> Optional[str]:
 
 RUNTIME_METADATA_FIELDS = {
     "auth_signature", "claimed_at_ist", "worker_pid", "worker_create_time_nt",
-    "processing_started_at_ist", "auth_verified_at_ist"
+    "processing_started_at_ist"
 }
 
 
@@ -455,7 +553,8 @@ def compute_message_hmac(msg: Dict[str, Any], secret_key: str) -> str:
 def verify_message_auth(
     msg: Dict[str, Any],
     record_nonce: bool = True,
-    allow_recovery: bool = False
+    allow_recovery: bool = False,
+    check_freshness: bool = True
 ) -> Tuple[bool, Optional[str]]:
     """Validates message HMAC-SHA256 signature, durable nonce uniqueness, and timestamp freshness.
     Strict evaluation order: schema/fields -> timestamp freshness -> HMAC verification -> record nonce.
@@ -475,8 +574,7 @@ def verify_message_auth(
         return False, "AUTH_FAILED: Missing or invalid 'nonce' in message envelope."
 
     # 1. Timestamp Freshness Check (checked BEFORE burning nonce)
-    # If already verified at arrival (claim time), do not expire during execution wait
-    if not msg.get("auth_verified_at_ist"):
+    if check_freshness:
         ts_str = msg.get("created_at_ist", "")
         try:
             ts_clean = ts_str.replace(" IST", "")
@@ -564,7 +662,8 @@ def validate_path_security(
 def validate_message_schema(
     msg: Dict[str, Any],
     record_nonce: Optional[bool] = None,
-    allow_recovery: bool = False
+    allow_recovery: bool = False,
+    check_freshness: bool = True
 ) -> Tuple[bool, Optional[str]]:
     """Validates incoming message envelope schema and security constraints strictly."""
     required_fields = [
@@ -630,10 +729,14 @@ def validate_message_schema(
                 return False, f"PRE_TASK_HASH_REQUIRED: Modifying existing file '{target_path_to_check}' requires 'pre_task_hash' (or 'expected_base_hash')."
 
     # Cryptographic Authentication & Nonce Verification
-    # If auth_verified_at_ist is present, message was already claimed and nonce recorded
-    should_record = record_nonce if record_nonce is not None else not bool(msg.get("auth_verified_at_ist"))
+    should_record = record_nonce if record_nonce is not None else True
     is_recovered = allow_recovery or (isinstance(msg.get("attempt_count"), int) and msg["attempt_count"] > 0)
-    auth_valid, auth_err = verify_message_auth(msg, record_nonce=should_record, allow_recovery=is_recovered)
+    auth_valid, auth_err = verify_message_auth(
+        msg,
+        record_nonce=should_record,
+        allow_recovery=is_recovered,
+        check_freshness=check_freshness
+    )
     if not auth_valid:
         return False, auth_err
 
@@ -723,7 +826,27 @@ class InboxWorker:
         self.orphan_recovery_policy = orphan_recovery_policy
         self._recipient_lanes: Dict[str, threading.Lock] = {r: threading.Lock() for r in VALID_RECIPIENTS}
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max(len(VALID_RECIPIENTS), 4))
+        self._active_recipient_futures: Dict[str, concurrent.futures.Future] = {}
+        self._pending_by_recipient: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}
+        self._intake_lock = threading.Lock()
+        self._dead_letter_count_in_pass = 0
         ensure_directories()
+
+    def intake_now(self):
+        """Scans the inbox directory and admits/claims pending messages immediately upon arrival."""
+        with self._intake_lock:
+            try:
+                inbox_entries = sorted(os.listdir(INBOX_DIR))
+            except OSError:
+                inbox_entries = []
+
+            for filename in inbox_entries:
+                if filename.endswith(".json") and not filename.endswith(".tmp"):
+                    claim_res = self.claim_message(filename)
+                    if claim_res:
+                        claimed_path, msg_data = claim_res
+                        recipient = msg_data.get("recipient", "ANTIGRAVITY")
+                        self._pending_by_recipient.setdefault(recipient, []).append((claimed_path, msg_data))
 
     def recover_orphaned_claims(self):
         """Scans inbox for stale .claimed files from crashed workers and recovers them."""
@@ -793,6 +916,9 @@ class InboxWorker:
 
                             # Revert back to .json to allow worker retry
                             data["status"] = "CREATED"
+                            data["attempt_count"] = attempts
+                            for rm_field in ["claimed_at_ist", "worker_pid", "worker_create_time_nt", "processing_started_at_ist", "auth_verified_at_ist"]:
+                                data.pop(rm_field, None)
                             safe_revert = get_safe_filename(msg_id, ".json")
                             revert_path = os.path.join(INBOX_DIR, safe_revert)
                             write_json_atomic(revert_path, data)
@@ -836,8 +962,6 @@ class InboxWorker:
                 try:
                     with open(claimed_path, "r", encoding="utf-8") as f:
                         data = json.load(f)
-                    if data.get("status") != "CREATED":
-                        return claimed_path, data
 
                     # Validate schema, timestamp freshness, and HMAC at ARRIVAL (claim time)
                     is_valid, auth_err = validate_message_schema(data)
@@ -873,11 +997,25 @@ class InboxWorker:
                             os.remove(claimed_path)
                         except OSError:
                             pass
+                        self._dead_letter_count_in_pass += 1
+                        return None
+
+                    if data.get("status") != "CREATED":
+                        safe_dead = get_safe_filename(data.get("message_id", json_filename.replace(".json", "")), ".dead.json")
+                        dead_path = os.path.join(DEAD_LETTER_DIR, safe_dead)
+                        data["status"] = "FAILED"
+                        data["error"] = f"INVALID_STATUS: Inbound message must have status 'CREATED', got '{data.get('status')}'"
+                        data["failed_at_ist"] = get_current_ist()
+                        write_json_atomic(dead_path, data)
+                        try:
+                            os.remove(claimed_path)
+                        except OSError:
+                            pass
+                        self._dead_letter_count_in_pass += 1
                         return None
 
                     data["status"] = "CLAIMED"
                     data["claimed_at_ist"] = get_current_ist()
-                    data["auth_verified_at_ist"] = data["claimed_at_ist"]
                     data["worker_pid"] = os.getpid()
                     data["worker_create_time_nt"] = get_process_create_time_nt(os.getpid())
                     write_json_atomic(claimed_path, data)
@@ -896,6 +1034,7 @@ class InboxWorker:
                         os.remove(claimed_path)
                     except OSError:
                         pass
+                    self._dead_letter_count_in_pass += 1
                     return None
         except TimeoutError:
             return None
@@ -1137,8 +1276,8 @@ class InboxWorker:
             self.route_to_dead_letter(claimed_path, msg, f"CORRELATION_ID_COLLISION: Response already exists for '{corr_id}'")
             return
 
-        # 1. Schema, Identifier, and Authentication Validation
-        is_valid, schema_err = validate_message_schema(msg)
+        # 1. Schema, Identifier, and Authentication Validation (already admitted; check HMAC & schema)
+        is_valid, schema_err = validate_message_schema(msg, record_nonce=False, check_freshness=False)
         if not is_valid:
             self.route_to_dead_letter(claimed_path, msg, schema_err or "SCHEMA_VALIDATION_FAILED")
             err_resp = {
@@ -1188,7 +1327,11 @@ class InboxWorker:
 
         # 5. Archive or Dead-Letter
         msg_id = msg.get("message_id")
+        nonce = msg.get("nonce")
+        replay_store = DurableReplayStore(os.path.join(MESSAGES_ROOT, "replay_store.db"))
         if status == "COMPLETED":
+            if nonce:
+                replay_store.mark_nonce_completed(nonce)
             msg["status"] = "COMPLETED"
             msg["completed_at_ist"] = resp_envelope["completed_at_ist"]
             safe_archive_name = get_safe_filename(msg_id, ".json")
@@ -1199,6 +1342,8 @@ class InboxWorker:
             except OSError:
                 pass
         else:
+            if nonce:
+                replay_store.mark_nonce_failed(nonce)
             self.route_to_dead_letter(claimed_path, msg, error_msg or f"TASK_{status}")
 
     def process_message(self, claimed_path: str, msg: Dict[str, Any]):
@@ -1218,22 +1363,66 @@ class InboxWorker:
             self.process_message(claimed_path, msg_data)
 
     def run_single_pass(self) -> int:
-        """Processes all currently pending messages in the inbox once with per-recipient concurrency. Returns count processed."""
-        self.recover_orphaned_claims()
-        futures = []
-        for filename in sorted(os.listdir(INBOX_DIR)):
-            if filename.endswith(".json") and not filename.endswith(".tmp"):
-                claim_res = self.claim_message(filename)
-                if claim_res:
-                    claimed_path, msg_data = claim_res
-                    f = self._executor.submit(self._execute_in_lane, claimed_path, msg_data)
-                    futures.append(f)
-        for f in concurrent.futures.as_completed(futures):
-            try:
-                f.result()
-            except Exception as e:
-                logger.error("Error executing message in lane: %s", e)
-        return len(futures)
+        """Processes all pending messages in inbox with continuous intake and isolated recipient queues."""
+        _register_active_worker(self)
+        try:
+            self.recover_orphaned_claims()
+            processed_count = 0
+            self._dead_letter_count_in_pass = 0
+
+            while True:
+                # 1. Continuous Intake: claim all pending inbox files immediately upon arrival
+                self.intake_now()
+
+                # 2. Dispatch next pending message for any idle recipient lane
+                with self._intake_lock:
+                    for recipient in list(self._pending_by_recipient.keys()):
+                        queue = self._pending_by_recipient.get(recipient, [])
+                        if queue and recipient not in self._active_recipient_futures:
+                            claimed_path, msg_data = queue.pop(0)
+                            fut = self._executor.submit(self._execute_in_lane, claimed_path, msg_data)
+                            self._active_recipient_futures[recipient] = fut
+                            processed_count += 1
+
+                    # Prune empty queues
+                    self._pending_by_recipient = {r: q for r, q in self._pending_by_recipient.items() if q}
+
+                    has_active = bool(self._active_recipient_futures)
+                    has_pending = bool(self._pending_by_recipient)
+
+                # 3. If no active work is running and no work is queued, check if any new file landed in inbox
+                if not has_active and not has_pending:
+                    try:
+                        remaining_inbox = [f for f in os.listdir(INBOX_DIR) if f.endswith(".json") and not f.endswith(".tmp")]
+                    except OSError:
+                        remaining_inbox = []
+                    if not remaining_inbox:
+                        break
+                    continue
+
+                # 4. Wait for active tasks with short timeout (0.02s) so new arrivals are continuously admitted
+                active_futs = list(self._active_recipient_futures.values())
+                if active_futs:
+                    done, _ = concurrent.futures.wait(
+                        active_futs,
+                        timeout=0.02,
+                        return_when=concurrent.futures.FIRST_COMPLETED
+                    )
+                    for fut in done:
+                        for r, f in list(self._active_recipient_futures.items()):
+                            if f == fut:
+                                del self._active_recipient_futures[r]
+                                try:
+                                    fut.result()
+                                except Exception as e:
+                                    logger.error("Error executing task in lane %s: %s", r, e)
+                                break
+                else:
+                    time.sleep(0.01)
+
+            return processed_count + self._dead_letter_count_in_pass
+        finally:
+            _unregister_active_worker(self)
 
     def run_daemon(self):
         """Continuously polls the inbox directory."""

@@ -15,10 +15,10 @@ $supSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIf
 
 Register-ScheduledTask -TaskName "ARGUS_Nexus_Supervisor" -Action $supAction -Trigger $supTrigger -Principal $supPrincipal -Settings $supSettings -Force
 
-Write-Host "[2/3] Registering ARGUS_Nexus_Watchdog (Trigger: Every 5 Minutes)..."
+Write-Host "[2/3] Registering ARGUS_Nexus_Watchdog (Trigger: Every 1 Minute)..."
 
 $wdAction = New-ScheduledTaskAction -Execute $PythonExe -Argument "antigravity/daemons/nexus_watchdog.py --check" -WorkingDirectory $WorkspaceRoot
-$wdTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).ToString("HH:mm") -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
+$wdTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).ToString("HH:mm") -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Days 3650)
 $wdPrincipal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
 $wdSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
 
