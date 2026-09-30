@@ -99,26 +99,48 @@ KNOWN_WEEKEND_SESSIONS = {
     date(2026, 2, 1),
 }
 
+KNOWN_EXCHANGE_HOLIDAYS = {
+    # 2026 Official NSE Trading Holidays
+    date(2026, 1, 26),   # Republic Day
+    date(2026, 2, 18),   # Maha Shivratri
+    date(2026, 3, 3),    # Holi
+    date(2026, 3, 26),   # Shri Ram Navami
+    date(2026, 4, 3),    # Good Friday
+    date(2026, 4, 14),   # Dr. Baba Saheb Ambedkar Jayanti
+    date(2026, 5, 1),    # Maharashtra Day
+    date(2026, 5, 28),   # Bakri Id
+    date(2026, 6, 26),   # Muharram
+    date(2026, 10, 2),   # Mahatma Gandhi Jayanti
+    date(2026, 10, 20),  # Dussehra
+    date(2026, 11, 10),  # Diwali Balipratipada
+    date(2026, 11, 24),  # Guru Nanak Jayanti
+    date(2026, 12, 25),  # Christmas
+}
 
-def calculate_next_session_date(current_date: date) -> date:
+
+def calculate_next_session_date(
+    current_date: date,
+    holidays: Optional[Set[date]] = None,
+    weekend_sessions: Optional[Set[date]] = None,
+) -> date:
     """
     Calculate the next scheduled session date.
-    Checks known weekend special trading sessions first, then skips regular weekends.
+    Checks known weekend special trading sessions first, then advances day-by-day
+    skipping regular weekends and exchange holidays.
     """
-    for delta in (1, 2):
-        cand = current_date + timedelta(days=delta)
-        if cand in KNOWN_WEEKEND_SESSIONS:
-            return cand
+    h_set = holidays if holidays is not None else KNOWN_EXCHANGE_HOLIDAYS
+    w_set = weekend_sessions if weekend_sessions is not None else KNOWN_WEEKEND_SESSIONS
 
-    weekday = current_date.weekday()
-    if weekday == 4:  # Friday -> Monday
-        return current_date + timedelta(days=3)
-    elif weekday == 5:  # Saturday -> Monday
-        return current_date + timedelta(days=2)
-    elif weekday == 6:  # Sunday -> Monday
-        return current_date + timedelta(days=1)
-    else:
-        return current_date + timedelta(days=1)
+    cand = current_date + timedelta(days=1)
+    for _ in range(15):
+        if cand in w_set:
+            return cand
+        if cand.weekday() < 5 and cand not in h_set:
+            return cand
+        cand += timedelta(days=1)
+
+    return current_date + timedelta(days=1)
+
 
 
 @dataclass
@@ -979,7 +1001,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     for k, v in sorted(stats.items()):
         print(f"  {k}: {v}")
 
-    if stats.get("STOPPED_403", 0) > 0 or stats.get("STOPPED_429", 0) > 0 or stats.get("FAILED", 0) > 0:
+    try:
+        from antigravity.orchestrator.status import get_hub_status
+        hub_st = get_hub_status()
+        bus = hub_st.get("bus", {})
+        lm = bus.get("last_message")
+        lm_str = f"{lm['completed_at_ist']} ({lm['message_id']})" if lm else "None recorded"
+        print(f"\nNexus bus: {bus.get('health', 'UNKNOWN')}, last message processed at {lm_str}")
+    except Exception as e:
+        print(f"\nNexus bus: UNKNOWN (check failed: {e})")
+
+    failed_keys = {
+        "STOPPED_403", "STOPPED_429", "STOPPED_CAP_REACHED",
+        "FAILED", "FAILED_CORRUPT_ZIP", "FAILED_INVALID_FORMAT",
+        "FAILED_WRONG_DATE", "FAILED_PARSE", "TIMEOUT",
+    }
+    has_failures = any(stats.get(k, 0) > 0 for k in failed_keys)
+    success_count = stats.get("SAVED", 0) + stats.get("SKIPPED_ALREADY_SAVED", 0)
+
+    if has_failures or success_count < len(items):
         return 1
     return 0
 

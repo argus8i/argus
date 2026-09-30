@@ -39,6 +39,7 @@ if PROJECT_ROOT not in sys.path:
 
 import antigravity.daemons.inbox_worker as iw
 import antigravity.daemons.tri_agent_bus as tab
+import antigravity.daemons.nexus_cli as nexus_cli
 from antigravity.daemons.inbox_worker import (
     InboxWorker,
     validate_message_schema,
@@ -603,6 +604,7 @@ def test_worker_restart_and_recovery_of_claimed(msg_test_env):
         status="CLAIMED",
         attempt_count=0
     )
+    envelope["worker_pid"] = 99999999
     write_json_atomic(claimed_file, envelope)
 
     old_time = time.time() - (CLAIM_TIMEOUT_SEC + 10)
@@ -621,6 +623,7 @@ def test_worker_restart_and_recovery_of_claimed(msg_test_env):
     assert reverted_data["attempt_count"] == 1
 
     reverted_data["attempt_count"] = MAX_ATTEMPTS
+    reverted_data["worker_pid"] = 99999999
     claimed_max = os.path.join(msg_test_env["inbox"], f"{crashed_id}.claimed")
     write_json_atomic(claimed_max, reverted_data)
     os.remove(reverted_file)
@@ -1124,9 +1127,67 @@ def test_file_lock_atomic_mutual_exclusion(msg_test_env):
     if stale_lock.fd is not None:
         os.close(stale_lock.fd)
         stale_lock.fd = None
+    with open(stale_lock.lock_path, "w", encoding="utf-8") as f:
+        json.dump({"pid": 99999999}, f)
     old_time = time.time() - 10
     os.utime(stale_lock.lock_path, (old_time, old_time))
 
     breaker_lock = FileLock(target, timeout_sec=0.5, stale_sec=0.1)
     assert breaker_lock.acquire() is True
     breaker_lock.release()
+
+
+def test_live_claim_is_not_requeued_after_sixty_seconds(msg_test_env):
+    message_id = "msg_live_slow_01"
+    claimed = os.path.join(msg_test_env["inbox"], message_id + ".claimed")
+    envelope = make_signed_request(
+        sender="CLAUDE", subject="PING", body="ping",
+        message_id=message_id, correlation_id="corr_live_slow_01",
+        status="PROCESSING", attempt_count=0,
+    )
+    envelope["worker_pid"] = os.getpid()
+    write_json_atomic(claimed, envelope)
+    old = time.time() - CLAIM_TIMEOUT_SEC - 10
+    os.utime(claimed, (old, old))
+    InboxWorker().recover_orphaned_claims()
+    assert os.path.exists(claimed)
+    assert not os.path.exists(os.path.join(msg_test_env["inbox"], message_id + ".json"))
+
+
+def test_live_stale_lock_cannot_be_stolen(msg_test_env):
+    target = os.path.join(msg_test_env["sandbox_dir"], "live-lock")
+    owner = FileLock(target, timeout_sec=0.1, stale_sec=0.01)
+    assert owner.acquire()
+    old = time.time() - 10
+    os.utime(owner.lock_path, (old, old))
+    contender = FileLock(target, timeout_sec=0.1, stale_sec=0.01)
+    assert contender.acquire() is False
+    owner.release()
+
+
+def test_nexus_cli_timeout_preserves_queued_request(msg_test_env, capsys):
+    code = nexus_cli.main([
+        "--sender", "CODEX", "--recipient", "CLAUDE", "--subject", "CHAT",
+        "--body", "slow but valid", "--wait", "0.01", "--execution-timeout", "300",
+    ])
+    output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert code == 0
+    assert output[-1]["status"] == "PENDING"
+    assert output[-1]["error"] is None
+    assert output[-1]["correlation_id"] == output[0]["correlation_id"]
+    queued = os.path.join(msg_test_env["inbox"], output[0]["message_id"] + ".json")
+    with open(queued, encoding="utf-8") as f:
+        assert json.load(f)["timeout_sec"] == 300
+
+
+def test_nexus_cli_poll_does_not_send_duplicate(msg_test_env, capsys):
+    message_id, correlation_id = send_to_agent(
+        sender="CODEX", recipient="CLAUDE", subject="PING", body="check",
+    )
+    InboxWorker().run_single_pass()
+    before = sorted(os.listdir(msg_test_env["inbox"]))
+    code = nexus_cli.main(["--recipient", "CLAUDE", "--poll", correlation_id])
+    output = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert code == 0
+    assert output["status"] == "COMPLETED"
+    assert sorted(os.listdir(msg_test_env["inbox"])) == before

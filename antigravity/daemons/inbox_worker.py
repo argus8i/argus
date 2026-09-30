@@ -45,7 +45,38 @@ AUTH_CONFIG_PATH = os.path.join(WORKSPACE_DIR, "antigravity", "config", "agent_a
 DEFAULT_EXTERNAL_KEY_PATH = r"C:\Users\yashw\.gemini\antigravity\agent_keys.json"
 
 # Security Constraints
-CLAIM_TIMEOUT_SEC = 60.0
+CLAIM_TIMEOUT_SEC = 60.0  # Grace period for claims whose worker has exited.
+
+
+def _pid_is_running(pid: object) -> bool:
+    """Fail closed when process liveness cannot be established."""
+    if type(pid) is not int or pid <= 0:
+        return True
+    if pid == os.getpid():
+        return True
+    try:
+        if os.name == "nt":
+            import ctypes
+            kernel = ctypes.windll.kernel32
+            handle = kernel.OpenProcess(0x1000, False, pid)
+            if not handle:
+                # Access denied is not proof that the process exited.
+                return ctypes.GetLastError() != 87
+            try:
+                exit_code = ctypes.c_ulong()
+                if not kernel.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                    return True
+                return exit_code.value == 259  # STILL_ACTIVE
+            finally:
+                kernel.CloseHandle(handle)
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True
 MAX_ATTEMPTS = 3
 IDENTIFIER_REGEX = re.compile(r"^[a-zA-Z0-9_\-]{8,64}$")
 
@@ -149,7 +180,16 @@ class FileLock:
     def _break_stale_lock(self) -> bool:
         try:
             mtime = os.path.getmtime(self.lock_path)
-            if (time.time() - mtime) > self.stale_sec:
+            with open(self.lock_path, "r", encoding="utf-8") as f:
+                owner = json.load(f)
+            pid = owner.get("pid")
+            if not _pid_is_running(pid):
+                try:
+                    os.remove(self.lock_path)
+                    return True
+                except OSError:
+                    pass
+            elif (time.time() - mtime) > self.stale_sec:
                 try:
                     os.remove(self.lock_path)
                     return True
@@ -461,9 +501,10 @@ def validate_message_schema(msg: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
     return True, None
 
 
-def invoke_antigravity_model(prompt: str, timeout_sec: int = 120) -> Dict[str, Any]:
+def invoke_antigravity_model(prompt: str, timeout_sec: int = 120, chat_only: bool = False) -> Dict[str, Any]:
     """
-    Invokes Antigravity with user-authorized access after a verified checkpoint.
+    Invokes Antigravity with user-authorized access after a verified checkpoint,
+    or sandboxed read-only access for chat discussions.
     """
     if MODEL_DISPATCH_HOOK:
         return MODEL_DISPATCH_HOOK(prompt, timeout_sec)
@@ -480,13 +521,16 @@ def invoke_antigravity_model(prompt: str, timeout_sec: int = 120) -> Dict[str, A
     t0 = time.time()
     try:
         from antigravity.daemons.agent_access import prepare_dispatch, TASK_BOUNDARIES
+        from antigravity.daemons.tri_agent_bus import CHAT_BOUNDARIES
+        cli_flags = ["--project", "3ccee98c-0ec8-497b-a076-f86d4ef452ae", "--sandbox"] if chat_only else prepare_dispatch("ANTIGRAVITY")
+        boundary = CHAT_BOUNDARIES if chat_only else TASK_BOUNDARIES
         proc = subprocess.run(
             [
                 agy_bin,
-                *prepare_dispatch("ANTIGRAVITY"),
+                *cli_flags,
                 "--disable-slash-commands",
                 "--model", "gemini-3.8-flash-low",
-                "-p", TASK_BOUNDARIES + prompt
+                "-p", boundary + prompt
             ],
             cwd=WORKSPACE_DIR,
             capture_output=True,
@@ -551,6 +595,8 @@ class InboxWorker:
                     try:
                         with open(claimed_path, "r", encoding="utf-8") as f:
                             data = json.load(f)
+                        if _pid_is_running(data.get("worker_pid")):
+                            continue
                         attempts = data.get("attempt_count", 0) + 1
                         data["attempt_count"] = attempts
                         if attempts >= MAX_ATTEMPTS:
@@ -684,9 +730,10 @@ class InboxWorker:
                 "place orders, or dispatch other agents.\n"
                 f"Subject: {msg.get('subject')}\nBody: {body}\nTrack: {track}"
             )
-            timeout_sec = max(1, min(int(msg.get("timeout_sec", 120)), 900))
+            timeout_sec = max(1, min(int(msg.get("timeout_sec", 300)), 900))
             dispatch_kwargs = {"timeout_sec": timeout_sec, "min_chars": 1}
-            if subject == "CHAT":
+            import inspect
+            if "chat_only" in inspect.signature(dispatch).parameters:
                 dispatch_kwargs["chat_only"] = True
             result = dispatch(prompt, **dispatch_kwargs)
             if not result.get("success"):
@@ -753,9 +800,10 @@ class InboxWorker:
 
         # 2. Live Antigravity Model Reasoning Handler
         # Any non-fast-path subject invokes the live model
+        is_chat = (subject == "CHAT" or not expected_file)
         prompt_text = f"Subject: {msg.get('subject')}\nBody: {body}\nTrack: {track}"
-        timeout_sec = int(msg.get("timeout_sec", 120))
-        model_result = invoke_antigravity_model(prompt_text, timeout_sec)
+        timeout_sec = int(msg.get("timeout_sec", 300))
+        model_result = invoke_antigravity_model(prompt_text, timeout_sec, chat_only=is_chat)
 
         if not model_result.get("success"):
             return "FAILED", model_result.get("output"), {}, model_result.get("error") or "Model invocation failed."

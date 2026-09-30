@@ -134,6 +134,32 @@ def test_job0_weekend_date_calculation():
     assert friday_next == date(2026, 9, 25)
 
 
+def test_job0_holiday_date_calculation_skips_exchange_holidays():
+    """Rule 8 & Claude audit: calculate_next_session_date must skip official NSE holidays.
+    - Thu 2026-10-01 must skip Fri 2026-10-02 (Gandhi Jayanti) and weekend -> Mon 2026-10-05.
+    - Mon 2026-10-19 must skip Tue 2026-10-20 (Dussehra) -> Wed 2026-10-21.
+    """
+    thu_oct1 = date(2026, 10, 1)
+    next_session_oct1 = calculate_next_session_date(thu_oct1)
+    assert next_session_oct1 == date(2026, 10, 5)
+
+    mon_oct19 = date(2026, 10, 19)
+    next_session_oct19 = calculate_next_session_date(mon_oct19)
+    assert next_session_oct19 == date(2026, 10, 21)
+
+
+def test_job0_main_returns_error_on_cap_or_corrupt_data(tmp_path: Path):
+    """Rule 8 v2 Fail-Closed Invariant: main() must return non-zero exit code if cap reached or any item fails."""
+    from scripts.daily_pipeline import main
+
+    # Case 1: Cap reached
+    downloader = DailyPipelineDownloader(root_dir=tmp_path, pause_seconds=0.0, daily_cap=0)
+    with patch("scripts.daily_pipeline.DailyPipelineDownloader", return_value=downloader):
+        rc = main(["--trade-date", "2026-09-28", "--root-dir", str(tmp_path), "--daily-cap", "0"])
+        assert rc == 1, f"Expected non-zero exit code on cap reached, got {rc}"
+
+
+
 def test_job0_403_stops_immediately_no_retry(tmp_path: Path):
     """Rule 6: Any HTTP 403 halts immediately, records STOPPED_403, and does not retry."""
     downloader = DailyPipelineDownloader(root_dir=tmp_path, pause_seconds=0.0)
