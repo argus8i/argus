@@ -164,9 +164,19 @@ def get_hub_status() -> Dict[str, Any]:
         "last_message": last_processed,
     }
 
+    deep_health_path = os.path.join(MESSAGES_ROOT, "deep_health_latest.json")
+    deep_health_info = {"status": "UNKNOWN", "agents": {}}
+    if os.path.exists(deep_health_path):
+        try:
+            with open(deep_health_path, "r", encoding="utf-8") as f:
+                deep_health_info = json.load(f)
+        except Exception:
+            pass
+
     return {
         "timestamp_ist": get_current_ist(),
         "bus": bus_info,
+        "deep_health": deep_health_info,
         "adapters": {
             "antigravity": antigravity_health,
             "claude": claude_health,
@@ -195,7 +205,16 @@ def print_dashboard():
 
     bus = st["bus"]
     bus_icon = "[OK]" if bus["health"] == "OK" else "[DOWN]"
-    print(f"\n[1] BUS HEALTH: {bus_icon} Status={bus['health']} (Supervisor PID={bus['supervisor_pid']} | Worker PID={bus['worker_pid']})")
+    dh = st.get("deep_health", {})
+    dh_status = dh.get("status", "UNKNOWN")
+    dh_icon = "[OK]" if dh_status == "PASS" else ("[WARN]" if dh_status == "FAIL" else "[UNKNOWN]")
+    agent_dh_parts = []
+    for ag in ["CODEX", "CLAUDE", "ANTIGRAVITY"]:
+        ag_st = dh.get("agents", {}).get(ag, {}).get("status", "-")
+        agent_dh_parts.append(f"{ag}:{ag_st}")
+    dh_detail = f" ({', '.join(agent_dh_parts)})" if agent_dh_parts else ""
+
+    print(f"\n[1] BUS HEALTH: {bus_icon} Status={bus['health']} (Supervisor PID={bus['supervisor_pid']} | Worker PID={bus['worker_pid']}) | DEEP HEALTH: {dh_icon} Status={dh_status}{dh_detail}")
     lm = bus.get("last_message")
     if lm:
         print(f"  Last Message: {lm['message_id']} [{lm['sender']} -> {lm['recipient']}] ({lm['subject']}) Status={lm['status']} at {lm['completed_at_ist']}")
@@ -432,11 +451,54 @@ def run_hub_demonstration():
     print("=" * 78)
 
 
+def run_all_deep_health_checks(timeout_sec: int = 180) -> Dict[str, Any]:
+    """Runs HEALTH_DEEP across all three agents and records durable verification."""
+    from antigravity.daemons.tri_agent_bus import check_deep_health
+    from antigravity.daemons.inbox_worker import write_json_atomic
+    agents = ["CODEX", "CLAUDE", "ANTIGRAVITY"]
+    results = {}
+    all_passed = True
+    for ag in agents:
+        print(f"  * Probing {ag} deep health...")
+        res = check_deep_health(ag, timeout_sec=timeout_sec)
+        results[ag] = {
+            "status": res.get("status", "FAIL"),
+            "verified": res.get("verified", False),
+            "review_id": res.get("review_id"),
+            "elapsed_sec": res.get("elapsed", 0.0),
+            "error": res.get("error"),
+            "timestamp_ist": get_current_ist(),
+        }
+        if not res.get("verified"):
+            all_passed = False
+
+    summary = {
+        "status": "PASS" if all_passed else "FAIL",
+        "timestamp_ist": get_current_ist(),
+        "agents": results,
+    }
+    dh_path = os.path.join(MESSAGES_ROOT, "deep_health_latest.json")
+    try:
+        write_json_atomic(dh_path, summary)
+    except Exception:
+        pass
+    return summary
+
+
 if __name__ == "__main__":
-    if "--demo" in sys.argv:
+    if "--deep-health" in sys.argv:
+        print("Running live Tri-Agent Deep Health checks across the bus...")
+        res = run_all_deep_health_checks()
+        print(f"Deep Health Result: {res['status']}")
+        for ag, d in res["agents"].items():
+            print(f"  [{d['status']}] {ag}: verified={d['verified']} review_id={d['review_id']} ({d['elapsed_sec']}s)")
+        print()
+        print_dashboard()
+    elif "--demo" in sys.argv:
         run_hub_demonstration()
     elif "--json" in sys.argv:
         print(json.dumps(get_hub_status(), indent=2))
     else:
         print_dashboard()
+
 

@@ -16,8 +16,11 @@ import uuid
 import hashlib
 import hmac
 import re
+import logging
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple, List
+
+logger = logging.getLogger("tri_agent_bus")
 
 # Ensure antigravity package is on sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
@@ -66,12 +69,63 @@ def get_claude_bin() -> str:
 
 
 def get_codex_bin() -> str:
-    """Dynamically resolves the latest installed OpenAI Codex executable."""
-    pattern = os.path.expanduser(r"~/.antigravity-ide/extensions/openai.chatgpt-*/bin/windows-x86_64/codex.exe")
-    matches = sorted(glob.glob(pattern), reverse=True)
-    if matches and os.path.exists(matches[0]):
-        return matches[0]
-    return r"c:\Users\yashw\.antigravity-ide\extensions\openai.chatgpt-26.721.30844-win32-x64\bin\windows-x86_64\codex.exe"
+    """Dynamically resolves the latest installed OpenAI Codex executable.
+
+    Resolution preference order:
+    1. Newest %LOCALAPPDATA%\\OpenAI\\Codex\\bin\\*\\codex.exe (resolved by glob + modification time)
+    2. Newest VS Code extension (~/.vscode/extensions/openai.chatgpt-*/bin/windows-x86_64/codex.exe)
+    3. Newest Antigravity IDE extension (~/.antigravity-ide/extensions/openai.chatgpt-*/bin/windows-x86_64/codex.exe)
+    4. Old bundled fallback.
+    Logs which binary and version was resolved.
+    """
+    candidates = []
+
+    # 1. %LOCALAPPDATA%\OpenAI\Codex\bin\*\codex.exe
+    local_app_data = os.environ.get("LOCALAPPDATA", os.path.expanduser(r"~\AppData\Local"))
+    appdata_pattern = os.path.join(local_app_data, "OpenAI", "Codex", "bin", "*", "codex.exe")
+    appdata_matches = [p for p in glob.glob(appdata_pattern) if os.path.isfile(p)]
+    if appdata_matches:
+        appdata_matches.sort(key=os.path.getmtime, reverse=True)
+        candidates.extend(appdata_matches)
+
+    # 2. VS Code extensions
+    vscode_pattern = os.path.expanduser(r"~/.vscode/extensions/openai.chatgpt-*/bin/windows-x86_64/codex.exe")
+    vscode_matches = [p for p in glob.glob(vscode_pattern) if os.path.isfile(p)]
+    if vscode_matches:
+        vscode_matches.sort(key=os.path.getmtime, reverse=True)
+        candidates.extend(vscode_matches)
+
+    # 3. Antigravity IDE extensions
+    ide_pattern = os.path.expanduser(r"~/.antigravity-ide/extensions/openai.chatgpt-*/bin/windows-x86_64/codex.exe")
+    ide_matches = [p for p in glob.glob(ide_pattern) if os.path.isfile(p)]
+    if ide_matches:
+        ide_matches.sort(key=os.path.getmtime, reverse=True)
+        candidates.extend(ide_matches)
+
+    # 4. Old bundled fallback
+    fallback = r"c:\Users\yashw\.antigravity-ide\extensions\openai.chatgpt-26.721.30844-win32-x64\bin\windows-x86_64\codex.exe"
+    candidates.append(fallback)
+
+    resolved = candidates[0] if candidates else fallback
+    for c in candidates:
+        if os.path.exists(c):
+            resolved = c
+            break
+
+    version_str = "unknown"
+    if os.path.isfile(resolved):
+        try:
+            with open(resolved, "rb") as f:
+                header = f.read(2)
+            if header == b"MZ":
+                res = subprocess.run([resolved, "--version"], capture_output=True, text=True, timeout=5)
+                if res.returncode == 0 and res.stdout.strip():
+                    version_str = res.stdout.strip()
+        except Exception:
+            pass
+
+    logger.info("Resolved Codex binary: %s (version: %s)", resolved, version_str)
+    return resolved
 
 
 def get_antigravity_bin() -> str:
@@ -92,8 +146,9 @@ AGY_BIN = get_antigravity_bin()
 WORKSPACE = r"c:\Users\yashw\swing trades"
 from antigravity.daemons.agent_access import prepare_dispatch, TASK_BOUNDARIES
 CHAT_BOUNDARIES = (
-    "Nexus conversation only. Do not use tools, edit files, place orders, "
-    "or claim to have inspected the repository. Answer from the signed message text only.\n"
+    "Nexus review and discussion. You have read-only workspace access to inspect repository files. "
+    "Do not edit files, create commits, place orders, or mutate workspace state. "
+    "Read relevant files when asked and answer accurately based on the repository content.\n"
 )
 LOGS_DIR = os.path.join(WORKSPACE, "antigravity", "logs")
 DIALOGUE_MD = os.path.join(LOGS_DIR, "tri_agent_dialogue.md")
@@ -299,7 +354,7 @@ def ask_claude_detailed(prompt: str, timeout_sec: int = 300, min_chars: int = MI
         return {"success": False, "output": err, "returncode": 1, "elapsed": 0.0, "error": err}
     t0 = time.time()
     try:
-        cli_flags = ["--tools", ""] if chat_only else prepare_dispatch("CLAUDE")
+        cli_flags = [] if chat_only else prepare_dispatch("CLAUDE")
         boundary = CHAT_BOUNDARIES if chat_only else TASK_BOUNDARIES
         proc = subprocess.run(
             [CLAUDE_BIN, *cli_flags, "-p", boundary + prompt],
@@ -815,6 +870,90 @@ def wait_for_agent_response(
     elif result.get("status") == "TIMED_OUT":
         result["error"] = f"TIMED_OUT: {recipient} did not respond within {timeout_sec}s."
     return result
+
+
+def get_last_review_id(reviews_path: Optional[str] = None) -> Optional[str]:
+    """Reads the last line of shared/trust/reviews.jsonl and extracts its review_id."""
+    if not reviews_path:
+        reviews_path = os.path.join(WORKSPACE, "shared", "trust", "reviews.jsonl")
+    if not os.path.exists(reviews_path):
+        return None
+    try:
+        with open(reviews_path, "rb") as f:
+            lines = [line.strip() for line in f.readlines() if line.strip()]
+            if not lines:
+                return None
+            last_line = lines[-1].decode("utf-8", errors="replace")
+            record = json.loads(last_line)
+            return record.get("review_id")
+    except Exception:
+        return None
+
+
+def verify_deep_health_output(output: str, expected_id: Optional[str] = None) -> Dict[str, Any]:
+    """Verifies that an agent's deep health answer contains the expected review_id."""
+    if expected_id is None:
+        expected_id = get_last_review_id()
+    if not expected_id:
+        return {"verified": False, "error": "MISSING_EXPECTED_ID", "review_id": None}
+
+    out_clean = (output or "").strip()
+    if expected_id in out_clean:
+        return {"verified": True, "error": None, "review_id": expected_id}
+    else:
+        return {
+            "verified": False,
+            "error": f"MISMATCH: Expected review_id '{expected_id}' not found in output: '{out_clean[:120]}...'",
+            "review_id": None,
+        }
+
+
+def check_deep_health(recipient: str, timeout_sec: int = 180) -> Dict[str, Any]:
+    """Runs a deep health check verifying that an agent can read files and return the last review_id."""
+    expected_id = get_last_review_id()
+    if not expected_id:
+        return {
+            "status": "FAILED",
+            "verified": False,
+            "agent": recipient,
+            "error": "COULD_NOT_DETERMINE_EXPECTED_REVIEW_ID",
+            "elapsed": 0.0,
+            "output": "",
+        }
+
+    prompt = "read shared/trust/reviews.jsonl and return the review_id of the last line"
+    rec_upper = recipient.upper()
+    if "CLAUDE" in rec_upper:
+        res = ask_claude_detailed(prompt, timeout_sec=timeout_sec, min_chars=1, chat_only=True)
+    elif "CODEX" in rec_upper or "CHATGPT" in rec_upper:
+        res = ask_codex_detailed(prompt, timeout_sec=timeout_sec, min_chars=1, chat_only=True)
+    elif "ANTIGRAVITY" in rec_upper or "AGY" in rec_upper:
+        res = ask_antigravity_detailed(prompt, timeout_sec=timeout_sec, min_chars=1, chat_only=True)
+    else:
+        return {
+            "status": "FAILED",
+            "verified": False,
+            "agent": recipient,
+            "error": f"UNKNOWN_RECIPIENT: {recipient}",
+            "elapsed": 0.0,
+            "output": "",
+        }
+
+    verification = verify_deep_health_output(res.get("output", ""), expected_id=expected_id)
+    verified = bool(res.get("success") and verification.get("verified"))
+    status = "PASS" if verified else "FAIL"
+    error = None if verified else (verification.get("error") or res.get("error") or "VERIFICATION_FAILED")
+
+    return {
+        "status": status,
+        "verified": verified,
+        "agent": recipient,
+        "review_id": verification.get("review_id"),
+        "expected_id": expected_id,
+        "elapsed": res.get("elapsed", 0.0),
+        "error": error,
+        "output": res.get("output", ""),
+    }
 
 
 def verify_task_completion(

@@ -938,7 +938,40 @@ class InboxWorker:
 
         # 1. Fast-Path Deterministic Handlers
         if subject in ["PING", "HEALTH_CHECK"]:
-            return "COMPLETED", {"reply": "PONG", "agent": recipient, "check": "GATEWAY_ROUTE_ONLY", "track": track, "time": get_current_ist()}, {}, None
+            return "COMPLETED", {"reply": "PONG", "agent": recipient, "check": "GATEWAY_ROUTE_ONLY (Route-only ping; does not verify agent execution)", "track": track, "time": get_current_ist()}, {}, None
+
+        if subject == "HEALTH_DEEP":
+            from antigravity.daemons import tri_agent_bus as bus
+            prompt = "read shared/trust/reviews.jsonl and return the review_id of the last line"
+            timeout_sec = max(1, min(int(msg.get("timeout_sec", 180)), 900))
+            if recipient == "CLAUDE":
+                res = bus.ask_claude_detailed(prompt, timeout_sec=timeout_sec, min_chars=1, chat_only=True)
+            elif recipient == "CODEX":
+                res = bus.ask_codex_detailed(prompt, timeout_sec=timeout_sec, min_chars=1, chat_only=True)
+            elif recipient == "ANTIGRAVITY":
+                res = bus.ask_antigravity_detailed(prompt, timeout_sec=timeout_sec, min_chars=1, chat_only=True)
+            else:
+                return "FAILED", None, {}, f"UNKNOWN_RECIPIENT_FOR_DEEP_HEALTH: {recipient}"
+
+            verification = bus.verify_deep_health_output(res.get("output", ""))
+            if not res.get("success") or not verification.get("verified"):
+                err_msg = verification.get("error") or res.get("error") or "DEEP_HEALTH_VERIFICATION_FAILED"
+                return "FAILED", {
+                    "agent": recipient,
+                    "model_response": res.get("output"),
+                    "verified": False,
+                    "error": err_msg,
+                    "elapsed_sec": res.get("elapsed", 0.0),
+                }, {}, err_msg
+
+            return "COMPLETED", {
+                "agent": recipient,
+                "model_response": res.get("output"),
+                "verified": True,
+                "review_id": verification.get("review_id"),
+                "check": "HEALTH_DEEP_VERIFIED",
+                "elapsed_sec": res.get("elapsed", 0.0),
+            }, {}, None
 
         if subject == "ECHO":
             return "COMPLETED", {"echo": body}, {}, None
@@ -1061,6 +1094,9 @@ class InboxWorker:
                     return "INCOMPLETE", resp_payload, artifact_hashes, f"FILE_READ_ERROR: {e}"
 
         return "COMPLETED", resp_payload, artifact_hashes, None
+
+    # Backward compatibility / testing alias
+    _execute_task_payload = execute_task
 
     def _process_message_locked(self, claimed_path: str, msg: Dict[str, Any]):
         """Executes message, writes outbox response, and archives message safely."""
