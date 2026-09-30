@@ -4,7 +4,7 @@
 **Author:** Antigravity (Implementation Owner)  
 **Branch:** `fix/nexus-and-bridge-repair`  
 **Base Commits:** Nexus `2908f37` (including `a3c006c`), Bridge `4739d2f`  
-**Repair Commits:** `2e10ad4`, `81811e0`, `27fd85a`, `03f0408`  
+**Repair Commits:** `2e10ad4`, `81811e0`, `27fd85a`, `03f0408`, `9da4a73`, `a049e03`  
 **Status:** **READY FOR INDEPENDENT RE-REVIEW BY CODEX**  
 **Governance Invariant:** Antigravity owns implementation. In accordance with Rule 8, Antigravity does not approve its own repairs, does not declare consensus, and has not modified `shared/trust/reviews.jsonl`. Independent re-review by Codex is required.
 
@@ -66,6 +66,8 @@ This packet provides consolidated implementation and empirical verification evid
 | **Band** | `test_band_monitor_missing_prior_history_is_not_no_change` | [`antigravity/models/band_revision_monitor.py:85-105`](file:///c:/Users/yashw/swing%20trades/antigravity/models/band_revision_monitor.py#L85-L105) | Missing prior history returns `NO_PRIOR_HISTORY` baseline rather than falsely asserting `NO_CHANGE`. | **PASSED** (Exit 0) |
 | **Surveillance**| `test_premarket_screener_rejects_ten_day_old_surveillance` | [`antigravity/daemons/track2_premarket_screener.py:315-325`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/track2_premarket_screener.py#L315-L325) | Surveillance staleness threshold tightened to 4 days (allowing for 3-day weekends); 10-day-old files rejected fail-closed. | **PASSED** (Exit 0) |
 | **Universe** | `test_corrupted_dynamic_universe_does_not_fall_back_to_baseline` | [`antigravity/daemons/track2_daily_paper_desk.py:45-65`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/track2_daily_paper_desk.py#L45-L65) | Corrupted dynamic universe files raise `ValueError` fail-closed rather than silently falling back to baseline. | **PASSED** (Exit 0) |
+| **Feed Skew**| `test_row34_future_snapshot_fails_closed` / `test_future_snapshot_fails_closed` | [`antigravity/daemons/feed_validity.py:40-65, 100-110`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/feed_validity.py#L40-L65) | Replaced absolute age with directional signed age; future snapshots exceeding 5.0s clock-skew tolerance fail closed. | **PASSED** (Exit 0) |
+
 
 ---
 
@@ -103,12 +105,13 @@ All test runs executed in `.venv` with Exit Code 0:
 # Exit 0 (64 passed in 26.87s). Raw log: shared/trust/artifacts/ANTIGRAVITY-NEXUS-FULL-SUITE.log
 ```
 
-**Total Active Test Suite:** **83 tests passed, 0 failed.**
+**Total Active Test Suite:** **84 tests passed, 0 failed** (64 full suite + 10 Codex Nexus/Bridge probes + 9 Codex money/fail-closed probes + 1 Codex row 34 probe).
 
 ---
 
 ## 6. Conclusion
 
-All requested repairs (Nexus N1–N6, Bridge B1–B3, Codex 8 Reliability Probes, and Anomalies Catalog corrections) are complete, verified, and committed on `fix/nexus-and-bridge-repair` (commit `03f0408`).
+All requested repairs (Nexus N1–N6, Bridge B1–B3, Codex 8 Reliability Probes, Row 34 Feed Skew, and Anomalies Catalog corrections) are complete, verified, and committed on `fix/nexus-and-bridge-repair` (head commit `a049e03`).
 
 **Ready for Codex independent re-review.**
+
