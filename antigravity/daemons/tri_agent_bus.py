@@ -356,6 +356,7 @@ def ask_claude_detailed(prompt: str, timeout_sec: int = 300, min_chars: int = MI
     try:
         cli_flags = [] if chat_only else prepare_dispatch("CLAUDE")
         boundary = CHAT_BOUNDARIES if chat_only else TASK_BOUNDARIES
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         proc = subprocess.run(
             [CLAUDE_BIN, *cli_flags, "-p", boundary + prompt],
             cwd=WORKSPACE,
@@ -364,7 +365,8 @@ def ask_claude_detailed(prompt: str, timeout_sec: int = 300, min_chars: int = MI
             input="",
             timeout=timeout_sec,
             encoding="utf-8",
-            errors="replace"
+            errors="replace",
+            creationflags=creationflags,
         )
         elapsed = time.time() - t0
         res = proc.stdout.strip() or proc.stderr.strip()
@@ -428,6 +430,7 @@ tokens used
         with open(console_path, "w", encoding="utf-8") as console:
             cli_flags = ["--sandbox", "read-only"] if chat_only else prepare_dispatch("CODEX")
             boundary = CHAT_BOUNDARIES if chat_only else TASK_BOUNDARIES
+            creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
             proc = subprocess.run(
                 [CODEX_BIN, "exec", "--skip-git-repo-check", "--ephemeral",
                  *cli_flags,
@@ -440,6 +443,7 @@ tokens used
                 timeout=timeout_sec,
                 encoding="utf-8",
                 errors="replace",
+                creationflags=creationflags,
             )
         elapsed = time.time() - t0
 
@@ -522,6 +526,7 @@ def ask_antigravity_detailed(
     try:
         cli_flags = ["--project", "3ccee98c-0ec8-497b-a076-f86d4ef452ae", "--sandbox"] if chat_only else prepare_dispatch("ANTIGRAVITY")
         boundary = CHAT_BOUNDARIES if chat_only else TASK_BOUNDARIES
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         with open(console_path, "w", encoding="utf-8") as console:
             proc = subprocess.run(
                 [
@@ -537,7 +542,8 @@ def ask_antigravity_detailed(
                 text=True,
                 timeout=timeout_sec,
                 encoding="utf-8",
-                errors="replace"
+                errors="replace",
+                creationflags=creationflags,
             )
         elapsed = time.time() - t0
 
