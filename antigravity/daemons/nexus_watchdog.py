@@ -29,6 +29,7 @@ from antigravity.daemons.supervised_inbox_worker import (
     SUPERVISOR_PID_FILE,
     SUPERVISOR_LOCK_FILE,
     SUPERVISOR_LOG_FILE,
+    SUPERVISOR_BREAKER_FILE,
     get_status,
     get_current_ist,
     _pid_is_running,
@@ -131,24 +132,34 @@ def check_and_recover(verbose: bool = True) -> Dict[str, Any]:
             log_watchdog(f"Health check: Status=WORKER_DOWN (Supervisor PID={sup_pid} is alive and actively recovering child worker). Waiting...")
         return {"healthy": True, "action": "WAIT_WORKER_RESTART", "status": st}
 
-    # If supervisor is hung (event loop deadlocked for >120s), force-terminate to allow recovery
+    # If circuit breaker is tripped, refuse automated restarts to prevent crash loops
+    if status_label == "CIRCUIT_BREAKER_TRIPPED":
+        if verbose:
+            log_watchdog(f"CIRCUIT BREAKER ACTIVE: Supervisor crashed repeatedly. Automated restarts suspended to prevent loop. Details: {st.get('details')}")
+        return {"healthy": False, "action": "CIRCUIT_BREAKER_TRIPPED", "status": st}
+
+    # If supervisor is hung (event loop deadlocked for >120s), force-terminate ONLY if identity is verified
     if status_label == "SUPERVISOR_HUNG":
         sup_pid = st.get("details", {}).get("supervisor_pid")
         sup_ct = st.get("details", {}).get("supervisor_create_time_nt")
-        if sup_pid and _pid_is_running(sup_pid, expected_create_time=sup_ct):
+        if sup_pid and sup_ct and _pid_is_running(sup_pid, expected_create_time=sup_ct):
             log_watchdog(f"HUNG SUPERVISOR DETECTED: Supervisor PID={sup_pid} event loop frozen (>120s). Force-terminating hung process...")
             try:
                 os.kill(sup_pid, signal.SIGTERM)
             except Exception as e:
                 log_watchdog(f"Failed to terminate hung supervisor PID={sup_pid}: {e}")
+        else:
+            log_watchdog(f"Cannot terminate supervisor PID={sup_pid}: missing or unverified creation time ({sup_ct})")
 
     # Recheck if supervisor is STILL ALIVE (including if termination failed)
     sup_pid = st.get("details", {}).get("supervisor_pid")
     sup_ct = st.get("details", {}).get("supervisor_create_time_nt")
-    if sup_pid and _pid_is_running(sup_pid, expected_create_time=sup_ct):
-        if verbose:
-            log_watchdog(f"Health check: Status={status_label}, but Supervisor PID={sup_pid} is STILL ALIVE. Waiting without deleting lock files or spawning duplicate.")
-        return {"healthy": False, "action": "SUPERVISOR_ALIVE_WAIT", "status": st}
+    if sup_pid:
+        sup_alive = _pid_is_running(sup_pid, expected_create_time=sup_ct) if sup_ct else _pid_is_running(sup_pid)
+        if sup_alive:
+            if verbose:
+                log_watchdog(f"Health check: Status={status_label}, but Supervisor PID={sup_pid} is STILL ALIVE. Waiting without deleting lock files or spawning duplicate.")
+            return {"healthy": False, "action": "SUPERVISOR_ALIVE_WAIT", "status": st}
 
     # Outage confirmed: supervisor is truly dead.
     log_watchdog(f"OUTAGE DETECTED: Status={status_label}. Initiating automated recovery restart via Task Scheduler...")
@@ -170,10 +181,18 @@ def check_and_recover(verbose: bool = True) -> Dict[str, Any]:
 
     if os.path.exists(SUPERVISOR_PID_FILE):
         try:
-            os.remove(SUPERVISOR_PID_FILE)
-            log_watchdog("Cleaned up stale supervisor PID file.")
-        except OSError:
-            pass
+            with open(SUPERVISOR_PID_FILE, "r", encoding="utf-8") as pf:
+                pdata = json.load(pf)
+            if pdata.get("status") == "CIRCUIT_BREAKER_TRIPPED":
+                log_watchdog("Preserving CIRCUIT_BREAKER_TRIPPED PID file.")
+            else:
+                os.remove(SUPERVISOR_PID_FILE)
+                log_watchdog("Cleaned up stale supervisor PID file.")
+        except Exception:
+            try:
+                os.remove(SUPERVISOR_PID_FILE)
+            except OSError:
+                pass
 
     # Clean up orphaned child worker from the dead supervisor if still running
     old_worker_pid = st.get("details", {}).get("worker_pid")

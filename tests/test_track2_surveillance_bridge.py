@@ -62,10 +62,59 @@ def _setup_operational_fixtures(op_dir: Path, session_date: str = DAY, corrupt_h
     (op_dir / f"nse_surveillance_snapshot_{session_date}.json").write_text(json.dumps(snap), encoding="utf-8")
 
 
+def _setup_valid_operational_fixtures(op_dir: Path, session_date: str = DAY, corrupt_hash: bool = False,
+                                      parse_status: str = "SUCCESS", wrong_date: bool = False):
+    op_dir.mkdir(parents=True, exist_ok=True)
+    asm_content = b'{"longterm": {"data": [{"symbol": "ASM1"}]}, "shortterm": {"data": []}}'
+    gsm_content = b'[{"symbol": "GSM1"}]'
+
+    asm_sha = hashlib.sha256(asm_content).hexdigest()
+    gsm_sha = hashlib.sha256(gsm_content).hexdigest()
+
+    asm_rel = f"raw_nse_asm_{session_date}_{asm_sha[:8]}.json"
+    gsm_rel = f"raw_nse_gsm_{session_date}_{gsm_sha[:8]}.json"
+
+    (op_dir / asm_rel).write_bytes(asm_content)
+    (op_dir / gsm_rel).write_bytes(gsm_content)
+
+    if corrupt_hash:
+        asm_sha = "0000000000000000000000000000000000000000000000000000000000000000"
+
+    eff_date = "2026-09-25" if wrong_date else session_date
+
+    snap = {
+        "snapshot_id": f"NSE_SURV_{session_date.replace('-', '')}_INGESTED",
+        "effective_session_date": eff_date,
+        "publication_date": session_date,
+        "parse_status": parse_status,
+        "sources": {
+            "asm": {
+                "raw_relative_path": asm_rel,
+                "sha256": asm_sha,
+                "http_status": 200,
+                "source_url": "https://www.nseindia.com/api/reportASM",
+                "content_type": "application/json; charset=utf-8",
+                "fetched_at": f"{session_date}T08:30:00+05:30",
+                "byte_length": len(asm_content),
+            },
+            "gsm": {
+                "raw_relative_path": gsm_rel,
+                "sha256": gsm_sha,
+                "http_status": 200,
+                "source_url": "https://www.nseindia.com/api/reportGSM",
+                "content_type": "application/json; charset=utf-8",
+                "fetched_at": f"{session_date}T08:30:00+05:30",
+                "byte_length": len(gsm_content),
+            },
+        },
+    }
+    (op_dir / f"nse_surveillance_snapshot_{session_date}.json").write_text(json.dumps(snap), encoding="utf-8")
+
+
 def test_sync_surveillance_success(tmp_path):
     op_dir = tmp_path / "operational"
     target_hist = tmp_path / "research_hist"
-    _setup_operational_fixtures(op_dir)
+    _setup_valid_operational_fixtures(op_dir)
 
     res = sync_surveillance_to_research(DAY, operational_dir=op_dir, target_history_dir=target_hist)
     assert res["ok"] is True
@@ -88,11 +137,21 @@ def test_sync_surveillance_success(tmp_path):
     assert receipt["session_date"] == DAY
 
 
+def test_bridge_rejects_invalid_legacy_fixture(tmp_path):
+    """Verifies that legacy fixtures with unapproved endpoints and missing content_type fail closed."""
+    op_dir = tmp_path / "operational"
+    target_hist = tmp_path / "research_hist"
+    _setup_operational_fixtures(op_dir)
+
+    res = sync_surveillance_to_research(DAY, operational_dir=op_dir, target_history_dir=target_hist)
+    assert res["ok"] is False
+    assert "INVALID_SOURCE_ENDPOINT" in res["reason"]
+
 
 def test_sync_surveillance_corrupt_hash_fails_closed(tmp_path):
     op_dir = tmp_path / "operational"
     target_hist = tmp_path / "research_hist"
-    _setup_operational_fixtures(op_dir, corrupt_hash=True)
+    _setup_valid_operational_fixtures(op_dir, corrupt_hash=True)
 
     res = sync_surveillance_to_research(DAY, operational_dir=op_dir, target_history_dir=target_hist)
     assert res["ok"] is False
@@ -102,7 +161,7 @@ def test_sync_surveillance_corrupt_hash_fails_closed(tmp_path):
 def test_sync_surveillance_failed_parse_status_fails_closed(tmp_path):
     op_dir = tmp_path / "operational"
     target_hist = tmp_path / "research_hist"
-    _setup_operational_fixtures(op_dir, parse_status="FAILED")
+    _setup_valid_operational_fixtures(op_dir, parse_status="FAILED")
 
     res = sync_surveillance_to_research(DAY, operational_dir=op_dir, target_history_dir=target_hist)
     assert res["ok"] is False
@@ -112,7 +171,7 @@ def test_sync_surveillance_failed_parse_status_fails_closed(tmp_path):
 def test_sync_surveillance_date_mismatch_fails_closed(tmp_path):
     op_dir = tmp_path / "operational"
     target_hist = tmp_path / "research_hist"
-    _setup_operational_fixtures(op_dir, wrong_date=True)
+    _setup_valid_operational_fixtures(op_dir, wrong_date=True)
 
     res = sync_surveillance_to_research(DAY, operational_dir=op_dir, target_history_dir=target_hist)
     assert res["ok"] is False
@@ -122,12 +181,21 @@ def test_sync_surveillance_date_mismatch_fails_closed(tmp_path):
 def test_bridged_surveillance_can_be_read_by_market_files(tmp_path):
     """Claude T2-01 integration: MarketFiles reader must successfully read and verify bridged files."""
     import sys
-    sys.path.insert(0, r"C:\Users\yashw\swing-trades-track2")
+    research_roots = [r"C:\Users\yashw\swing-trades-claude-004", r"C:\Users\yashw\swing-trades-track2"]
+    found = False
+    for r in research_roots:
+        if Path(r).exists():
+            sys.path.insert(0, r)
+            found = True
+            break
+    if not found:
+        pytest.skip("Research worktree not present")
+
     from research.framework.market import MarketFiles
 
     op_dir = tmp_path / "operational"
     target_hist = tmp_path / "research_hist"
-    _setup_operational_fixtures(op_dir)
+    _setup_valid_operational_fixtures(op_dir)
 
     res = sync_surveillance_to_research(DAY, operational_dir=op_dir, target_history_dir=target_hist)
     assert res["ok"] is True
@@ -135,4 +203,5 @@ def test_bridged_surveillance_can_be_read_by_market_files(tmp_path):
     mf = MarketFiles(history=target_hist)
     syms = mf.surveillance(date.fromisoformat(DAY))
     assert syms == {"ASM1", "GSM1"}, f"Expected {{'ASM1', 'GSM1'}}, got {syms}"
+
 

@@ -66,6 +66,7 @@ def isolate_nexus_filesystem(tmp_path, monkeypatch):
     sup_lock = sandbox_root / "supervisor.lock"
     sup_log = sandbox_root / "supervisor.log"
     sup_stop = sandbox_root / "supervisor.stop"
+    sup_breaker = sandbox_root / "supervisor_breaker.json"
     watchdog_log = sandbox_root / "watchdog.log"
 
     for d in [inbox, outbox, archive, dead_letter, backups]:
@@ -92,12 +93,14 @@ def isolate_nexus_filesystem(tmp_path, monkeypatch):
     monkeypatch.setattr(siw, "SUPERVISOR_LOCK_FILE", str(sup_lock))
     monkeypatch.setattr(siw, "SUPERVISOR_LOG_FILE", str(sup_log))
     monkeypatch.setattr(siw, "SUPERVISOR_STOP_FILE", str(sup_stop))
+    monkeypatch.setattr(siw, "SUPERVISOR_BREAKER_FILE", str(sup_breaker))
 
     # 3. Patch nexus_watchdog
     monkeypatch.setattr(nw, "MESSAGES_ROOT", str(sandbox_root))
     monkeypatch.setattr(nw, "SUPERVISOR_PID_FILE", str(sup_pid))
     monkeypatch.setattr(nw, "SUPERVISOR_LOCK_FILE", str(sup_lock))
     monkeypatch.setattr(nw, "SUPERVISOR_LOG_FILE", str(sup_log))
+    monkeypatch.setattr(nw, "SUPERVISOR_BREAKER_FILE", str(sup_breaker))
     monkeypatch.setattr(nw, "WATCHDOG_LOG_FILE", str(watchdog_log))
 
     # 4. Patch tri_agent_bus

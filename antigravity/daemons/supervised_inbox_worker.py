@@ -25,6 +25,7 @@ import json
 import signal
 import subprocess
 import argparse
+import threading
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
 
@@ -47,12 +48,22 @@ SUPERVISOR_LOCK_FILE = os.path.join(MESSAGES_ROOT, "supervisor.lock")
 SUPERVISOR_PID_FILE = os.path.join(MESSAGES_ROOT, "supervisor.pid")
 SUPERVISOR_LOG_FILE = os.path.join(MESSAGES_ROOT, "supervisor.log")
 SUPERVISOR_STOP_FILE = os.path.join(MESSAGES_ROOT, "supervisor.stop")
+SUPERVISOR_BREAKER_FILE = os.path.join(MESSAGES_ROOT, "supervisor_breaker.json")
+
+
+def _get_breaker_file() -> str:
+    """Returns breaker file path, following SUPERVISOR_PID_FILE parent if isolated in tests."""
+    pid_parent = os.path.dirname(os.path.abspath(SUPERVISOR_PID_FILE))
+    if pid_parent != os.path.abspath(MESSAGES_ROOT):
+        return os.path.join(pid_parent, "supervisor_breaker.json")
+    return SUPERVISOR_BREAKER_FILE
 
 MIN_BACKOFF_SEC = 1.0
 MAX_BACKOFF_SEC = 30.0
 BACKOFF_FACTOR = 2.0
 MAX_CONSECUTIVE_CRASHES = 5
 CRASH_WINDOW_SEC = 120.0
+BREAKER_COOLDOWN_SEC = 900.0  # 15 minutes
 MAX_HEARTBEAT_STALE_SEC = 120.0
 
 
@@ -228,8 +239,36 @@ class SupervisedInboxWorker:
                 self._write_pid_file()
                 log_supervisor(f"Worker spawned successfully with PID={self.worker_proc.pid}")
 
-                # Stream worker output while process is alive
+                # Stream worker output asynchronously in background thread so supervisor loop never blocks
                 crash_output = []
+                stop_reader = threading.Event()
+
+                def _drain_stdout(pipe, output_buf, stop_evt):
+                    try:
+                        for line in iter(pipe.readline, ''):
+                            if not line or stop_evt.is_set():
+                                break
+                            line_str = line.strip()
+                            if line_str:
+                                output_buf.append(line_str)
+                                if len(output_buf) > 50:
+                                    output_buf.pop(0)
+                                try:
+                                    print(f"  [WORKER-{self.worker_proc.pid}] {line_str}", flush=True)
+                                except (OSError, ValueError):
+                                    pass
+                    except Exception:
+                        pass
+
+                reader_thread = None
+                if getattr(self.worker_proc, "stdout", None):
+                    reader_thread = threading.Thread(
+                        target=_drain_stdout,
+                        args=(self.worker_proc.stdout, crash_output, stop_reader),
+                        daemon=True
+                    )
+                    reader_thread.start()
+
                 last_hb_ts = time.time()
                 while self.worker_proc.poll() is None:
                     now = time.time()
@@ -241,20 +280,11 @@ class SupervisedInboxWorker:
                         self.shutdown_requested = True
                         self._terminate_child()
                         break
+                    time.sleep(0.1)
 
-                    line = self.worker_proc.stdout.readline()
-                    if line:
-                        line_str = line.strip()
-                        if line_str:
-                            crash_output.append(line_str)
-                            if len(crash_output) > 50:
-                                crash_output.pop(0)
-                            try:
-                                print(f"  [WORKER-{self.worker_proc.pid}] {line_str}", flush=True)
-                            except (OSError, ValueError):
-                                pass
-                    else:
-                        time.sleep(0.1)
+                stop_reader.set()
+                if reader_thread:
+                    reader_thread.join(timeout=0.5)
 
                 returncode = self.worker_proc.returncode
                 log_supervisor(f"Worker process (PID={self.worker_proc.pid}) exited with code {returncode}")
@@ -272,6 +302,25 @@ class SupervisedInboxWorker:
                     self.crash_timestamps.append(now)
                     self.crash_timestamps = [t for t in self.crash_timestamps if (now - t) <= CRASH_WINDOW_SEC]
                     if len(self.crash_timestamps) >= MAX_CONSECUTIVE_CRASHES:
+                        breaker_payload = {
+                            "status": "CIRCUIT_BREAKER_TRIPPED",
+                            "tripped_at_ist": get_current_ist(),
+                            "tripped_at_ts": now,
+                            "crash_timestamps": list(self.crash_timestamps),
+                            "crash_count": len(self.crash_timestamps),
+                            "crash_window_sec": CRASH_WINDOW_SEC,
+                            "cooldown_sec": BREAKER_COOLDOWN_SEC,
+                            "reason": f"{len(self.crash_timestamps)} crashes within {CRASH_WINDOW_SEC}s",
+                            "supervisor_pid": os.getpid(),
+                            "supervisor_create_time_nt": get_process_create_time_nt(os.getpid()),
+                        }
+                        breaker_file = _get_breaker_file()
+                        try:
+                            with open(breaker_file, "w", encoding="utf-8") as bf:
+                                json.dump(breaker_payload, bf, indent=2)
+                        except Exception as bfe:
+                            log_supervisor(f"Warning: could not write breaker file: {bfe}")
+
                         log_supervisor(f"CIRCUIT BREAKER TRIPPED: {len(self.crash_timestamps)} crashes within {CRASH_WINDOW_SEC}s. Halting supervisor to prevent crash loop.")
                         self.circuit_breaker_tripped = True
                         self._write_pid_file(status="CIRCUIT_BREAKER_TRIPPED")
@@ -308,13 +357,36 @@ class SupervisedInboxWorker:
 
 
 def get_status() -> Dict[str, Any]:
-    """Inspects PID and lock files to determine daemon status."""
+    """Inspects PID, lock, and breaker files to determine daemon status."""
+    # Check durable breaker file first
+    breaker_path = _get_breaker_file()
+    if os.path.exists(breaker_path):
+        try:
+            with open(breaker_path, "r", encoding="utf-8") as bf:
+                bdata = json.load(bf)
+            tripped_ts = bdata.get("tripped_at_ts", 0.0)
+            cooldown = bdata.get("cooldown_sec", BREAKER_COOLDOWN_SEC)
+            remaining = cooldown - (time.time() - tripped_ts)
+            if remaining > 0:
+                return {
+                    "status": "CIRCUIT_BREAKER_TRIPPED",
+                    "running": False,
+                    "details": bdata,
+                    "cooldown_remaining_sec": round(remaining, 1)
+                }
+        except Exception:
+            pass
+
     if not os.path.exists(SUPERVISOR_PID_FILE):
         return {"status": "STOPPED", "running": False}
 
     try:
         with open(SUPERVISOR_PID_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
+
+        if data.get("status") == "CIRCUIT_BREAKER_TRIPPED":
+            return {"status": "CIRCUIT_BREAKER_TRIPPED", "running": False, "details": data}
+
         sup_pid = data.get("supervisor_pid")
         sup_ct = data.get("supervisor_create_time_nt")
         worker_pid = data.get("worker_pid")
@@ -338,7 +410,24 @@ def get_status() -> Dict[str, Any]:
         return {"status": "ERROR", "running": False, "error": str(e)}
 
 
-def stop_daemon():
+def reset_circuit_breaker() -> bool:
+    """Explicitly resets the circuit breaker state and removes durable breaker files."""
+    cleaned = False
+    for path in [_get_breaker_file(), SUPERVISOR_PID_FILE]:
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    d = json.load(f)
+                if d.get("status") == "CIRCUIT_BREAKER_TRIPPED":
+                    os.remove(path)
+                    cleaned = True
+            except Exception:
+                pass
+    log_supervisor("Circuit breaker explicitly reset by operator.")
+    return cleaned
+
+
+def stop_daemon(force_reset_breaker: bool = False):
     """Signals the running supervisor to terminate cleanly."""
     status = get_status()
     if status.get("status") == "STOPPED":
@@ -356,58 +445,68 @@ def stop_daemon():
     worker_pid = status.get("details", {}).get("worker_pid")
     worker_ct = status.get("details", {}).get("worker_create_time_nt")
 
-    if sup_pid and _pid_is_running(sup_pid, expected_create_time=sup_ct):
-        print(f"[SUPERVISOR] Sending termination signal to supervisor PID={sup_pid}...")
-        # 1. Create stop file indicator
-        try:
-            with open(SUPERVISOR_STOP_FILE, "w", encoding="utf-8") as f:
-                f.write(f"STOP requested at {get_current_ist()} for PID={sup_pid}\n")
-        except Exception:
-            pass
-
-        # 2. Send signal
-        try:
-            if os.name == "nt" and hasattr(signal, "CTRL_BREAK_EVENT"):
-                os.kill(sup_pid, signal.CTRL_BREAK_EVENT)
-            else:
-                os.kill(sup_pid, signal.SIGTERM)
-            print("[SUPERVISOR] Termination signal sent.")
-        except Exception as e:
-            print(f"[SUPERVISOR] Note on process signal: {e}")
-
-        # 3. Wait up to 5 seconds for supervisor to clean up and exit
-        t0 = time.time()
-        while time.time() - t0 < 5.0:
-            if not _pid_is_running(sup_pid, expected_create_time=sup_ct):
-                break
-            time.sleep(0.2)
-
-        # 4. If still running, force terminate ONLY this PID
-        if _pid_is_running(sup_pid, expected_create_time=sup_ct):
-            print(f"[SUPERVISOR] Force-terminating supervisor PID={sup_pid}...")
+    if sup_pid:
+        if sup_ct and _pid_is_running(sup_pid, expected_create_time=sup_ct):
+            print(f"[SUPERVISOR] Sending termination signal to supervisor PID={sup_pid}...")
+            # 1. Create stop file indicator
             try:
-                os.kill(sup_pid, signal.SIGTERM)
+                with open(SUPERVISOR_STOP_FILE, "w", encoding="utf-8") as f:
+                    f.write(f"STOP requested at {get_current_ist()} for PID={sup_pid}\n")
             except Exception:
                 pass
 
-    # 5. Also terminate child worker if still alive
-    if worker_pid and _pid_is_running(worker_pid, expected_create_time=worker_ct):
-        print(f"[SUPERVISOR] Terminating worker child process PID={worker_pid}...")
-        try:
-            os.kill(worker_pid, signal.SIGTERM)
-        except Exception:
-            pass
-
-
-    # 6. Clean up files so status transitions cleanly to STOPPED
-    for fpath in [SUPERVISOR_PID_FILE, SUPERVISOR_STOP_FILE, SUPERVISOR_LOCK_FILE + ".lock"]:
-        if os.path.exists(fpath):
+            # 2. Send signal
             try:
-                os.remove(fpath)
-            except OSError:
-                pass
+                if os.name == "nt" and hasattr(signal, "CTRL_BREAK_EVENT"):
+                    os.kill(sup_pid, signal.CTRL_BREAK_EVENT)
+                else:
+                    os.kill(sup_pid, signal.SIGTERM)
+                print("[SUPERVISOR] Termination signal sent.")
+            except Exception as e:
+                print(f"[SUPERVISOR] Note on process signal: {e}")
 
-    print("[SUPERVISOR] Stop operation completed.")
+            # 3. Wait up to 5 seconds for supervisor to clean up and exit
+            t0 = time.time()
+            while time.time() - t0 < 5.0:
+                if not _pid_is_running(sup_pid, expected_create_time=sup_ct):
+                    break
+                time.sleep(0.2)
+
+            # 4. If still running, force terminate ONLY this PID
+            if _pid_is_running(sup_pid, expected_create_time=sup_ct):
+                print(f"[SUPERVISOR] Force-terminating supervisor PID={sup_pid}...")
+                try:
+                    os.kill(sup_pid, signal.SIGTERM)
+                except Exception:
+                    pass
+        else:
+            print(f"[SUPERVISOR] Refusing to signal supervisor PID={sup_pid}: process identity missing, dead, or recycled.")
+
+    # 5. Also terminate child worker if still alive and identity matches
+    if worker_pid:
+        if worker_ct and _pid_is_running(worker_pid, expected_create_time=worker_ct):
+            print(f"[SUPERVISOR] Terminating worker child process PID={worker_pid}...")
+            try:
+                os.kill(worker_pid, signal.SIGTERM)
+            except Exception:
+                pass
+        else:
+            print(f"[SUPERVISOR] Skipping worker child PID={worker_pid}: not running or identity unverified.")
+
+    # 6. Clean up files ONLY IF supervisor is truly gone
+    sup_still_alive = _pid_is_running(sup_pid, expected_create_time=sup_ct) if (sup_pid and sup_ct) else False
+    if not sup_still_alive:
+        for fpath in [SUPERVISOR_PID_FILE, SUPERVISOR_STOP_FILE, SUPERVISOR_LOCK_FILE + ".lock"]:
+            if os.path.exists(fpath):
+                try:
+                    os.remove(fpath)
+                except OSError:
+                    pass
+        if force_reset_breaker:
+            reset_circuit_breaker()
+        print("[SUPERVISOR] Stop operation completed.")
+    else:
+        print(f"[SUPERVISOR] WARNING: Supervisor PID={sup_pid} is still alive. Lock and PID files preserved.")
 
 
 if __name__ == "__main__":
@@ -415,6 +514,7 @@ if __name__ == "__main__":
     parser.add_argument("--status", action="store_true", help="Check status of the daemon")
     parser.add_argument("--start", action="store_true", help="Start daemon via Windows Task Scheduler (ARGUS_Nexus_Supervisor)")
     parser.add_argument("--stop", action="store_true", help="Stop the running daemon")
+    parser.add_argument("--reset-breaker", action="store_true", help="Reset circuit breaker state and remove breaker lockouts")
     args = parser.parse_args()
 
     if args.status:
@@ -429,6 +529,9 @@ if __name__ == "__main__":
             print(f"[SUPERVISOR] ERROR: {res.stderr.strip() if res.stderr else res.stdout.strip()}")
     elif args.stop:
         stop_daemon()
+    elif args.reset_breaker:
+        reset_circuit_breaker()
+        print("[SUPERVISOR] Circuit breaker has been reset.")
     else:
         supervisor = SupervisedInboxWorker()
         supervisor.run()
