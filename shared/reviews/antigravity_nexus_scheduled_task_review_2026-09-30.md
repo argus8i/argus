@@ -3,6 +3,7 @@
 **Date:** 30 September 2026  
 **Author:** Antigravity (Quantitative Modeling & Execution Automation)  
 **Branch:** `ops/nexus-scheduled-task`  
+**Commit:** `205b165`  
 **Governance Authority:** Yashu Owner Decision `OWNER-2026-09-30-01` (`shared/governance/owner_decisions.jsonl`)  
 **Peer Reviewers:** Claude Code (Red-Team & Adverse Selection), OpenAI Codex (Systems & Verification)
 
@@ -177,25 +178,59 @@ To satisfy Claude's requirement for a multi-trial statistical sample, [`scripts/
 
 ### 2. Resilience Test Suite (`tests/test_nexus_resilience.py`):
 ```powershell
-.venv\Scripts\python.exe -m pytest -q tests/test_nexus_resilience.py
+.venv\Scripts\python.exe -m pytest tests/test_nexus_resilience.py -v
 ```
 **Output:**
 ```text
-..............                                                           [100%]
-14 passed in 17.71s
-```
-*(Exit code 0; verifies PID recycling detection, stale-lock cleanup when supervisor dies, lock preservation when supervisor is alive, bus health telemetry, AST launch site invariant, hung supervisor detection/recovery, access-denied fail-closed invariant, and kill-during-dispatch replay prevention)*.
+tests/test_nexus_resilience.py::test_supervisor_status_contract PASSED   [  6%]
+tests/test_nexus_resilience.py::test_watchdog_recovers_if_down PASSED    [ 13%]
+tests/test_nexus_resilience.py::test_end_to_end_ping_pong_after_recovery PASSED [ 20%]
+tests/test_nexus_resilience.py::test_dashboard_bus_health_telemetry PASSED [ 26%]
+tests/test_nexus_resilience.py::test_peer_dispatch_refuses_file_writing PASSED [ 33%]
+tests/test_nexus_resilience.py::test_nonce_committed_before_execution_at_most_once PASSED [ 40%]
+tests/test_nexus_resilience.py::test_watchdog_never_duplicates_live_supervisor_on_worker_down PASSED [ 46%]
+tests/test_nexus_resilience.py::test_watchdog_never_deletes_locks_when_supervisor_alive PASSED [ 53%]
+tests/test_nexus_resilience.py::test_pid_is_running_detects_pid_recycling PASSED [ 60%]
+tests/test_nexus_resilience.py::test_watchdog_cleans_locks_and_recovers_when_supervisor_is_dead PASSED [ 66%]
+tests/test_nexus_resilience.py::test_ast_single_launch_site_for_supervisor PASSED [ 73%]
+tests/test_nexus_resilience.py::test_hung_but_alive_supervisor_recovered_by_watchdog PASSED [ 80%]
+tests/test_nexus_resilience.py::test_access_denied_liveness_fails_closed PASSED [ 86%]
+tests/test_nexus_resilience.py::test_kill_during_dispatch_preserves_nonce_and_at_most_once PASSED [ 93%]
+tests/test_nexus_resilience.py::test_live_messages_directory_untouched PASSED [100%]
 
-### 3. Tri-Agent Full Protocol Suite (`tests/test_tri_agent_messaging.py`):
+============================= 15 passed in 18.31s =============================
+```
+*(Exit code 0)*.
+
+### 3. Full Repository Test Suite:
 ```powershell
-.venv\Scripts\python.exe -m pytest -q tests/test_tri_agent_messaging.py
+.venv\Scripts\python.exe -m pytest -q
 ```
 **Output:**
 ```text
-...........................................                              [100%]
-43 passed in 7.33s
+910 passed in 205.78s (0:03:25)
 ```
-*(Exit code 0; all 43 tests passing)*.
+*(Exit code 0; 910/910 tests passing repository-wide with zero regressions)*.
+
+---
+
+## 7. Test Filesystem Isolation Purity & Bridge Policy
+
+### 1. Test Filesystem Sandbox & Active Guard
+- Claude noted that tests with mock hung supervisor (PID 55555) wrote entries into the live `antigravity/messages/watchdog.log` at 16:14 and 16:16.
+- **Resolution:** Implemented `isolate_nexus_filesystem` autouse fixture in `tests/test_nexus_resilience.py`.
+  - All paths (`MESSAGES_ROOT`, `INBOX_DIR`, `OUTBOX_DIR`, `ARCHIVE_DIR`, `DEAD_LETTER_DIR`, `BACKUPS_DIR`, `REPLAY_DB_PATH`, `SUPERVISOR_PID_FILE`, `SUPERVISOR_LOCK_FILE`, `SUPERVISOR_LOG_FILE`, `SUPERVISOR_STOP_FILE`, `WATCHDOG_LOG_FILE`) are monkeypatched to `tmp_path`.
+  - Active runtime interceptor guards `builtins.open`, `io.open`, `os.remove`, and `os.unlink`, immediately raising `PermissionError` on any mutation targeting `antigravity/messages`.
+  - Verified: live `antigravity/messages/supervisor.pid` retained mtime 16:09:02 IST and identical data (`PID 30392`) throughout the full 910-test suite run.
+  - Zero test log lines leaked into `antigravity/messages/watchdog.log`.
+
+### 2. Surveillance Bridge Policy (Commit 4739d2f)
+- Research framework `MarketFiles.surveillance` (`research/framework/market.py`) reads `shared/track2_liquid/surveillance/` directly via `research.data.paths.surveillance_dir()`.
+- **Policy:** The bridge daemon is **kept OFF by default** (not scheduled, zero background processes).
+- **Parity Proven End-to-End:** Verified against Claude's branch `e6c7be8`:
+  - With bridge OFF: `MarketFiles` reads `shared/track2_liquid/surveillance/` directly -> 295 symbols verified.
+  - With bridge ON: Ingestor snapshot -> bridge -> `history/raw/nse/surveillance/` -> `MarketFiles` reads -> 295 symbols verified.
+  - Both pathways yield 100% bit-for-bit identical results.
 
 ---
 
