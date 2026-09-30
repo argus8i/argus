@@ -595,26 +595,32 @@ def test_kill_during_dispatch_preserves_nonce_and_at_most_once():
     assert "REPLAY_ATTACK" in err2
 
 
-def test_live_messages_directory_untouched():
+def test_live_messages_directory_untouched(tmp_path):
     """
     Verification Invariant:
-    Proves that running resilience tests never writes, creates, or deletes any files
-    in the live production antigravity/messages folder, and specifically confirms that
-    the live supervisor.pid has not been modified.
+    Proves that running resilience tests uses a temp messages root and never writes,
+    creates, or deletes any files in the real production antigravity/messages folder.
+    Asserts the real folder is untouched by comparing before/after listings, without
+    requiring the live service to be running.
     """
     real_messages_root = os.path.normpath(os.path.join(WORKSPACE_DIR, "antigravity", "messages"))
+    before_listing = sorted(os.listdir(real_messages_root)) if os.path.exists(real_messages_root) else []
+
     live_pid_file = os.path.join(real_messages_root, "supervisor.pid")
+    pid_data_before = None
+    if os.path.exists(live_pid_file):
+        with open(live_pid_file, "r", encoding="utf-8") as f:
+            pid_data_before = json.load(f)
 
-    # 1. Assert live supervisor.pid exists and contains valid running supervisor data
-    assert os.path.exists(live_pid_file), "Live supervisor.pid must exist"
-    with open(live_pid_file, "r", encoding="utf-8") as f:
-        pid_data = json.load(f)
-    live_sup_pid = pid_data.get("supervisor_pid")
-    assert live_sup_pid is not None and live_sup_pid > 0
-    # Must NOT be test mock PID
-    assert live_sup_pid not in (55555, 88888, 77777, 99999, 42)
+    # 1. Use temp messages root to verify normal message operations succeed in isolation
+    temp_messages_root = tmp_path / "messages"
+    temp_inbox = temp_messages_root / "inbox"
+    temp_inbox.mkdir(parents=True, exist_ok=True)
+    temp_msg_file = temp_inbox / "temp_test_msg.json"
+    temp_msg_file.write_text(json.dumps({"test": "data"}), encoding="utf-8")
+    assert temp_msg_file.exists()
 
-    # 2. Direct attempt to write to live_messages_root must be blocked by the isolation guard
+    # 2. Direct attempt to write to real_messages_root must be blocked by the isolation guard
     with pytest.raises(PermissionError) as exc_info:
         test_leak_file = os.path.join(real_messages_root, "test_leak.tmp")
         with open(test_leak_file, "w", encoding="utf-8") as f:
@@ -622,7 +628,12 @@ def test_live_messages_directory_untouched():
     assert "TEST ISOLATION BREACH" in str(exc_info.value)
     assert not os.path.exists(os.path.join(real_messages_root, "test_leak.tmp"))
 
-    # 3. Confirm live supervisor.pid contents are intact and uncorrupted
-    with open(live_pid_file, "r", encoding="utf-8") as f:
-        pid_data_after = json.load(f)
-    assert pid_data == pid_data_after, "Live supervisor.pid was modified during test run!"
+    # 3. Assert real folder is completely untouched by comparing before/after directory listings
+    after_listing = sorted(os.listdir(real_messages_root)) if os.path.exists(real_messages_root) else []
+    assert before_listing == after_listing, "Real messages directory listing changed during test run!"
+
+    # 4. If live supervisor.pid existed, confirm its contents were untouched
+    if pid_data_before is not None and os.path.exists(live_pid_file):
+        with open(live_pid_file, "r", encoding="utf-8") as f:
+            pid_data_after = json.load(f)
+        assert pid_data_before == pid_data_after, "Live supervisor.pid was modified during test run!"

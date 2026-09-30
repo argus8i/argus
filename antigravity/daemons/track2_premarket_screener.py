@@ -253,10 +253,17 @@ class PremarketScreener:
         scanner: Optional[DynamicUniverseScanner] = None,
         universe_path: Path | str = DYNAMIC_UNIVERSE_PATH,
         rotations_log: Path | str = ROTATIONS_LOG_PATH,
+        surveillance_dir: Optional[Path | str] = None,
+        as_of_date: Optional[date | str] = None,
     ):
         self.scanner = scanner or DynamicUniverseScanner()
         self.universe_path = Path(universe_path)
         self.rotations_log = Path(rotations_log)
+        self.surveillance_dir = Path(surveillance_dir) if surveillance_dir else None
+        if isinstance(as_of_date, str):
+            self.as_of_date = date.fromisoformat(as_of_date)
+        else:
+            self.as_of_date = as_of_date
 
     def load_fno_symbols(self) -> List[str]:
         """Loads active NSE F&O underlying equity symbols."""
@@ -295,13 +302,25 @@ class PremarketScreener:
         # If no external file, use comprehensive default list of 50 liquid F&O scrips
         return list(SCRIP_METRIC_PRIORS.keys()) + list(EXTENDED_SECTOR_MAP.keys())
 
-    def load_surveillance_sets(self) -> Set[str]:
+    def load_surveillance_sets(self, as_of_date: Optional[date | str] = None) -> Set[str]:
         """Loads active ASM / GSM surveillance sets."""
         surv_symbols: Set[str] = set()
-        candidates: List[Path] = [
-            TRACK2_DIR / "paper_surveillance",
-            TRACK2_DIR / "surveillance",
-        ]
+        if self.surveillance_dir:
+            candidates: List[Path] = [self.surveillance_dir]
+        else:
+            candidates: List[Path] = [
+                TRACK2_DIR / "paper_surveillance",
+                TRACK2_DIR / "surveillance",
+            ]
+
+        ref_date: date
+        if as_of_date:
+            ref_date = date.fromisoformat(as_of_date) if isinstance(as_of_date, str) else as_of_date
+        elif self.as_of_date:
+            ref_date = self.as_of_date
+        else:
+            ref_date = date.today()
+
         found_valid_file = False
         for base in candidates:
             if not base.exists():
@@ -318,7 +337,8 @@ class PremarketScreener:
                     date_match = re.search(r"(\d{4}-\d{2}-\d{2})", p.name)
                     if date_match:
                         file_date = date.fromisoformat(date_match.group(1))
-                        if (date.today() - file_date).days > 4:
+                        delta_days = (ref_date - file_date).days
+                        if delta_days < 0 or delta_days > 4:
                             continue
 
                     with open(p, "r", encoding="utf-8") as f:
@@ -438,7 +458,7 @@ class PremarketScreener:
 
         # 1. Load Universe and Surveillance
         fno_symbols = sorted(list(set(self.load_fno_symbols())))
-        surv_set = self.load_surveillance_sets()
+        surv_set = self.load_surveillance_sets(as_of_date=date_str)
 
         # 2. Build Candidates
         candidates: List[ScripCandidate] = []

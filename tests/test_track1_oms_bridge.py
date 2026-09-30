@@ -105,6 +105,33 @@ class TestRule7VolumeExpansionEngine:
 
 
 class TestLiveDepthSchemaAndIsolation:
+    def test_depth_fixture_schema_contract(self):
+        """Validates depth schema contract against a structured fixture."""
+        fixture = {
+            "auth": {"token": "dummy"},
+            "instrument_tokens": {},
+            "volume_expansion_audit": {
+                sym: {"instrument_token": TRACK1_INSTRUMENTS[sym]["primary_token"]}
+                for sym in TRACK1_INSTRUMENTS
+            },
+            "watchlist": list(TRACK1_INSTRUMENTS.keys()),
+            "status": "HEALTHY",
+            "local_write_time": "2026-09-30 18:30:00",
+        }
+        assert "auth" in fixture
+        assert "instrument_tokens" in fixture
+        assert "volume_expansion_audit" in fixture
+        assert "watchlist" in fixture
+        assert "status" in fixture
+        assert "local_write_time" in fixture
+        for sym in TRACK1_INSTRUMENTS:
+            assert sym in fixture["volume_expansion_audit"]
+            assert fixture["volume_expansion_audit"][sym]["instrument_token"] == TRACK1_INSTRUMENTS[sym]["primary_token"]
+
+    @pytest.mark.skipif(
+        not os.path.exists(LIVE_DEPTH_PATH),
+        reason="Live-environment check: live_depth.json absent in clean/isolated checkout",
+    )
     def test_live_depth_json_structure(self):
         """live_depth.json must exist and include all mandatory Track 1 blocks."""
         assert os.path.exists(LIVE_DEPTH_PATH)

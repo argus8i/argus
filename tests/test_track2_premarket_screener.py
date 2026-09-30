@@ -23,6 +23,20 @@ from antigravity.models.track2_dynamic_universe_scanner import DynamicUniverseSc
 def local_tmp_dir(tmp_path):
     temp_dir = tmp_path / "screener_test_tmp"
     temp_dir.mkdir(parents=True, exist_ok=True)
+    surv_dir = temp_dir / "surveillance"
+    surv_dir.mkdir(parents=True, exist_ok=True)
+    snapshot = {
+        "schema_version": "track2.surveillance.v3",
+        "generated_at": "2026-09-22T08:00:00",
+        "lists": {
+            "asm_lt": ["SOME_ASM_SCRIP"],
+            "asm_st": [],
+            "gsm": [],
+            "fo_ban": [],
+        },
+    }
+    with open(surv_dir / "nse_surveillance_snapshot_2026-09-22.json", "w", encoding="utf-8") as f:
+        json.dump(snapshot, f)
     return temp_dir
 
 
@@ -61,6 +75,8 @@ def test_screener_sector_capping_and_ranking(local_tmp_dir):
     screener = PremarketScreener(
         universe_path=universe_file,
         rotations_log=rotations_file,
+        surveillance_dir=local_tmp_dir / "surveillance",
+        as_of_date="2026-09-22",
     )
 
     # Run screener in dry-run mode
@@ -105,6 +121,8 @@ def test_screener_rotation_detection(local_tmp_dir):
     screener = PremarketScreener(
         universe_path=universe_file,
         rotations_log=rotations_file,
+        surveillance_dir=local_tmp_dir / "surveillance",
+        as_of_date="2026-09-22",
     )
 
     # Run screener with persistence
