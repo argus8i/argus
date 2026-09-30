@@ -109,9 +109,69 @@ All test runs executed in `.venv` with Exit Code 0:
 
 ---
 
-## 6. Conclusion
+## 7. Claude Review Findings Resolution (C1 – C7)
 
-All requested repairs (Nexus N1–N6, Bridge B1–B3, Codex 8 Reliability Probes, Row 34 Feed Skew, and Anomalies Catalog corrections) are complete, verified, and committed on `fix/nexus-and-bridge-repair` (head commit `a049e03`).
+| ID | Severity | File & Lines | Root Cause | Repair Implementation | Verification Probe | Status |
+|---|---|---|---|---|---|---|
+| **C1** | P1 | [`antigravity/daemons/inbox_worker.py:714, 833, 1148-1165`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/inbox_worker.py#L714) | Head-of-line blocking in single serial worker. Freshness (300s) checked at processing time; slow dispatches expired queued messages. | Validate timestamp freshness & signature at ARRIVAL (claim time), stamping `auth_verified_at_ist`. Implemented per-recipient lanes (`ANTIGRAVITY`, `CLAUDE`, `CODEX`) with concurrent worker thread pool. | `test_c1_head_of_line_expiry_and_recipient_lanes` | **PASSED** (Exit 0) |
+| **C2** | P1 | [`antigravity/daemons/inbox_worker.py:1021`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/inbox_worker.py#L1021) | Antigravity model timeout in `execute_task` was uncapped (`int(msg.get("timeout_sec", 300))`). | Clamped `timeout_sec` strictly to `max(1, min(int(msg.get("timeout_sec", 300)), 900))` matching peer dispatches. | `test_c2_antigravity_model_timeout_clamped` | **PASSED** (Exit 0) |
+| **C3** | P1 | [`antigravity/daemons/inbox_worker.py:742-788`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/inbox_worker.py#L742-L788) | Retried message after crash reuses nonce, failing replay prevention. | Supported both explicit `RETRY_REQUIRED` dead-letter outbox notification and durable SQLite nonce state tracking (`RECOVERED_RETRY_PENDING`). | `test_c3_orphan_recovery_*` | **PASSED** (Exit 0) |
+| **C4** | P2 | [`antigravity/daemons/inbox_worker.py:415-442`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/inbox_worker.py#L415-L442) | Nonce recorded before timestamp and HMAC checks, burning nonces on invalid messages. | Reordered: schema validation $\to$ timestamp freshness $\to$ HMAC cryptographic verification $\to$ SQLite nonce record. | `test_c4_invalid_or_expired_does_not_burn_nonce` | **PASSED** (Exit 0) |
+| **C5** | P2 | [`antigravity/daemons/inbox_worker.py:1095-1102`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/inbox_worker.py#L1095-L1102) | Blanket `PERMISSION_SEEKING_REGEX` dead-lettered valid requests containing phrases like "please confirm". | Removed rejection block from worker; logged warning only and proceeded with task execution. | `test_c5_permission_seeking_body_not_dead_lettered` | **PASSED** (Exit 0) |
+| **C6** | P2 | [`antigravity/daemons/inbox_worker.py:143, 405-410`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/inbox_worker.py#L143), [`antigravity/daemons/nexus_cli.py:15`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/nexus_cli.py#L15) | Shared local keys allowed any process to sign as USER; risk of fabricated owner decisions. | Removed `USER` from valid senders; `validate_message_schema` strictly refuses `sender == "USER"` fail-closed. Documented in handbook that sovereign decisions derive exclusively from `owner_decisions.jsonl`. | `test_c6_refuse_sender_user_on_bus` | **PASSED** (Exit 0) |
+| **C7** | P3 | [`antigravity/daemons/nexus_cli.py:57`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/nexus_cli.py#L57), [`antigravity/daemons/tri_agent_bus.py:734`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/tri_agent_bus.py#L734), [`antigravity/daemons/inbox_worker.py:512, 735`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/inbox_worker.py#L512) | CLI exited 0 on poll errors; timeout error always named "Antigravity"; `validate_path_security` bypassed links; orphan recovery omitted creation time. | CLI returns 0 only when success is True or sent request is verified pending in queue; timeout error names actual recipient; `os.path.realpath` used; creation time verified in orphan recovery. | `test_c7_*` | **PASSED** (Exit 0) |
 
-**Ready for Codex independent re-review.**
+---
 
+## 8. Codex Whole-Bus Audit Findings Resolution (F01 – F11)
+
+| ID | Severity | File & Lines | Root Cause | Repair Implementation | Verification Probe | Status |
+|---|---|---|---|---|---|---|
+| **F01** | P1 | [`antigravity/daemons/inbox_worker.py:244-266`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/inbox_worker.py#L244-L266) | `_break_stale_lock()` removed lock older than `stale_sec` even when recorded PID and NT creation time were alive. | If `_pid_is_running(pid, expected_create_time=ct)` is True, lock is unconditionally active and preserved. Age alone never overrides a verified live owner. | `test_healthy_supervisor_lock_cannot_be_stolen_after_sixty_seconds` | **PASSED** (Exit 0) |
+| **F02** | P1 | [`antigravity/daemons/inbox_worker.py:415-442`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/inbox_worker.py#L415-L442) | Nonce inserted into replay store before HMAC verification; bad signature burned genuine nonces. | Envelope authenticated first (schema, timestamp, HMAC) before durable nonce admission. | `test_bad_signature_cannot_consume_valid_requests_nonce` | **PASSED** (Exit 0) |
+| **F03** | P1 | [`antigravity/daemons/inbox_worker.py:380-395`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/inbox_worker.py#L380-L395) | Orphan recovery incremented `attempt_count`, a signed field, breaking sender HMAC. | Normalized `attempt_count: 0` in `canonicalize_envelope` and decoupled lifecycle state; sender signed envelope preserved immutable. | `test_orphan_recovery_preserves_sender_signature` | **PASSED** (Exit 0) |
+| **F04** | P1 | [`antigravity/daemons/inbox_worker.py:330-365, 780`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/inbox_worker.py#L330-L365) | Requeued crashed request failed replay check on retry because nonce was already consumed. | Implemented durable admission lifecycle in SQLite (`RECOVERED_RETRY_PENDING` state) allowing exactly one recovered retry of the admitted request. | `test_authenticated_crashed_request_is_retryable` | **PASSED** (Exit 0) |
+| **F05** | P1 | [`antigravity/daemons/tri_agent_bus.py:569-583`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/tri_agent_bus.py#L569-L583) | Duplicate `message_id` returned new caller-supplied correlation ID instead of stored original. | On duplicate `message_id`, reads existing envelope from disk and returns stored original `correlation_id`. | `test_duplicate_message_returns_original_correlation` | **PASSED** (Exit 0) |
+| **F06** | P1 | [`antigravity/daemons/tri_agent_bus.py:570-580`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/tri_agent_bus.py#L570-L580) | Duplicate detection checked only `.json`, missing actively running `.claimed` files, allowing duplicate overwrites. | Extended duplicate detection to check `.json`, `.claimed`, and `.dead.json` across all directories. | `test_duplicate_claimed_message_is_not_reenqueued` | **PASSED** (Exit 0) |
+| **F07** | P1 | [`antigravity/daemons/supervised_inbox_worker.py:518-530`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/supervised_inbox_worker.py#L518-L530) | `stop_daemon()` set `sup_still_alive = False` when creation time was missing, deleting lock and PID files despite live owner. | If creation time is missing but PID is alive, supervisor is treated as alive; lock and PID files are strictly preserved. | `test_stop_without_creation_time_preserves_unverified_live_owner` | **PASSED** (Exit 0) |
+| **F08** | P2 | [`antigravity/daemons/supervised_inbox_worker.py:375-400`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/supervised_inbox_worker.py#L375-L400) | Circuit breaker cooldown expired, but PID record retained `CIRCUIT_BREAKER_TRIPPED` indefinitely, blocking watchdog recovery. | In `get_status()`, checks remaining cooldown against `tripped_at_ts`. If cooldown has elapsed, returns `COOLDOWN_EXPIRED`, unblocking automatic restart. | `test_breaker_cooldown_can_expire_without_manual_reset` | **PASSED** (Exit 0) |
+| **F09** | P2 | [`antigravity/daemons/tri_agent_bus.py:908-918`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/tri_agent_bus.py#L908-L918) | Empty replies (`output_payload: None` and no artifacts) accepted as `COMPLETED`. | Enforced payload/artifact presence check: completed tasks must produce an output payload or at least one artifact hash; empty tasks rejected as `INCOMPLETE`. | `test_empty_signed_reply_does_not_count_as_completed` | **PASSED** (Exit 0) |
+| **F10** | P2 | [`antigravity/daemons/inbox_worker.py:255-265`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/inbox_worker.py#L255-L265) | Torn or malformed lock JSON raised `JSONDecodeError` outside `OSError` catch block, crashing lock acquisition. | Caught `(json.JSONDecodeError, ValueError, OSError)`; malformed lock files are preserved without crashing and only removed if genuinely abandoned beyond `stale_sec`. | `test_malformed_lock_record_does_not_crash_acquisition` | **PASSED** (Exit 0) |
+| **F11** | P2 | [`antigravity/daemons/tri_agent_bus.py:920-928`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/tri_agent_bus.py#L920-L928) | Blanket regex rejected valid responses quoting permission phrases (e.g. diagnostic analysis). | Stripped quoted substrings (`re.sub(r'["\'][^"\']*["\']', '', payload)`) before checking hedging; diagnostic quoted discussion passes verification. | `test_quoted_permission_phrase_is_not_transport_failure` | **PASSED** (Exit 0) |
+
+---
+
+## 9. Deployment Drift Reconciliation
+
+- **Issue:** `scripts/register_nexus_tasks.ps1` registered `AntigravityNexusSupervisor` and `AntigravityNexusWatchdog`, while runtime scripts (`nexus_watchdog.py`, `supervised_inbox_worker.py`) and Windows Task Scheduler on the machine expect `ARGUS_Nexus_Supervisor` and `ARGUS_Nexus_Watchdog`.
+- **Resolution:** Reconciled `scripts/register_nexus_tasks.ps1` and [`shared/handbook/01_FOUNDATION_messages_and_scheduling.md`](file:///c:/Users/yashw/swing%20trades/shared/handbook/01_FOUNDATION_messages_and_scheduling.md) to use `ARGUS_Nexus_Supervisor` and `ARGUS_Nexus_Watchdog` consistently.
+
+---
+
+## 10. Comprehensive Verification Summary
+
+```powershell
+# 1. Codex Whole-Bus Probes (F01–F11)
+.venv\Scripts\python.exe -m pytest tests/test_codex_nexus_full_2026_09_30.py shared/reviews/test_codex_nexus_full_2026_09_30.py -v
+# Exit 0: 22 passed in 0.68s
+
+# 2. Claude Nexus Probes (C1–C7)
+.venv\Scripts\python.exe -m pytest tests/test_claude_nexus_review_probes_2026_09_30.py -v
+# Exit 0: 11 passed in 0.84s
+
+# 3. Earlier Codex Probes (N1–N6 and B1–B3)
+.venv\Scripts\python.exe -m pytest tests/test_codex_nexus_service_review_2026_09_30.py tests/test_codex_surveillance_bridge_review_2026_09_30.py -v
+# Exit 0: 10 passed in 9.17s
+
+# 4. Full Resilience & Messaging Regression Suite
+.venv\Scripts\python.exe -m pytest tests/test_nexus_resilience.py tests/test_tri_agent_messaging.py -v
+# Exit 0: 58 passed in 24.82s
+
+# 5. Codex Money Limits and Fail-Closed Gates Probes
+.venv\Scripts\python.exe -m pytest shared/reviews/test_codex_money_limits_2026_09_30.py shared/reviews/test_codex_fail_closed_gates_2026_09_30.py -v
+# Exit 0: 9 passed in 0.17s
+```
+
+**Grand Total Active Tests Verified:** **110 passed, 0 failed across all review harnesses.**
+
+All repairs are committed and ready on branch `fix/nexus-and-bridge-repair`. Ready for Codex independent re-review.

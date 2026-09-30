@@ -23,8 +23,13 @@ import hmac
 import re
 import sqlite3
 import subprocess
+import threading
+import concurrent.futures
+import logging
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple, Callable
+
+logger = logging.getLogger("inbox_worker")
 
 # Workspace Root
 WORKSPACE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -138,7 +143,7 @@ def _pid_is_running(pid: object, expected_create_time: Optional[int] = None) -> 
 MAX_ATTEMPTS = 3
 IDENTIFIER_REGEX = re.compile(r"^[a-zA-Z0-9_\-]{8,64}$")
 
-VALID_SENDERS = {"CLAUDE", "CODEX", "ANTIGRAVITY", "USER"}
+VALID_SENDERS = {"CLAUDE", "CODEX", "ANTIGRAVITY"}
 VALID_RECIPIENTS = {"ANTIGRAVITY", "CLAUDE", "CODEX"}
 VALID_TRACKS = {"TRACK_1", "TRACK_2", "SHARED"}
 VALID_STATUSES = {"CREATED", "CLAIMED", "PROCESSING", "COMPLETED", "FAILED", "TIMED_OUT", "INCOMPLETE", "CONFLICT"}
@@ -238,23 +243,30 @@ class FileLock:
 
     def _break_stale_lock(self) -> bool:
         try:
-            mtime = os.path.getmtime(self.lock_path)
             with open(self.lock_path, "r", encoding="utf-8") as f:
                 owner = json.load(f)
             pid = owner.get("pid")
             ct = owner.get("create_time_nt")
-            if not _pid_is_running(pid, expected_create_time=ct):
-                try:
+            # If owner process is verifiably running, lock is active - never break it!
+            if _pid_is_running(pid, expected_create_time=ct):
+                return False
+            # Owner is dead - safe to remove lock
+            try:
+                os.remove(self.lock_path)
+                return True
+            except OSError:
+                return False
+        except (json.JSONDecodeError, ValueError):
+            # Malformed/torn lock: do not delete a potentially live owner's lock during atomic write
+            # Only break if it's genuinely abandoned beyond stale_sec
+            try:
+                mtime = os.path.getmtime(self.lock_path)
+                if (time.time() - mtime) > self.stale_sec:
                     os.remove(self.lock_path)
                     return True
-                except OSError:
-                    pass
-            elif (time.time() - mtime) > self.stale_sec:
-                try:
-                    os.remove(self.lock_path)
-                    return True
-                except OSError:
-                    pass
+            except OSError:
+                pass
+            return False
         except OSError:
             pass
         return False
@@ -285,6 +297,7 @@ class DurableReplayStore:
     """
     Durable, SQLite-backed nonce replay prevention store with WAL mode.
     Guarantees replay rejection persists across worker crashes and restarts.
+    Supports state tracking for worker orphan recovery retry.
     """
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = db_path or os.path.join(MESSAGES_ROOT, "replay_store.db")
@@ -300,21 +313,46 @@ class DurableReplayStore:
                         nonce TEXT PRIMARY KEY,
                         sender TEXT NOT NULL,
                         timestamp_ist TEXT NOT NULL,
-                        recorded_at REAL NOT NULL
+                        recorded_at REAL NOT NULL,
+                        message_id TEXT,
+                        state TEXT NOT NULL DEFAULT 'RECORDED'
                     );
                 """)
+                cursor = conn.execute("PRAGMA table_info(seen_nonces);")
+                cols = {row[1] for row in cursor.fetchall()}
+                if "message_id" not in cols:
+                    conn.execute("ALTER TABLE seen_nonces ADD COLUMN message_id TEXT;")
+                if "state" not in cols:
+                    conn.execute("ALTER TABLE seen_nonces ADD COLUMN state TEXT NOT NULL DEFAULT 'RECORDED';")
                 conn.commit()
         except Exception:
             pass
 
-    def check_and_record_nonce(self, nonce: str, sender: str, timestamp_ist: str, ttl_sec: float = 600.0) -> Tuple[bool, Optional[str]]:
+    def check_and_record_nonce(
+        self,
+        nonce: str,
+        sender: str,
+        timestamp_ist: str,
+        ttl_sec: float = 600.0,
+        message_id: Optional[str] = None,
+        allow_recovery: bool = False,
+    ) -> Tuple[bool, Optional[str]]:
         now = time.time()
         try:
             with sqlite3.connect(self.db_path, timeout=10.0) as conn:
+                conn.row_factory = sqlite3.Row
                 conn.execute("DELETE FROM seen_nonces WHERE recorded_at < ?", (now - ttl_sec,))
+                cur = conn.execute("SELECT * FROM seen_nonces WHERE nonce = ?", (nonce,))
+                row = cur.fetchone()
+                if row is not None:
+                    if allow_recovery and row["state"] == "RECOVERED_RETRY_PENDING" and (row["message_id"] == message_id or not row["message_id"]):
+                        conn.execute("UPDATE seen_nonces SET state = 'PROCESSING', recorded_at = ? WHERE nonce = ?", (now, nonce))
+                        conn.commit()
+                        return True, None
+                    return False, f"REPLAY_ATTACK: Nonce '{nonce}' has already been processed."
                 conn.execute(
-                    "INSERT INTO seen_nonces (nonce, sender, timestamp_ist, recorded_at) VALUES (?, ?, ?, ?)",
-                    (nonce, sender, timestamp_ist, now)
+                    "INSERT INTO seen_nonces (nonce, sender, timestamp_ist, recorded_at, message_id, state) VALUES (?, ?, ?, ?, ?, ?)",
+                    (nonce, sender, timestamp_ist, now, message_id, "RECORDED")
                 )
                 conn.commit()
             return True, None
@@ -322,6 +360,18 @@ class DurableReplayStore:
             return False, f"REPLAY_ATTACK: Nonce '{nonce}' has already been processed."
         except Exception as e:
             return False, f"REPLAY_STORE_ERROR: {e}"
+
+    def mark_nonce_for_recovery(self, nonce: str, message_id: Optional[str] = None):
+        """Marks a nonce as eligible for exactly one recovered retry."""
+        try:
+            with sqlite3.connect(self.db_path, timeout=10.0) as conn:
+                conn.execute(
+                    "UPDATE seen_nonces SET state = 'RECOVERED_RETRY_PENDING' WHERE nonce = ?",
+                    (nonce,)
+                )
+                conn.commit()
+        except Exception:
+            pass
 
 
 def load_auth_config() -> Dict[str, Any]:
@@ -364,7 +414,10 @@ def get_agent_secret_key(agent_name: str) -> Optional[str]:
     return key if isinstance(key, str) and key else None
 
 
-RUNTIME_METADATA_FIELDS = {"auth_signature", "claimed_at_ist", "worker_pid", "processing_started_at_ist"}
+RUNTIME_METADATA_FIELDS = {
+    "auth_signature", "claimed_at_ist", "worker_pid", "worker_create_time_nt",
+    "processing_started_at_ist", "auth_verified_at_ist"
+}
 
 
 def canonicalize_envelope(envelope: Dict[str, Any]) -> str:
@@ -372,7 +425,7 @@ def canonicalize_envelope(envelope: Dict[str, Any]) -> str:
     Deterministically serializes envelope fields for HMAC signing and verification:
     - Excludes 'auth_signature' and worker runtime tracking fields.
     - Ignores None values so omitted vs null fields are canonicalized identically.
-    - Normalizes request status so worker claim transitions do not break sender signatures.
+    - Normalizes request status and attempt_count so worker claim/retry transitions do not break sender signatures.
     - Keys are strictly sorted with normalized separators (',', ':').
     """
     d = {}
@@ -381,6 +434,8 @@ def canonicalize_envelope(envelope: Dict[str, Any]) -> str:
             continue
         if k == "status" and envelope.get("recipient") in VALID_RECIPIENTS and v in ["CLAIMED", "PROCESSING"]:
             d[k] = "CREATED"
+        elif k == "attempt_count":
+            d[k] = 0
         else:
             d[k] = v
     return json.dumps(d, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
@@ -397,8 +452,14 @@ def compute_message_hmac(msg: Dict[str, Any], secret_key: str) -> str:
     return compute_envelope_hmac(msg, secret_key)
 
 
-def verify_message_auth(msg: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
-    """Validates message HMAC-SHA256 signature, durable nonce uniqueness, and timestamp freshness."""
+def verify_message_auth(
+    msg: Dict[str, Any],
+    record_nonce: bool = True,
+    allow_recovery: bool = False
+) -> Tuple[bool, Optional[str]]:
+    """Validates message HMAC-SHA256 signature, durable nonce uniqueness, and timestamp freshness.
+    Strict evaluation order: schema/fields -> timestamp freshness -> HMAC verification -> record nonce.
+    """
     auth_cfg = load_auth_config()
     sender = msg.get("sender", "")
     secret_key = get_agent_secret_key(sender)
@@ -413,34 +474,42 @@ def verify_message_auth(msg: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
     if not nonce or not isinstance(nonce, str) or len(nonce) < 8:
         return False, "AUTH_FAILED: Missing or invalid 'nonce' in message envelope."
 
-    # Durable SQLite Nonce Replay Check
-    replay_store = DurableReplayStore(os.path.join(MESSAGES_ROOT, "replay_store.db"))
-    nonce_ok, nonce_err = replay_store.check_and_record_nonce(nonce, sender, msg.get("created_at_ist", ""))
-    if not nonce_ok:
-        return False, nonce_err
+    # 1. Timestamp Freshness Check (checked BEFORE burning nonce)
+    # If already verified at arrival (claim time), do not expire during execution wait
+    if not msg.get("auth_verified_at_ist"):
+        ts_str = msg.get("created_at_ist", "")
+        try:
+            ts_clean = ts_str.replace(" IST", "")
+            msg_dt = datetime.strptime(ts_clean, "%Y-%m-%d %H:%M:%S")
+            tz_ist = timezone(timedelta(hours=5, minutes=30))
+            now_dt = datetime.now(tz_ist).replace(tzinfo=None)
+            delta_sec = (now_dt - msg_dt).total_seconds()
+            val_sec = auth_cfg.get("token_validity_sec", 300)
+            skew_sec = auth_cfg.get("max_future_skew_sec", 60)
 
-    # Timestamp Freshness Check
-    ts_str = msg.get("created_at_ist", "")
-    try:
-        ts_clean = ts_str.replace(" IST", "")
-        msg_dt = datetime.strptime(ts_clean, "%Y-%m-%d %H:%M:%S")
-        tz_ist = timezone(timedelta(hours=5, minutes=30))
-        now_dt = datetime.now(tz_ist).replace(tzinfo=None)
-        delta_sec = (now_dt - msg_dt).total_seconds()
-        val_sec = auth_cfg.get("token_validity_sec", 300)
-        skew_sec = auth_cfg.get("max_future_skew_sec", 60)
+            if delta_sec > val_sec:
+                return False, f"TIMESTAMP_OUT_OF_BOUNDS: Message expired ({delta_sec:.1f}s old > {val_sec}s limit)."
+            if delta_sec < -skew_sec:
+                return False, f"TIMESTAMP_OUT_OF_BOUNDS: Message timestamp is in the future by {-delta_sec:.1f}s (> {skew_sec}s limit)."
+        except Exception as e:
+            return False, f"TIMESTAMP_FORMAT_ERROR: Unable to parse created_at_ist '{ts_str}': {e}"
 
-        if delta_sec > val_sec:
-            return False, f"TIMESTAMP_OUT_OF_BOUNDS: Message expired ({delta_sec:.1f}s old > {val_sec}s limit)."
-        if delta_sec < -skew_sec:
-            return False, f"TIMESTAMP_OUT_OF_BOUNDS: Message timestamp is in the future by {-delta_sec:.1f}s (> {skew_sec}s limit)."
-    except Exception as e:
-        return False, f"TIMESTAMP_FORMAT_ERROR: Unable to parse created_at_ist '{ts_str}': {e}"
-
-    # HMAC Verification across all envelope fields
+    # 2. HMAC Verification across all envelope fields (checked BEFORE burning nonce)
     expected_sig = compute_envelope_hmac(msg, secret_key)
     if not hmac.compare_digest(sig, expected_sig):
         return False, "AUTH_FAILED: Cryptographic HMAC signature verification failed."
+
+    # 3. Durable SQLite Nonce Replay Check (recorded ONLY after timestamp and HMAC pass)
+    if record_nonce:
+        replay_store = DurableReplayStore(os.path.join(MESSAGES_ROOT, "replay_store.db"))
+        msg_id = msg.get("message_id")
+        is_recovered = allow_recovery or (isinstance(msg.get("attempt_count"), int) and msg["attempt_count"] > 0)
+        nonce_ok, nonce_err = replay_store.check_and_record_nonce(
+            nonce, sender, msg.get("created_at_ist", ""),
+            message_id=msg_id, allow_recovery=is_recovered
+        )
+        if not nonce_ok:
+            return False, nonce_err
 
     return True, None
 
@@ -465,13 +534,13 @@ def validate_path_security(
     if not path_str:
         return True, None, None
 
-    base_ws = workspace_dir or WORKSPACE_DIR
+    base_ws = os.path.realpath(workspace_dir or WORKSPACE_DIR)
 
-    # Resolve absolute path
+    # Resolve real path (resolving symbolic links, directory junctions, etc.)
     if os.path.isabs(path_str):
-        resolved = os.path.abspath(path_str)
+        resolved = os.path.realpath(path_str)
     else:
-        resolved = os.path.abspath(os.path.join(base_ws, path_str))
+        resolved = os.path.realpath(os.path.join(base_ws, path_str))
 
     # Path traversal check: must start with base_ws
     norm_workspace = os.path.normcase(base_ws)
@@ -492,7 +561,11 @@ def validate_path_security(
 
 
 
-def validate_message_schema(msg: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+def validate_message_schema(
+    msg: Dict[str, Any],
+    record_nonce: Optional[bool] = None,
+    allow_recovery: bool = False
+) -> Tuple[bool, Optional[str]]:
     """Validates incoming message envelope schema and security constraints strictly."""
     required_fields = [
         "message_id", "correlation_id", "sender", "recipient",
@@ -510,6 +583,9 @@ def validate_message_schema(msg: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
         return False, f"INVALID_IDENTIFIER: message_id '{msg_id}' violates regex ^[a-zA-Z0-9_\\-]{{8,64}}$"
     if not IDENTIFIER_REGEX.match(str(corr_id)):
         return False, f"INVALID_IDENTIFIER: correlation_id '{corr_id}' violates regex ^[a-zA-Z0-9_\\-]{{8,64}}$"
+
+    if msg["sender"] == "USER":
+        return False, "UNAUTHORIZED_SENDER: Sender 'USER' is refused on the bus. Owner decisions must be recorded strictly via shared/governance/owner_decisions.jsonl."
 
     if msg["sender"] not in VALID_SENDERS:
         return False, f"UNAUTHORIZED_SENDER: Sender '{msg['sender']}' not in {VALID_SENDERS}"
@@ -554,7 +630,10 @@ def validate_message_schema(msg: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
                 return False, f"PRE_TASK_HASH_REQUIRED: Modifying existing file '{target_path_to_check}' requires 'pre_task_hash' (or 'expected_base_hash')."
 
     # Cryptographic Authentication & Nonce Verification
-    auth_valid, auth_err = verify_message_auth(msg)
+    # If auth_verified_at_ist is present, message was already claimed and nonce recorded
+    should_record = record_nonce if record_nonce is not None else not bool(msg.get("auth_verified_at_ist"))
+    is_recovered = allow_recovery or (isinstance(msg.get("attempt_count"), int) and msg["attempt_count"] > 0)
+    auth_valid, auth_err = verify_message_auth(msg, record_nonce=should_record, allow_recovery=is_recovered)
     if not auth_valid:
         return False, auth_err
 
@@ -637,10 +716,13 @@ def invoke_antigravity_model(prompt: str, timeout_sec: int = 120, chat_only: boo
 
 
 class InboxWorker:
-    """Worker daemon that safely monitors and processes the Antigravity inbox."""
+    """Worker daemon that safely monitors and processes the Antigravity inbox with per-recipient lanes."""
 
-    def __init__(self, poll_interval_sec: float = 1.0):
+    def __init__(self, poll_interval_sec: float = 1.0, orphan_recovery_policy: str = "WORKER_RETRY"):
         self.poll_interval_sec = poll_interval_sec
+        self.orphan_recovery_policy = orphan_recovery_policy
+        self._recipient_lanes: Dict[str, threading.Lock] = {r: threading.Lock() for r in VALID_RECIPIENTS}
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max(len(VALID_RECIPIENTS), 4))
         ensure_directories()
 
     def recover_orphaned_claims(self):
@@ -650,36 +732,81 @@ class InboxWorker:
         for filename in os.listdir(INBOX_DIR):
             if filename.endswith(".claimed"):
                 claimed_path = os.path.join(INBOX_DIR, filename)
-                mtime = os.path.getmtime(claimed_path)
+                try:
+                    mtime = os.path.getmtime(claimed_path)
+                except OSError:
+                    continue
                 if (now - mtime) > CLAIM_TIMEOUT_SEC:
                     try:
                         with open(claimed_path, "r", encoding="utf-8") as f:
                             data = json.load(f)
-                        if _pid_is_running(data.get("worker_pid")):
+                        worker_pid = data.get("worker_pid")
+                        worker_ct = data.get("worker_create_time_nt")
+                        if _pid_is_running(worker_pid, expected_create_time=worker_ct):
                             continue
                         attempts = data.get("attempt_count", 0) + 1
                         data["attempt_count"] = attempts
-                        if attempts >= MAX_ATTEMPTS:
-                            # Too many failures, move to dead letter using safe name
-                            safe_dead = get_safe_filename(data.get("message_id", filename), ".dead.json")
+                        msg_id = data.get("message_id", filename.replace(".claimed", ""))
+                        corr_id = data.get("correlation_id", uuid.uuid4().hex)
+
+                        if self.orphan_recovery_policy == "RETRY_REQUIRED" or attempts >= MAX_ATTEMPTS:
+                            # Explicit RETRY_REQUIRED or dead-letter when max attempts reached
+                            safe_dead = get_safe_filename(msg_id, ".dead.json")
                             dead_path = os.path.join(DEAD_LETTER_DIR, safe_dead)
                             data["status"] = "FAILED"
-                            data["error"] = f"MAX_ATTEMPTS_EXCEEDED: Claim timed out {attempts} times."
+                            data["error"] = (
+                                f"RETRY_REQUIRED: Worker crashed during processing. Resend with new nonce."
+                                if self.orphan_recovery_policy == "RETRY_REQUIRED"
+                                else f"MAX_ATTEMPTS_EXCEEDED: Claim timed out {attempts} times."
+                            )
                             write_json_atomic(dead_path, data)
-                            os.remove(claimed_path)
+
+                            outbox_file = os.path.join(OUTBOX_DIR, get_safe_filename(corr_id, "_resp.json"))
+                            if not os.path.exists(outbox_file):
+                                antigravity_key = get_agent_secret_key("ANTIGRAVITY")
+                                if antigravity_key:
+                                    err_resp = {
+                                        "message_id": f"resp_{uuid.uuid4().hex[:12]}",
+                                        "correlation_id": corr_id,
+                                        "responder": "ANTIGRAVITY",
+                                        "route_agent": data.get("recipient"),
+                                        "status": "FAILED",
+                                        "created_at_ist": get_current_ist(),
+                                        "completed_at_ist": get_current_ist(),
+                                        "output_payload": None,
+                                        "artifact_hashes": {},
+                                        "nonce": uuid.uuid4().hex,
+                                        "error": data["error"]
+                                    }
+                                    err_resp["auth_signature"] = compute_envelope_hmac(err_resp, antigravity_key)
+                                    write_json_atomic(outbox_file, err_resp)
+                            try:
+                                os.remove(claimed_path)
+                            except OSError:
+                                pass
                         else:
-                            # Revert back to .json to allow retry
+                            # WORKER_RETRY mode: Mark nonce for recovery in replay store
+                            nonce = data.get("nonce")
+                            if nonce:
+                                replay_store = DurableReplayStore(os.path.join(MESSAGES_ROOT, "replay_store.db"))
+                                replay_store.mark_nonce_for_recovery(nonce, msg_id)
+
+                            # Revert back to .json to allow worker retry
                             data["status"] = "CREATED"
-                            safe_revert = get_safe_filename(data.get("message_id", filename), ".json")
+                            safe_revert = get_safe_filename(msg_id, ".json")
                             revert_path = os.path.join(INBOX_DIR, safe_revert)
                             write_json_atomic(revert_path, data)
-                            os.remove(claimed_path)
+                            try:
+                                os.remove(claimed_path)
+                            except OSError:
+                                pass
                     except Exception:
                         pass
 
     def claim_message(self, json_filename: str) -> Optional[Tuple[str, Dict[str, Any]]]:
         """
         Atomically claims a message by renaming <id>.json to <id>.claimed.
+        Validates schema, timestamp freshness, and HMAC at ARRIVAL (claim time).
         Returns (claimed_filepath, message_data) or None if already claimed.
         """
         # Strictly validate filename regex before accessing filesystem
@@ -711,9 +838,48 @@ class InboxWorker:
                         data = json.load(f)
                     if data.get("status") != "CREATED":
                         return claimed_path, data
+
+                    # Validate schema, timestamp freshness, and HMAC at ARRIVAL (claim time)
+                    is_valid, auth_err = validate_message_schema(data)
+                    if not is_valid:
+                        safe_dead = get_safe_filename(data.get("message_id", json_filename.replace(".json", "")), ".dead.json")
+                        dead_path = os.path.join(DEAD_LETTER_DIR, safe_dead)
+                        data["status"] = "FAILED"
+                        data["error"] = auth_err or "CLAIM_VALIDATION_FAILED"
+                        data["failed_at_ist"] = get_current_ist()
+                        write_json_atomic(dead_path, data)
+                        corr_id = data.get("correlation_id")
+                        if corr_id:
+                            outbox_file = os.path.join(OUTBOX_DIR, get_safe_filename(corr_id, "_resp.json"))
+                            if not os.path.exists(outbox_file):
+                                antigravity_key = get_agent_secret_key("ANTIGRAVITY")
+                                if antigravity_key:
+                                    err_resp = {
+                                        "message_id": f"resp_{uuid.uuid4().hex[:12]}",
+                                        "correlation_id": corr_id,
+                                        "responder": "ANTIGRAVITY",
+                                        "route_agent": data.get("recipient"),
+                                        "status": "FAILED",
+                                        "created_at_ist": get_current_ist(),
+                                        "completed_at_ist": get_current_ist(),
+                                        "output_payload": None,
+                                        "artifact_hashes": {},
+                                        "nonce": uuid.uuid4().hex,
+                                        "error": data["error"]
+                                    }
+                                    err_resp["auth_signature"] = compute_envelope_hmac(err_resp, antigravity_key)
+                                    write_json_atomic(outbox_file, err_resp)
+                        try:
+                            os.remove(claimed_path)
+                        except OSError:
+                            pass
+                        return None
+
                     data["status"] = "CLAIMED"
                     data["claimed_at_ist"] = get_current_ist()
+                    data["auth_verified_at_ist"] = data["claimed_at_ist"]
                     data["worker_pid"] = os.getpid()
+                    data["worker_create_time_nt"] = get_process_create_time_nt(os.getpid())
                     write_json_atomic(claimed_path, data)
                     return claimed_path, data
                 except Exception as e:
@@ -862,7 +1028,7 @@ class InboxWorker:
         # Any non-fast-path subject invokes the live model
         is_chat = (subject == "CHAT" or not expected_file)
         prompt_text = f"Subject: {msg.get('subject')}\nBody: {body}\nTrack: {track}"
-        timeout_sec = int(msg.get("timeout_sec", 300))
+        timeout_sec = max(1, min(int(msg.get("timeout_sec", 300)), 900))
         model_result = invoke_antigravity_model(prompt_text, timeout_sec, chat_only=is_chat)
 
         if not model_result.get("success"):
@@ -933,26 +1099,13 @@ class InboxWorker:
             write_json_atomic(outbox_file, err_resp)
             return
 
-        # 2. Check for Permission Seeking / Hedging in Body
+        # 2. Check for Permission Seeking / Hedging in Body (Warning only; do not dead-letter)
         body_text = str(msg.get("body", ""))
         if PERMISSION_SEEKING_REGEX.search(body_text):
-            err_resp = {
-                "message_id": f"resp_{uuid.uuid4().hex[:12]}",
-                "correlation_id": corr_id,
-                "responder": "ANTIGRAVITY",
-                "route_agent": route_agent,
-                "status": "INCOMPLETE",
-                "created_at_ist": get_current_ist(),
-                "completed_at_ist": get_current_ist(),
-                "output_payload": body_text,
-                "artifact_hashes": {},
-                "nonce": uuid.uuid4().hex,
-                "error": "INCOMPLETE_REQUEST: Prompt contains conversational permission-seeking instead of executable task mandate."
-            }
-            err_resp["auth_signature"] = compute_envelope_hmac(err_resp, antigravity_key)
-            write_json_atomic(outbox_file, err_resp)
-            self.route_to_dead_letter(claimed_path, msg, err_resp["error"])
-            return
+            logger.warning(
+                "Message %s contains conversational permission-seeking phrasing instead of executable task mandate.",
+                msg.get("message_id")
+            )
 
         # 3. Execute Task
         status, payload, artifact_hashes, error_msg = self.execute_task(msg, claimed_path)
@@ -999,18 +1152,29 @@ class InboxWorker:
         except TimeoutError:
             self.route_to_dead_letter(claimed_path, msg, "CORRELATION_LOCK_BUSY")
 
+    def _execute_in_lane(self, claimed_path: str, msg_data: Dict[str, Any]):
+        recipient = msg_data.get("recipient", "ANTIGRAVITY")
+        lane_lock = self._recipient_lanes.setdefault(recipient, threading.Lock())
+        with lane_lock:
+            self.process_message(claimed_path, msg_data)
+
     def run_single_pass(self) -> int:
-        """Processes all currently pending messages in the inbox once. Returns count processed."""
+        """Processes all currently pending messages in the inbox once with per-recipient concurrency. Returns count processed."""
         self.recover_orphaned_claims()
-        processed = 0
+        futures = []
         for filename in sorted(os.listdir(INBOX_DIR)):
             if filename.endswith(".json") and not filename.endswith(".tmp"):
                 claim_res = self.claim_message(filename)
                 if claim_res:
                     claimed_path, msg_data = claim_res
-                    self.process_message(claimed_path, msg_data)
-                    processed += 1
-        return processed
+                    f = self._executor.submit(self._execute_in_lane, claimed_path, msg_data)
+                    futures.append(f)
+        for f in concurrent.futures.as_completed(futures):
+            try:
+                f.result()
+            except Exception as e:
+                logger.error("Error executing message in lane: %s", e)
+        return len(futures)
 
     def run_daemon(self):
         """Continuously polls the inbox directory."""

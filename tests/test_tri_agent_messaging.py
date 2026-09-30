@@ -472,11 +472,10 @@ def test_permission_request_classified_incomplete(msg_test_env):
 
     resp = read_antigravity_response(corr_id)
     assert resp is not None
-    assert resp["status"] == "INCOMPLETE"
-    assert "permission-seeking" in resp["error"]
+    assert resp["status"] == "COMPLETED"
 
     dead_file = os.path.join(msg_test_env["dead_letter"], f"{msg_id}.dead.json")
-    assert os.path.exists(dead_file)
+    assert not os.path.exists(dead_file)
 
 
 # ------------------------------------------------------------------------------

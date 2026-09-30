@@ -12,7 +12,7 @@ from antigravity.daemons.tri_agent_bus import send_to_agent, wait_for_agent_resp
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sender", choices=("ANTIGRAVITY", "CLAUDE", "CODEX", "USER"))
+    parser.add_argument("--sender", choices=("ANTIGRAVITY", "CLAUDE", "CODEX"))
     parser.add_argument("--recipient", required=True, choices=("ANTIGRAVITY", "CLAUDE", "CODEX"))
     parser.add_argument("--subject")
     parser.add_argument("--body")
@@ -43,9 +43,6 @@ def main(argv=None) -> int:
         if state and state["status"] in ("CREATED", "CLAIMED", "PROCESSING"):
             result["status"] = "PENDING"
             result["error"] = None
-        elif not message_id:
-            result["status"] = "PENDING_OR_UNKNOWN"
-            result["error"] = None
     response = result.get("response") or {}
     print(json.dumps({
         "success": result["success"],
@@ -54,7 +51,7 @@ def main(argv=None) -> int:
         "output_payload": response.get("output_payload"),
         "correlation_id": correlation_id,
     }, ensure_ascii=False))
-    return 0 if result["success"] or result["status"] in ("PENDING", "PENDING_OR_UNKNOWN") else 1
+    return 0 if (result.get("success") or (result.get("status") == "PENDING" and message_id is not None)) else 1
 
 
 if __name__ == "__main__":

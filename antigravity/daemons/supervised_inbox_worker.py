@@ -374,6 +374,12 @@ def get_status() -> Dict[str, Any]:
                     "details": bdata,
                     "cooldown_remaining_sec": round(remaining, 1)
                 }
+            return {
+                "status": "COOLDOWN_EXPIRED",
+                "running": False,
+                "details": bdata,
+                "cooldown_remaining_sec": 0.0
+            }
         except Exception:
             pass
 
@@ -385,7 +391,22 @@ def get_status() -> Dict[str, Any]:
             data = json.load(f)
 
         if data.get("status") == "CIRCUIT_BREAKER_TRIPPED":
-            return {"status": "CIRCUIT_BREAKER_TRIPPED", "running": False, "details": data}
+            tripped_ts = data.get("tripped_at_ts", 0.0)
+            cooldown = data.get("cooldown_sec", BREAKER_COOLDOWN_SEC)
+            remaining = cooldown - (time.time() - tripped_ts)
+            if remaining > 0:
+                return {
+                    "status": "CIRCUIT_BREAKER_TRIPPED",
+                    "running": False,
+                    "details": data,
+                    "cooldown_remaining_sec": round(remaining, 1)
+                }
+            return {
+                "status": "COOLDOWN_EXPIRED",
+                "running": False,
+                "details": data,
+                "cooldown_remaining_sec": 0.0
+            }
 
         sup_pid = data.get("supervisor_pid")
         sup_ct = data.get("supervisor_create_time_nt")
@@ -493,8 +514,16 @@ def stop_daemon(force_reset_breaker: bool = False):
         else:
             print(f"[SUPERVISOR] Skipping worker child PID={worker_pid}: not running or identity unverified.")
 
-    # 6. Clean up files ONLY IF supervisor is truly gone
-    sup_still_alive = _pid_is_running(sup_pid, expected_create_time=sup_ct) if (sup_pid and sup_ct) else False
+    # 6. Clean up files ONLY IF supervisor is verifiably gone
+    if sup_pid:
+        if sup_ct:
+            sup_still_alive = _pid_is_running(sup_pid, expected_create_time=sup_ct)
+        else:
+            # Creation time missing: if PID is running, preserve ownership; do NOT assume dead
+            sup_still_alive = _pid_is_running(sup_pid)
+    else:
+        sup_still_alive = False
+
     if not sup_still_alive:
         for fpath in [SUPERVISOR_PID_FILE, SUPERVISOR_STOP_FILE, SUPERVISOR_LOCK_FILE + ".lock"]:
             if os.path.exists(fpath):
@@ -506,7 +535,7 @@ def stop_daemon(force_reset_breaker: bool = False):
             reset_circuit_breaker()
         print("[SUPERVISOR] Stop operation completed.")
     else:
-        print(f"[SUPERVISOR] WARNING: Supervisor PID={sup_pid} is still alive. Lock and PID files preserved.")
+        print(f"[SUPERVISOR] WARNING: Supervisor PID={sup_pid} may still be alive or unverified. Lock and PID files preserved.")
 
 
 if __name__ == "__main__":

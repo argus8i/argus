@@ -46,6 +46,7 @@ The Nexus message bus connects the three collaborating agents across their respe
 - **HMAC-SHA256 Signing:** Every message envelope carries a cryptographic signature calculated over the canonical JSON payload using the sender's private key.
 - **External Key Isolation:** In strict compliance with AGENTS.md security rules, agent secret keys are **never** stored inside the Git repository. Keys reside strictly at `C:\Users\yashw\.gemini\antigravity\agent_keys.json` ([`inbox_worker.py:45`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/inbox_worker.py#L45)).
 - **Replay Protection:** Messages include ISO timestamps and UUID nonces. Messages older than 300 seconds or replaying an existing nonce are rejected fail-closed.
+- **Refusal of Sender USER on Bus (C6 Governance Invariant):** Because local private keys are accessible to processes on the host machine, no agent or script may sign as `USER`. Messages specifying `sender == "USER"` are strictly refused fail-closed by [`inbox_worker.py`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/inbox_worker.py) and [`nexus_cli.py`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/nexus_cli.py). A bus message is **never** an owner decision; sovereign approvals derive exclusively from immutable records in [`shared/governance/owner_decisions.jsonl`](file:///c:/Users/yashw/swing%20trades/shared/governance/owner_decisions.jsonl).
 
 ---
 
@@ -69,12 +70,12 @@ The daemon supervisor ([`antigravity/daemons/supervised_inbox_worker.py`](file:/
 Per Yashu's explicit approval recorded in `OWNER-2026-09-30-01` ([`shared/governance/owner_decisions.jsonl:4`](file:///c:/Users/yashw/swing%20trades/shared/governance/owner_decisions.jsonl#L4)), the supervisor and its watchdog are registered directly into Windows Task Scheduler under user account `yashw`.
 
 ### Registered Tasks
-1. **`AntigravityNexusSupervisor`**:
+1. **`ARGUS_Nexus_Supervisor`**:
    - **Trigger:** At user logon (`AtLogon`).
    - **Action:** Executes [`scripts/start_nexus_service.bat`](file:///c:/Users/yashw/swing%20trades/scripts/start_nexus_service.bat).
    - **Restart Policy:** Automatically restarts up to 5 times at 1-minute intervals if terminated abnormally.
    - **Execution Time Limit:** None (`PT0S`, runs indefinitely).
-2. **`AntigravityNexusWatchdog`**:
+2. **`ARGUS_Nexus_Watchdog`**:
    - **Trigger:** Runs every 5 minutes indefinitely.
    - **Action:** Executes [`scripts/watchdog_nexus_service.ps1`](file:///c:/Users/yashw/swing%20trades/scripts/watchdog_nexus_service.ps1), which calls [`antigravity/daemons/nexus_watchdog.py`](file:///c:/Users/yashw/swing%20trades/antigravity/daemons/nexus_watchdog.py).
    - **Logic:** Queries `supervised_inbox_worker.py --status`. If status is not `RUNNING`, it automatically restarts the supervisor daemon and logs the incident to [`antigravity/logs/nexus_watchdog.log`](file:///c:/Users/yashw/swing%20trades/antigravity/logs/nexus_watchdog.log).

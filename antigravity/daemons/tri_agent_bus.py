@@ -566,12 +566,20 @@ def send_to_agent(
     if not IDENTIFIER_REGEX.match(corr_id):
         raise ValueError(f"Invalid correlation_id '{corr_id}'; must match ^[a-zA-Z0-9_\\-]{{8,64}}$")
 
-    # Check for duplicate message_id in inbox, outbox, archive, dead_letter (Idempotency)
+    # Check for duplicate message_id across all directories and states (.json, .claimed, .dead.json)
     safe_msg_file = get_safe_filename(msg_id, ".json")
+    safe_claimed_file = get_safe_filename(msg_id, ".claimed")
     safe_dead_file = get_safe_filename(msg_id, ".dead.json")
     for check_dir in [INBOX_DIR, ARCHIVE_DIR, DEAD_LETTER_DIR]:
-        if os.path.exists(os.path.join(check_dir, safe_msg_file)) or os.path.exists(os.path.join(check_dir, safe_dead_file)):
-            return msg_id, corr_id
+        for candidate in [safe_msg_file, safe_claimed_file, safe_dead_file]:
+            candidate_path = os.path.join(check_dir, candidate)
+            if os.path.exists(candidate_path):
+                try:
+                    with open(candidate_path, "r", encoding="utf-8") as f:
+                        existing_data = json.load(f)
+                    return msg_id, existing_data.get("correlation_id", corr_id)
+                except Exception:
+                    return msg_id, corr_id
 
     # Load sender secret key from external storage
     secret_key = auth_secret or get_agent_secret_key(sender)
@@ -804,6 +812,8 @@ def wait_for_agent_response(
             result["success"] = False
             result["status"] = "ROUTE_MISMATCH"
             result["error"] = f"Response route mismatch: expected recipient {recipient}, got {actual}"
+    elif result.get("status") == "TIMED_OUT":
+        result["error"] = f"TIMED_OUT: {recipient} did not respond within {timeout_sec}s."
     return result
 
 
@@ -896,14 +906,28 @@ def verify_task_completion(
             "artifact_hashes": response.get("artifact_hashes", {})
         }
 
-    # 5. Conversational Hedging / Permission Seeking Check
-    payload_str = str(response.get("output_payload", ""))
-    if PERMISSION_SEEKING_REGEX.search(payload_str):
+    # 5. Payload / Artifact Presence Check (F09)
+    # A task claiming COMPLETED must produce an output payload or at least one artifact hash.
+    payload = response.get("output_payload")
+    artifact_hashes = response.get("artifact_hashes") or {}
+    if payload is None and not artifact_hashes:
+        return {
+            "verified": False,
+            "status": "INCOMPLETE",
+            "reason": "Task claimed COMPLETED but returned neither output payload nor artifacts.",
+            "artifact_hashes": artifact_hashes
+        }
+
+    # 6. Conversational Hedging / Permission Seeking Check (F11)
+    # Strip quoted substrings to allow diagnostic analysis quoting phrases without false rejection
+    payload_str = str(payload or "")
+    unquoted_payload = re.sub(r'["\'][^"\']*["\']', '', payload_str)
+    if PERMISSION_SEEKING_REGEX.search(unquoted_payload):
         return {
             "verified": False,
             "status": "INCOMPLETE",
             "reason": "Hedging detected in output: conversational permission seeking instead of work completion.",
-            "artifact_hashes": response.get("artifact_hashes", {})
+            "artifact_hashes": artifact_hashes
         }
 
     # 6. Physical Artifact and Hash Verification

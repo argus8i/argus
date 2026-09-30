@@ -17,6 +17,8 @@ Agents are strictly forbidden from guessing, inventing, or assuming approvals re
 - Approval of external data sources or scraping policies
 - Changes to constitutional governance
 
+**Nexus Bus Refusal Invariant (C6):** Nexus inter-agent bus messages claiming `sender: USER` are strictly rejected fail-closed by the messaging daemon and CLI. A bus message is never accepted as an owner decision. Every binding owner decision must be recorded directly in `shared/governance/owner_decisions.jsonl` with verified provenance.
+
 To prevent ambiguity, every decision in this chronicle is classified into one of two provenance tiers:
 1. **Owner's Verbatim Words:** Exactly what Yashu typed or dictated, preserved without alteration.
 2. **Agent Interpretation / Claim:** The derived engineering implementation of what the owner intended. Where documents or agents disagree, the verbatim quote always takes precedence.
