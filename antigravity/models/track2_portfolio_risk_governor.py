@@ -300,6 +300,17 @@ class PortfolioRiskGovernor:
                 else:
                     item_notional = 0.0
 
+            # Prioritize worst-case valuation for pending orders with limit_price
+            i_limit = item.get("limit_price")
+            i_qty = item.get("quantity") or item.get("shares")
+            if isinstance(i_limit, (int, float)) and isinstance(i_qty, int) and i_limit > 0 and i_qty > 0:
+                worst_case_notional = round(float(i_limit) * int(i_qty), 2)
+                item_notional = max(float(item_notional), worst_case_notional)
+                i_stop = item.get("stop_price") or item.get("initial_stop")
+                if isinstance(i_stop, (int, float)) and i_limit > i_stop > 0:
+                    worst_case_risk = round(int(i_qty) * (float(i_limit) - float(i_stop)), 2)
+                    item_risk = max(float(item_risk), worst_case_risk)
+
             if (
                 isinstance(item_notional, bool)
                 or not isinstance(item_notional, (int, float))

@@ -131,7 +131,7 @@ class HelmSessionOrchestrator:
             corpus_rs=corpus_rs,
             risk_per_trade_rs=risk_per_trade_rs,
             max_concurrent_positions=max_positions,
-            cash_buffer_rs=75000.0,
+            cash_buffer_rs=136000.0,
         )
         self.alpha_engine = MultiTimeframeAlphaEngine()
         self.analytics = CaliberPerformanceAnalytics(capital_base_rs=corpus_rs)

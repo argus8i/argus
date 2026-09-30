@@ -82,14 +82,14 @@ class MultiStrategyEngine:
         self.max_single_slot_notional_rs = max_single_slot_notional_rs
         self.total_capital_allocation_rs = total_capital_allocation_rs
 
-        # Instantiate sub-strategies
+        # Instantiate sub-strategies with explicit slot notional cap
         self.orb_engine = MultiTimeframeAlphaEngine()
-        self.vwap_engine = VWAPReclaimStrategy(risk_budget_rs=risk_budget_rs)
-        self.squeeze_engine = VolatilitySqueezeStrategy(risk_budget_rs=risk_budget_rs)
-        self.trapdoor_engine = TrapdoorStrategy(risk_budget_rs=risk_budget_rs)
-        self.compass_engine = CompassStrategy(risk_budget_rs=risk_budget_rs)
-        self.last_light_engine = LastLightStrategy(risk_budget_rs=risk_budget_rs)
-        self.recoil_engine = RecoilStrategy(risk_budget_rs=risk_budget_rs)
+        self.vwap_engine = VWAPReclaimStrategy(risk_budget_rs=risk_budget_rs, max_notional_rs=max_single_slot_notional_rs)
+        self.squeeze_engine = VolatilitySqueezeStrategy(risk_budget_rs=risk_budget_rs, max_notional_rs=max_single_slot_notional_rs)
+        self.trapdoor_engine = TrapdoorStrategy(risk_budget_rs=risk_budget_rs, max_notional_rs=max_single_slot_notional_rs)
+        self.compass_engine = CompassStrategy(risk_budget_rs=risk_budget_rs, max_notional_rs=max_single_slot_notional_rs)
+        self.last_light_engine = LastLightStrategy(risk_budget_rs=risk_budget_rs, max_slot_notional=max_single_slot_notional_rs)
+        self.recoil_engine = RecoilStrategy(risk_budget_rs=risk_budget_rs, max_slot_notional=max_single_slot_notional_rs)
 
     def evaluate_symbol(
         self,

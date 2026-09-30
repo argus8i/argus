@@ -44,8 +44,8 @@ def test_terminal_state_handler_calibration():
     assert state["risk"]["corpus_rs"] == 250000.0
     assert state["risk"]["max_single_trade_risk_rs"] == 1500.0
     assert state["risk"]["max_aggregate_risk_rs"] == 4500.0
-    assert state["risk"]["max_notional_rs"] == 175000.0
-    assert state["risk"]["cash_buffer_rs"] == 75000.0
+    assert state["risk"]["max_notional_rs"] == 114000.0
+    assert state["risk"]["cash_buffer_rs"] == 136000.0
     assert state["risk"]["max_positions"] == 3
 
     # Verify Radar items

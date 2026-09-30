@@ -82,7 +82,7 @@ class TerminalStateHandler:
             corpus_rs=corpus_rs,
             risk_per_trade_rs=1500.0,
             max_concurrent_positions=3,
-            cash_buffer_rs=75000.0,
+            cash_buffer_rs=136000.0,
         )
         self.analytics = CaliberPerformanceAnalytics(capital_base_rs=corpus_rs)
         target_dir = output_dir or (PAPER_ORDERS_PATH.parent if PAPER_ORDERS_PATH else SHARED_TRACK2_DIR)
@@ -208,7 +208,7 @@ class TerminalStateHandler:
             "max_aggregate_risk_rs": self.governor.max_aggregate_risk_rs,
             "current_notional_rs": notional_rs,
             "max_notional_rs": self.governor.total_capital_allocation_rs,
-            "cash_buffer_rs": 75000.0,
+            "cash_buffer_rs": 136000.0,
             "active_positions_count": active_count,
             "max_positions": 3,
             "open_risk_pct": round((open_risk_rs / self.governor.max_aggregate_risk_rs) * 100, 1),

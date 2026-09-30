@@ -33,7 +33,7 @@ def test_shared_feature_engine():
 
 def test_trapdoor_strategy_signal():
     """Verifies TRAPDOOR pattern: Mother -> Inside -> Failed Breakdown -> Confirmation in a chop regime."""
-    strategy = TrapdoorStrategy(risk_budget_rs=1500.0, max_notional_rs=58333.0)
+    strategy = TrapdoorStrategy(risk_budget_rs=1500.0, max_notional_rs=38000.0)
 
     # 6 bars in a choppy/oscillating range (ER < 0.35, ATR ~ 1.2):
     # Bar 0: Baseline oscillating
@@ -68,7 +68,7 @@ def test_trapdoor_strategy_signal():
 
 def test_compass_strategy_signal():
     """Verifies COMPASS strategy: Sector leadership with stock residual outperformance."""
-    strategy = CompassStrategy(risk_budget_rs=1500.0, max_notional_rs=58333.0)
+    strategy = CompassStrategy(risk_budget_rs=1500.0, max_notional_rs=38000.0)
 
     # 5 bars for candidate stock (closing at 101.8, up from 100.0 = +1.78% 1h return)
     # Stop level: previous 3-bar low is 100.6 (risk distance = 1.2 / 101.8 = 1.18%, ideal!)

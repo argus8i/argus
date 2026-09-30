@@ -185,19 +185,19 @@ def test_governor_calibrate_for_corpus_2_5_lakhs():
     assert "AGGREGATE_PORTFOLIO_RISK_EXCEEDED" in res_4th.rejection_reason
 
 
-def test_governor_calibrate_default_75k_buffer_and_var_elm_gate():
-    # Tests the hardened default calibration (Codex Audit 2026-09-23)
+def test_governor_calibrate_default_136k_buffer_and_var_elm_gate():
+    # Tests the hardened Adjusted A1 calibration (Rs 1,36,000 cash buffer, Rs 1,14,000 deployable, Rs 38k slot cap)
     gov_hardened = PortfolioRiskGovernor.calibrate_for_corpus()
     assert gov_hardened.max_single_trade_risk_rs == 1500.0
     assert gov_hardened.max_aggregate_risk_rs == 4500.0
-    assert gov_hardened.total_capital_allocation_rs == 175000.0  # Rs 2,50,000 - Rs 75,000 cash buffer
+    assert gov_hardened.total_capital_allocation_rs == 114000.0  # Rs 2,50,000 - Rs 1,36,000 cash buffer
 
-    # Candidate with VAR+ELM <= 30% passes
+    # Candidate with VAR+ELM <= 30% passes within Rs 38,000 slot cap
     res_pass = gov_hardened.assess_candidate(
         symbol="CDSL",
         entry_price=1000.0,
         stop_price=985.0,
-        quantity=50,  # Risk Rs 750, Notional Rs 50k (within slot cap)
+        quantity=35,  # Risk Rs 525, Notional Rs 35k (within Rs 38k slot cap)
         active_positions=[],
         var_elm_rate=0.25,  # 25% VAR+ELM
     )
@@ -208,7 +208,7 @@ def test_governor_calibrate_default_75k_buffer_and_var_elm_gate():
         symbol="CDSL",
         entry_price=1000.0,
         stop_price=985.0,
-        quantity=50,
+        quantity=35,
         active_positions=[],
         var_elm_rate=0.35,  # 35% VAR+ELM exceeds 30% ceiling
     )

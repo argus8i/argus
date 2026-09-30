@@ -162,7 +162,7 @@ class HybridExecutionOMS:
                     max_slippage_bps=float(data.get("max_slippage_bps", 15.0)),
                     risk_budget_rs=float(data.get("risk_budget_rs", 1500.0)),
                     max_open_positions=int(data.get("max_open_positions", 3)),
-                    cash_buffer_rs=float(data.get("cash_buffer_rs", 75000.0)),
+                    cash_buffer_rs=float(data.get("cash_buffer_rs", 136000.0)),
                     tier1_vol_mult_threshold=float(data.get("tier1_vol_mult_threshold", 4.0)),
                     enforce_rule1_lock=bool(data.get("enforce_rule1_lock", True)),
                 )
@@ -281,6 +281,8 @@ class HybridExecutionOMS:
                         "notional_rs": float(intent.notional_rs),
                         "shares": int(intent.shares),
                         "entry_price": float(intent.entry_price),
+                        "limit_price": float(intent.limit_price),
+                        "stop_price": float(intent.stop_loss),
                     })
         return active_pos, pending_pos
 

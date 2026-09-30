@@ -78,7 +78,7 @@ class CompassStrategy:
     def __init__(
         self,
         risk_budget_rs: float = 1500.0,
-        max_notional_rs: float = 58333.0,
+        max_notional_rs: float = 38000.0,
         target_r_multiple: float = 2.0,
         min_rvol: float = 1.50,
         est_roundtrip_friction_pct: float = 0.00106,

@@ -71,7 +71,7 @@ class LastLightStrategy:
     def __init__(
         self,
         risk_budget_rs: float = 1500.0,
-        max_slot_notional: float = 58333.0,
+        max_slot_notional: float = 38000.0,
         min_er8: float = 0.40,
         min_rvol: float = 1.30,
         max_risk_pct: float = 2.50,

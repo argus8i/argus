@@ -127,11 +127,18 @@ class ExecutionIntent:
             if shares <= 0:
                 raise ValueError(f"Order shares must be positive, got {shares}")
             if (shares * entry) > max_slot_notional:
-                shares = max(1, int(max_slot_notional / entry))
+                capped = int(max_slot_notional / entry)
+                if capped <= 0:
+                    raise ValueError(f"Entry price ({entry}) exceeds max slot notional ({max_slot_notional})")
+                shares = capped
         else:
-            shares = max(1, int(risk_rs / risk_per_share))
+            shares = int(risk_rs / risk_per_share)
             if (shares * entry) > max_slot_notional:
-                shares = max(1, int(max_slot_notional / entry))
+                capped = int(max_slot_notional / entry)
+                if capped <= 0:
+                    raise ValueError(f"Entry price ({entry}) exceeds max slot notional ({max_slot_notional})")
+                shares = capped
+            shares = max(1, shares)
 
         actual_risk = round(shares * risk_per_share, 2)
         notional = round(shares * entry, 2)
@@ -320,7 +327,7 @@ class PolicyConfig:
     max_slippage_bps: float = 15.0
     risk_budget_rs: float = 1500.0
     max_open_positions: int = 3
-    cash_buffer_rs: float = 75000.0
+    cash_buffer_rs: float = 136000.0
     tier1_vol_mult_threshold: float = 4.0
     enforce_rule1_lock: bool = True
 

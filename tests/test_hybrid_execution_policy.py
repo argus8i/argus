@@ -56,15 +56,15 @@ def test_execution_intent_sizing_and_tranches():
         "nifty_breadth_confirmed": False,
         "atr14": 8.0,
     }
-    # Expected shares = 1500 / 7.50 = 200 shares
+    # Expected shares = min(1500 / 7.50, int(38000 / 215)) = min(200, 176) = 176 shares (Adjusted A1 slot cap)
     intent = ExecutionIntent.create_from_candidate(candidate, mode=ExecutionMode.CO_PILOT)
 
     assert intent.symbol == "RVNL"
-    assert intent.shares == 200
-    assert intent.tranche1_shares == 100
-    assert intent.tranche2_shares == 100
-    assert intent.risk_rs == 1500.0
-    assert intent.notional_rs == 43000.0
+    assert intent.shares == 176
+    assert intent.tranche1_shares == 88
+    assert intent.tranche2_shares == 88
+    assert intent.risk_rs == 1320.0
+    assert intent.notional_rs == 37840.0
     assert intent.target_tranche1 == 226.25
     assert intent.runner_tranche2 == 237.50  # +3.0R
     assert intent.status == IntentStatus.PENDING_APPROVAL
