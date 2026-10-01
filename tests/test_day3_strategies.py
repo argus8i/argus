@@ -13,6 +13,7 @@ Verifies:
 6. Pre-registered YAML specification loading and deterministic priority sorting.
 """
 
+import hashlib
 import math
 from pathlib import Path
 import pytest
@@ -156,6 +157,7 @@ def test_exit_signal_event_validation():
         reason="TARGET_HIT",
         exit_price=160.0,
         shares_to_exit=200,
+        trace={"target_price": 160.0},
     )
     assert exit_event.exit_price == 160.0
     assert exit_event.shares_to_exit == 200
@@ -170,6 +172,7 @@ def test_exit_signal_event_validation():
             reason="TARGET_HIT",
             exit_price=160.0,
             shares_to_exit=0,
+            trace={"target_price": 160.0},
         )
 
 
@@ -673,34 +676,58 @@ def test_simultaneous_signals_deterministic_sorting():
 
 
 # =============================================================================
-# 7. Codex Round 1 Adversarial Regression Probes
+# 7. Codex Round 2 Adversarial Regression Probes
 # =============================================================================
 
 def test_codex_finding2_eligibility_and_timing_inputs_fail_closed():
     strat = High52MomentumStrategy()
-    bars = make_high52_bars(n=100, near_52w=True, breaking_out=True)
-
-    # A: String 'False' for is_fno_underlying and None for is_surveillance must be rejected fail-closed
-    data_bad_meta = {
+    # Positive control: full 260-bar fixture produces exactly 1 signal
+    bars = make_high52_bars(n=260, near_52w=True, breaking_out=True)
+    base_data = {
         "TEST_SCRIP": {
-            "metadata": {"is_fno_underlying": "False", "is_surveillance": None, "series": "EQ"},
-            "bars": bars,
+            "metadata": {"is_fno_underlying": True, "is_surveillance": False, "series": "EQ"},
+            "bars": [dict(b) for b in bars],
         }
     }
-    assert len(strat.generate_signals("2026-10-01", data_bad_meta, context={"next_session": "2026-10-02"})) == 0
+    pos_control = strat.generate_signals("2026-10-01", base_data, context={"next_session": "2026-10-02"})
+    assert len(pos_control) == 1, "Positive control must produce exactly 1 signal"
 
-    # B: Missing series must be rejected
-    data_no_series = {
+    # A: Missing intermediate bar date must return zero signals
+    bars_missing_date = [dict(b) for b in bars]
+    bars_missing_date[10]["session_date"] = ""
+    data_missing_date = {
         "TEST_SCRIP": {
-            "metadata": {"is_fno_underlying": True, "is_surveillance": False},
-            "bars": bars,
+            "metadata": {"is_fno_underlying": True, "is_surveillance": False, "series": "EQ"},
+            "bars": bars_missing_date,
         }
     }
-    assert len(strat.generate_signals("2026-10-01", data_no_series, context={"next_session": "2026-10-02"})) == 0
+    assert len(strat.generate_signals("2026-10-01", data_missing_date, context={"next_session": "2026-10-02"})) == 0
 
-    # C: Future bar date (2099-01-01) must be rejected
+    # B: Duplicate session dates must return zero signals
+    bars_duplicate_date = [dict(b) for b in bars]
+    bars_duplicate_date[10]["session_date"] = bars_duplicate_date[9]["session_date"]
+    data_duplicate_date = {
+        "TEST_SCRIP": {
+            "metadata": {"is_fno_underlying": True, "is_surveillance": False, "series": "EQ"},
+            "bars": bars_duplicate_date,
+        }
+    }
+    assert len(strat.generate_signals("2026-10-01", data_duplicate_date, context={"next_session": "2026-10-02"})) == 0
+
+    # C: Decreasing / non-chronological bar dates must return zero signals
+    bars_reversal = [dict(b) for b in bars]
+    bars_reversal[15]["session_date"] = "2024-01-01"
+    data_reversal = {
+        "TEST_SCRIP": {
+            "metadata": {"is_fno_underlying": True, "is_surveillance": False, "series": "EQ"},
+            "bars": bars_reversal,
+        }
+    }
+    assert len(strat.generate_signals("2026-10-01", data_reversal, context={"next_session": "2026-10-02"})) == 0
+
+    # D: Future bar date (relative to session_date) must return zero signals
     bars_future = [dict(b) for b in bars]
-    bars_future[-1]["session_date"] = "2099-01-01"
+    bars_future[-1]["session_date"] = "2026-10-05"
     data_future = {
         "TEST_SCRIP": {
             "metadata": {"is_fno_underlying": True, "is_surveillance": False, "series": "EQ"},
@@ -709,15 +736,40 @@ def test_codex_finding2_eligibility_and_timing_inputs_fail_closed():
     }
     assert len(strat.generate_signals("2026-10-01", data_future, context={"next_session": "2026-10-02"})) == 0
 
-    # D: Missing next_session in context must be rejected fail-closed
-    data_valid = {
+    # E: Final bar date not matching session_date must return zero signals
+    bars_stale = [dict(b) for b in bars]
+    bars_stale[-1]["session_date"] = "2026-09-30"
+    data_stale = {
         "TEST_SCRIP": {
             "metadata": {"is_fno_underlying": True, "is_surveillance": False, "series": "EQ"},
+            "bars": bars_stale,
+        }
+    }
+    assert len(strat.generate_signals("2026-10-01", data_stale, context={"next_session": "2026-10-02"})) == 0
+
+    # F: Far-future entry session (2099-01-01) must return zero signals
+    assert len(strat.generate_signals("2026-10-01", base_data, context={"next_session": "2099-01-01"})) == 0
+
+    # G: Malformed next_session (2026-99-99) must return zero signals without unhandled ValueError
+    assert len(strat.generate_signals("2026-10-01", base_data, context={"next_session": "2026-99-99"})) == 0
+
+    # H: String 'False' for is_fno_underlying and None for is_surveillance must return zero signals
+    data_bad_meta = {
+        "TEST_SCRIP": {
+            "metadata": {"is_fno_underlying": "False", "is_surveillance": None, "series": "EQ"},
             "bars": bars,
         }
     }
-    assert len(strat.generate_signals("2026-10-01", data_valid, context=None)) == 0
-    assert len(strat.generate_signals("2026-10-01", data_valid, context={"next_session": "2026-10-01"})) == 0  # Not strictly after
+    assert len(strat.generate_signals("2026-10-01", data_bad_meta, context={"next_session": "2026-10-02"})) == 0
+
+    # I: Missing series must return zero signals
+    data_no_series = {
+        "TEST_SCRIP": {
+            "metadata": {"is_fno_underlying": True, "is_surveillance": False},
+            "bars": bars,
+        }
+    }
+    assert len(strat.generate_signals("2026-10-01", data_no_series, context={"next_session": "2026-10-02"})) == 0
 
 
 def test_codex_finding3_exit_evaluation_gap_down_and_ambiguous_bar():
@@ -753,7 +805,8 @@ def test_codex_finding3_exit_evaluation_gap_down_and_ambiguous_bar():
 
 
 def test_codex_finding4_immutable_mandatory_trace_and_date_validation():
-    # A: Trace mutation must raise error
+    # A: Nested trace in SignalEvent must be deeply frozen (mutation raises TypeError)
+    raw_trace = {"calc": {"atr": 10.0, "scores": [1, 2, 3]}}
     event = SignalEvent(
         strategy_id="HIGH52_MOMENTUM",
         symbol="SBIN",
@@ -763,12 +816,16 @@ def test_codex_finding4_immutable_mandatory_trace_and_date_validation():
         stop_loss_price=780.0,
         target_price=840.0,
         priority_score=1.0,
-        trace={"close": 800.0, "atr": 10.0, "dtv_rs": 400000000.0},
+        trace=raw_trace,
     )
     with pytest.raises((TypeError, AttributeError)):
-        event.trace["close"] = -123
+        event.trace["calc"]["atr"] = 99.0
 
-    # B: Empty trace must be rejected
+    # External mutation of original dict must not affect event.trace
+    raw_trace["calc"]["atr"] = 1234.0
+    assert event.trace["calc"]["atr"] == 10.0
+
+    # B: Empty trace in SignalEvent must be rejected
     with pytest.raises(ValueError, match="trace must be a non-empty mapping"):
         SignalEvent(
             strategy_id="HIGH52_MOMENTUM",
@@ -782,35 +839,88 @@ def test_codex_finding4_immutable_mandatory_trace_and_date_validation():
             trace={},
         )
 
-    # C: Invalid date format must be rejected
-    with pytest.raises(ValueError, match="must be a valid ISO date"):
-        SignalEvent(
+    # C: ExitSignalEvent with invalid calendar date (2026-02-31) must be rejected
+    with pytest.raises(ValueError, match="not a valid calendar date"):
+        ExitSignalEvent(
             strategy_id="HIGH52_MOMENTUM",
             symbol="SBIN",
-            session_date="not-a-date",
-            entry_session="2026-10-02",
-            reference_price=800.0,
-            stop_loss_price=780.0,
-            target_price=840.0,
-            trace={"close": 800.0, "atr": 10.0, "dtv_rs": 400000000.0},
+            session_date="2026-02-31",
+            position_id="POS_01",
+            reason="STOP_LOSS",
+            exit_price=780.0,
+            shares_to_exit=10,
+            trace={"stop_price": 780.0},
         )
 
-    # D: entry_session <= session_date must be rejected
-    with pytest.raises(ValueError, match="entry_session .* must be strictly after"):
-        SignalEvent(
+    # D: ExitSignalEvent with empty trace must be rejected
+    with pytest.raises(ValueError, match="trace must be a non-empty mapping"):
+        ExitSignalEvent(
             strategy_id="HIGH52_MOMENTUM",
             symbol="SBIN",
             session_date="2026-10-02",
-            entry_session="2026-10-01",
-            reference_price=800.0,
-            stop_loss_price=780.0,
-            target_price=840.0,
-            trace={"close": 800.0, "atr": 10.0, "dtv_rs": 400000000.0},
+            position_id="POS_01",
+            reason="STOP_LOSS",
+            exit_price=780.0,
+            shares_to_exit=10,
+            trace={},
         )
+
+    # E: ExitSignalEvent nested trace must be deeply immutable
+    exit_trace = {"exit_details": {"level": 780.0}}
+    exit_event = ExitSignalEvent(
+        strategy_id="HIGH52_MOMENTUM",
+        symbol="SBIN",
+        session_date="2026-10-02",
+        position_id="POS_01",
+        reason="STOP_LOSS",
+        exit_price=780.0,
+        shares_to_exit=10,
+        trace=exit_trace,
+    )
+    with pytest.raises((TypeError, AttributeError)):
+        exit_event.trace["exit_details"]["level"] = 999.0
+    exit_trace["exit_details"]["level"] = 999.0
+    assert exit_event.trace["exit_details"]["level"] == 780.0
 
 
 def test_codex_finding5_locked_strategy_definitions_fail_closed(tmp_path):
-    # A: High52 with 100 bars (< 252 bars) must NOT emit a signal
+    # A: Missing manifest must raise FileNotFoundError (fail-closed manifest enforcement)
+    orphan_yaml = tmp_path / "orphan_spec.yaml"
+    orphan_yaml.write_text("strategy_name: ORPHAN\n", encoding="utf-8")
+    with pytest.raises(FileNotFoundError, match="Cryptographic manifest SPEC_MANIFEST.sha256 not found"):
+        High52MomentumStrategy(spec_path=orphan_yaml)
+
+    # B: Spec tampering must raise ValueError upon manifest mismatch
+    tampered_yaml = tmp_path / "delivery_accumulation_v1.yaml"
+    tampered_yaml.write_text("strategy_name: HACKED\n", encoding="utf-8")
+    manifest_file = tmp_path / "SPEC_MANIFEST.sha256"
+    manifest_file.write_text("0000000000000000000000000000000000000000000000000000000000000000  delivery_accumulation_v1.yaml\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not match locked manifest"):
+        DeliveryAccumulationStrategy(spec_path=tampered_yaml)
+
+    # C: Unreviewed config-only construction without allow_unreviewed_overrides must be rejected
+    with pytest.raises(ValueError, match="Config-only instantiation without pre-registered spec requires explicit allow_unreviewed_overrides"):
+        High52MomentumStrategy(config={"setup_rules": {"lookback_days_52w": 100}})
+
+    # D: Spec file with lookback < 252 must be rejected fail-closed
+    short_spec = tmp_path / "short_spec.yaml"
+    short_spec.write_text("setup_rules:\n  lookback_days_52w: 100\n", encoding="utf-8")
+    manifest_short = tmp_path / "SPEC_MANIFEST.sha256"
+    short_sha = hashlib.sha256(short_spec.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+    manifest_short.write_text(f"{short_sha}  short_spec.yaml\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="cannot be less than 252"):
+        High52MomentumStrategy(spec_path=short_spec)
+
+    # Exploratory override mode succeeds when explicitly authorized
+    exploratory_strat = High52MomentumStrategy(
+        config={"setup_rules": {"lookback_days_52w": 100}},
+        allow_unreviewed_overrides=True
+    )
+    assert exploratory_strat.lookback_52w == 100
+
+    # E: High52 with < 252 bars must NOT emit a signal
     strat_52 = High52MomentumStrategy()
     bars_100 = make_high52_bars(n=100, near_52w=True, breaking_out=True)
     data_100 = {
@@ -822,7 +932,7 @@ def test_codex_finding5_locked_strategy_definitions_fail_closed(tmp_path):
     sigs = strat_52.generate_signals("2026-10-01", data_100, context={"next_session": "2026-10-02"})
     assert len(sigs) == 0
 
-    # B: Expiry Relief without explicit cycle_start_price must NOT emit a signal
+    # F: Expiry Relief without explicit cycle_start_price must NOT emit a signal
     strat_exp = ExpiryReliefStrategy()
     bars_exp = make_expiry_bars(n=30)
     data_no_csp = {
@@ -840,11 +950,45 @@ def test_codex_finding5_locked_strategy_definitions_fail_closed(tmp_path):
     sigs_exp = strat_exp.generate_signals("2026-09-24", data_no_csp, context={"is_expiry_session": True, "next_session": "2026-09-25"})
     assert len(sigs_exp) == 0
 
-    # C: Spec tampering must raise ValueError upon manifest mismatch
-    tampered_yaml = tmp_path / "delivery_accumulation_v1.yaml"
-    tampered_yaml.write_text("strategy_name: HACKED\n", encoding="utf-8")
-    manifest_file = tmp_path / "SPEC_MANIFEST.sha256"
-    manifest_file.write_text("0000000000000000000000000000000000000000000000000000000000000000  delivery_accumulation_v1.yaml\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="does not match locked manifest"):
-        DeliveryAccumulationStrategy(spec_path=tampered_yaml)
+def test_codex_sleeves_a_and_c_bar_validation():
+    # Sleeve A (Delivery Accumulation): Bar validation fail-closed
+    strat_a = DeliveryAccumulationStrategy()
+    bars_a = make_delivery_bars(n=25)
+    data_a = {
+        "SCRIP_A": {
+            "metadata": {"is_fno_underlying": True, "is_surveillance": False, "series": "EQ"},
+            "bars": bars_a,
+        }
+    }
+    # Duplicate bar date
+    bars_dup = [dict(b) for b in bars_a]
+    bars_dup[5]["session_date"] = bars_dup[4]["session_date"]
+    data_dup = {
+        "SCRIP_A": {
+            "metadata": {"is_fno_underlying": True, "is_surveillance": False, "series": "EQ"},
+            "bars": bars_dup,
+        }
+    }
+    assert len(strat_a.generate_signals("2026-09-25", data_dup, context={"next_session": "2026-09-26"})) == 0
+
+    # Sleeve C (Expiry Relief): Bar validation fail-closed
+    strat_c = ExpiryReliefStrategy()
+    bars_c = make_expiry_bars(n=30)
+    # Undated bar
+    bars_undated = [dict(b) for b in bars_c]
+    bars_undated[5]["session_date"] = ""
+    data_undated = {
+        "TATASTEEL": {
+            "metadata": {
+                "is_fno_underlying": True,
+                "is_surveillance": False,
+                "series": "EQ",
+                "nearest_fut_expiry": "2026-09-24",
+                "cycle_start_price": bars_c[-21]["close"],
+            },
+            "bars": bars_undated,
+        }
+    }
+    assert len(strat_c.generate_signals("2026-09-24", data_undated, context={"is_expiry_session": True, "next_session": "2026-09-25"})) == 0
+

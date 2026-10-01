@@ -32,6 +32,33 @@ IST = timezone(timedelta(hours=5, minutes=30))
 _ISO_DATE_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
+def _deep_freeze(obj: Any) -> Any:
+    """
+    Recursively freezes mappings, sequences, and sets into deeply immutable types.
+    Mapping -> types.MappingProxyType
+    list/tuple -> tuple
+    set -> frozenset
+    """
+    if isinstance(obj, Mapping):
+        return types.MappingProxyType({k: _deep_freeze(v) for k, v in obj.items()})
+    elif isinstance(obj, (list, tuple)):
+        return tuple(_deep_freeze(v) for v in obj)
+    elif isinstance(obj, (set, frozenset)):
+        return frozenset(_deep_freeze(v) for v in obj)
+    return obj
+
+
+def _deep_unfreeze(obj: Any) -> Any:
+    """Recursively converts mapping proxies, tuples, and frozensets back into standard python types."""
+    if isinstance(obj, (Mapping, types.MappingProxyType)):
+        return {k: _deep_unfreeze(v) for k, v in obj.items()}
+    elif isinstance(obj, tuple):
+        return [_deep_unfreeze(v) for v in obj]
+    elif isinstance(obj, frozenset):
+        return list(_deep_unfreeze(v) for v in obj)
+    return obj
+
+
 @dataclass(frozen=True)
 class SignalEvent:
     """
@@ -104,8 +131,8 @@ class SignalEvent:
         if not isinstance(self.trace, Mapping) or not self.trace:
             raise ValueError("trace must be a non-empty mapping containing calculation proof")
 
-        # Wrap in types.MappingProxyType so that mutation raises TypeError
-        object.__setattr__(self, "trace", types.MappingProxyType(dict(self.trace)))
+        # Recursively freeze mapping so nested dicts/lists are immutable
+        object.__setattr__(self, "trace", _deep_freeze(self.trace))
 
         if not self.created_at:
             object.__setattr__(self, "created_at", datetime.now(IST).isoformat(timespec="seconds"))
@@ -139,7 +166,7 @@ class SignalEvent:
             "risk_per_share": self.risk_per_share,
             "priority_score": self.priority_score,
             "reward_risk_ratio": self.reward_risk_ratio,
-            "trace": dict(self.trace),
+            "trace": _deep_unfreeze(self.trace),
             "created_at": self.created_at,
         }
 
@@ -166,6 +193,11 @@ class ExitSignalEvent:
             raise ValueError("symbol must be a non-empty string")
         if not isinstance(self.session_date, str) or not _ISO_DATE_REGEX.match(self.session_date):
             raise ValueError(f"session_date must be a valid ISO date string, got {self.session_date!r}")
+        try:
+            datetime.strptime(self.session_date, "%Y-%m-%d")
+        except ValueError as e:
+            raise ValueError(f"session_date is not a valid calendar date: {e}") from e
+
         if not isinstance(self.reason, str) or not self.reason.strip():
             raise ValueError("reason must be a non-empty string")
         if not isinstance(self.exit_price, (int, float)) or isinstance(self.exit_price, bool) or not math.isfinite(self.exit_price) or self.exit_price <= 0:
@@ -173,8 +205,12 @@ class ExitSignalEvent:
         if not isinstance(self.shares_to_exit, int) or isinstance(self.shares_to_exit, bool) or self.shares_to_exit <= 0:
             raise ValueError(f"shares_to_exit must be a positive integer, got {self.shares_to_exit!r}")
 
-        # Wrap trace in MappingProxyType
-        object.__setattr__(self, "trace", types.MappingProxyType(dict(self.trace)))
+        # Mandatory Non-Empty Trace Mapping
+        if not isinstance(self.trace, Mapping) or not self.trace:
+            raise ValueError("trace must be a non-empty mapping containing calculation proof")
+
+        # Recursively freeze mapping so nested dicts/lists are immutable
+        object.__setattr__(self, "trace", _deep_freeze(self.trace))
 
         if not self.created_at:
             object.__setattr__(self, "created_at", datetime.now(IST).isoformat(timespec="seconds"))
@@ -188,7 +224,7 @@ class ExitSignalEvent:
             "reason": self.reason,
             "exit_price": self.exit_price,
             "shares_to_exit": self.shares_to_exit,
-            "trace": dict(self.trace),
+            "trace": _deep_unfreeze(self.trace),
             "created_at": self.created_at,
         }
 
@@ -204,9 +240,16 @@ class BaseSwingStrategy(ABC):
         config: Optional[Dict[str, Any]] = None,
         allow_unreviewed_overrides: bool = False
     ) -> None:
+        self.allow_unreviewed_overrides = allow_unreviewed_overrides
         self.config: Dict[str, Any] = {}
         if spec_path is not None:
-            self.config = self.load_spec(spec_path)
+            self.config = self.load_spec(spec_path, verify_manifest=not allow_unreviewed_overrides)
+        elif config is not None:
+            if not allow_unreviewed_overrides:
+                raise ValueError(
+                    "Config-only instantiation without pre-registered spec requires explicit "
+                    "allow_unreviewed_overrides=True (Rule 8 v2)"
+                )
         if config is not None:
             if spec_path is not None and not allow_unreviewed_overrides:
                 raise ValueError(
@@ -214,6 +257,82 @@ class BaseSwingStrategy(ABC):
                 )
             self.config.update(config)
         self._validate_config()
+
+    @staticmethod
+    def validate_historical_bars(bars: Sequence[Mapping[str, Any]], session_date: str) -> bool:
+        """
+        Strict historical bar validation for quantitative swing strategies (Rule 4 Invariant).
+        Requirements:
+        1. Every bar must have a non-empty, valid ISO calendar date string ('session_date' or 'day').
+        2. Bar dates must be strictly increasing and unique (no duplicates, no backwards jumps).
+        3. No bar date can be after session_date (no lookahead / future bars).
+        4. The final bar's date MUST strictly equal session_date (point-in-time fresh data).
+        Returns True if and only if all conditions pass.
+        """
+        if not bars:
+            return False
+
+        prev_dt = None
+        for b in bars:
+            if not isinstance(b, Mapping):
+                return False
+            raw_date = b.get("session_date") or b.get("day")
+            if not isinstance(raw_date, str) or not _ISO_DATE_REGEX.match(raw_date):
+                return False
+            try:
+                cur_dt = datetime.strptime(raw_date, "%Y-%m-%d")
+            except ValueError:
+                return False
+
+            # No future bar relative to session_date
+            if raw_date > session_date:
+                return False
+
+            # Strictly increasing unique dates (reject duplicates and reversals)
+            if prev_dt is not None and cur_dt <= prev_dt:
+                return False
+            prev_dt = cur_dt
+
+        # Final bar date must strictly equal session_date
+        last_date = bars[-1].get("session_date") or bars[-1].get("day")
+        if last_date != session_date:
+            return False
+
+        return True
+
+    @staticmethod
+    def validate_timing_context(session_date: str, context: Optional[Mapping[str, Any]]) -> Optional[str]:
+        """
+        Validates timing context fail-closed for Rule 4 T+1 discrete execution.
+        Returns next_session string if valid, or None if invalid.
+        """
+        if not isinstance(session_date, str) or not _ISO_DATE_REGEX.match(session_date):
+            return None
+        try:
+            cur_dt = datetime.strptime(session_date, "%Y-%m-%d")
+        except ValueError:
+            return None
+
+        if not context or not isinstance(context, Mapping):
+            return None
+
+        next_session = context.get("next_session")
+        if not isinstance(next_session, str) or not _ISO_DATE_REGEX.match(next_session):
+            return None
+        try:
+            next_dt = datetime.strptime(next_session, "%Y-%m-%d")
+        except ValueError:
+            return None
+
+        # Must be strictly in the future (T+1 entry)
+        if next_dt <= cur_dt:
+            return None
+
+        # Calendar gap cap: max 10 days (reject far-future like 2099-01-01)
+        if (next_dt - cur_dt).days > 10:
+            return None
+
+        return next_session
 
     @property
     @abstractmethod
@@ -256,26 +375,30 @@ class BaseSwingStrategy(ABC):
 
         if verify_manifest:
             manifest_p = p.parent / "SPEC_MANIFEST.sha256"
-            if manifest_p.is_file():
-                manifest_text = manifest_p.read_text(encoding="utf-8")
-                raw_bytes = p.read_bytes().replace(b"\r\n", b"\n")
-                calc_sha = hashlib.sha256(raw_bytes).hexdigest()
-                matched = False
-                for line in manifest_text.splitlines():
-                    line = line.strip()
-                    if not line:
-                        continue
-                    parts = line.split()
-                    if len(parts) >= 2 and parts[1] == p.name:
-                        expected_sha = parts[0].lower()
-                        if calc_sha.lower() != expected_sha:
-                            raise ValueError(
-                                f"Specification {p.name} hash {calc_sha} does not match locked manifest {expected_sha}"
-                            )
-                        matched = True
-                        break
-                if not matched:
-                    raise ValueError(f"Specification {p.name} not found in manifest {manifest_p.name}")
+            if not manifest_p.is_file():
+                raise FileNotFoundError(
+                    f"Cryptographic manifest SPEC_MANIFEST.sha256 not found in {p.parent}. "
+                    "Fail-closed invariant requires locked manifest verification for all specifications (Rule 8 v2)."
+                )
+            manifest_text = manifest_p.read_text(encoding="utf-8")
+            raw_bytes = p.read_bytes().replace(b"\r\n", b"\n")
+            calc_sha = hashlib.sha256(raw_bytes).hexdigest()
+            matched = False
+            for line in manifest_text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split()
+                if len(parts) >= 2 and parts[1] == p.name:
+                    expected_sha = parts[0].lower()
+                    if calc_sha.lower() != expected_sha:
+                        raise ValueError(
+                            f"Specification {p.name} hash {calc_sha} does not match locked manifest {expected_sha}"
+                        )
+                    matched = True
+                    break
+            if not matched:
+                raise ValueError(f"Specification {p.name} not found in manifest {manifest_p.name}")
 
         with open(p, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)

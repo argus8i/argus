@@ -28,6 +28,16 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
 from .base_strategy import BaseSwingStrategy, SignalEvent, ExitSignalEvent
 
 
+DEFAULT_SPEC_PATH = (
+    Path(__file__).resolve().parent.parent.parent
+    / "shared"
+    / "track2_liquid"
+    / "strategies"
+    / "specs"
+    / "high52_momentum_v1.yaml"
+)
+
+
 class High52MomentumStrategy(BaseSwingStrategy):
     """
     Sleeve B: 52-Week High Anchoring Momentum.
@@ -41,6 +51,8 @@ class High52MomentumStrategy(BaseSwingStrategy):
         config: Optional[Dict[str, Any]] = None,
         allow_unreviewed_overrides: bool = False
     ) -> None:
+        if spec_path is None and config is None:
+            spec_path = DEFAULT_SPEC_PATH
         super().__init__(spec_path=spec_path, config=config, allow_unreviewed_overrides=allow_unreviewed_overrides)
 
     @property
@@ -57,6 +69,12 @@ class High52MomentumStrategy(BaseSwingStrategy):
         self.target_atr_mult = float(self.config.get("risk_and_exits", {}).get("target_profit_atr_mult", 4.0))
         self.max_holding_sessions = int(self.config.get("risk_and_exits", {}).get("max_holding_sessions", 10))
 
+        if self.lookback_52w < 252 and not getattr(self, "allow_unreviewed_overrides", False):
+            raise ValueError(
+                f"lookback_days_52w ({self.lookback_52w}) cannot be less than 252 without explicit "
+                "allow_unreviewed_overrides=True (Rule 8 v2 locked definition)"
+            )
+
     def generate_signals(
         self,
         session_date: str,
@@ -67,11 +85,8 @@ class High52MomentumStrategy(BaseSwingStrategy):
         Scans market data for 52-week high breakout swing momentum candidates on `session_date`.
         Strictly point-in-time and fail-closed against unvalidated metadata or timing.
         """
-        # Timing Context Check: Explicit valid next trading session is mandatory (Rule 4 / T_PLUS_1)
-        if not context or not isinstance(context, Mapping):
-            return []
-        next_session = context.get("next_session")
-        if not next_session or not isinstance(next_session, str) or next_session <= session_date:
+        next_session = self.validate_timing_context(session_date, context)
+        if next_session is None:
             return []
 
         signals: List[SignalEvent] = []
@@ -93,23 +108,8 @@ class High52MomentumStrategy(BaseSwingStrategy):
             if len(bars) < self.lookback_52w:
                 continue
 
-            # Chronological bar validation (reject future bars, reject unordered bars)
-            valid_bars = True
-            for i, b in enumerate(bars):
-                b_date = str(b.get("session_date") or b.get("day", ""))
-                if b_date and b_date > session_date:
-                    valid_bars = False
-                    break
-                if i > 0 and b_date:
-                    prev_date = str(bars[i - 1].get("session_date") or bars[i - 1].get("day", ""))
-                    if prev_date and b_date < prev_date:
-                        valid_bars = False
-                        break
-            if not valid_bars:
-                continue
-
-            last_bar_date = str(bars[-1].get("session_date") or bars[-1].get("day", ""))
-            if last_bar_date and last_bar_date != session_date:
+            # Strict historical bar validation (strictly increasing unique dates, no future bars, final date == session_date)
+            if not self.validate_historical_bars(bars, session_date):
                 continue
 
             closes = [float(b["close"]) for b in bars]
