@@ -1791,3 +1791,228 @@ def test_schema_or_task_failure_outbox_failure_reconciled_on_second_pass():
             # - Claim envelope is now cleanly unlinked
             assert not os.path.exists(claimed_path), "Claim envelope was not unlinked after recovery pass reconciled outbox!"
 
+        # ----------------------------------------------------------------------
+        # Part B: Schema validation failure with outbox write failure
+        # ----------------------------------------------------------------------
+        msg_id_sch = "MSG-SCHEMA-FAIL-OUTBOX-FAIL"
+        corr_id_sch = "CORR-SCHEMA-FAIL"
+        claimed_sch = os.path.join(inbox_dir, f"{msg_id_sch}.claimed")
+        outbox_sch = os.path.join(outbox_dir, f"{corr_id_sch}_resp.json")
+        dead_sch = os.path.join(dead_dir, f"{msg_id_sch}.dead.json")
+
+        store.admit_submission(msg_id_sch, corr_id_sch, "hash", "CODEX", "ANTIGRAVITY", "sub", get_current_ist())
+        # Malformed envelope missing required fields
+        msg_sch_data = {
+            "message_id": msg_id_sch,
+            "correlation_id": corr_id_sch,
+            "status": "CLAIMED",
+            "worker_pid": 999999,
+        }
+        with open(claimed_sch, "w", encoding="utf-8") as f:
+            json.dump(msg_sch_data, f)
+
+        with patch("antigravity.daemons.inbox_worker.INBOX_DIR", inbox_dir), \
+             patch("antigravity.daemons.inbox_worker.OUTBOX_DIR", outbox_dir), \
+             patch("antigravity.daemons.inbox_worker.DEAD_LETTER_DIR", dead_dir), \
+             patch("antigravity.daemons.inbox_worker.get_agent_secret_key", return_value=secret_key):
+
+            orig_write = write_json_atomic
+            def write_fail_on_outbox_sch(path, data, **kwargs):
+                if str(path).endswith("_resp.json"):
+                    raise OSError("Injected disk error writing schema outbox")
+                return orig_write(path, data, **kwargs)
+
+            with patch("antigravity.daemons.inbox_worker.write_json_atomic", side_effect=write_fail_on_outbox_sch):
+                worker._process_message_locked(claimed_sch, msg_sch_data)
+
+            # Verification Pass 1:
+            assert store.get_message_state(msg_id_sch) == "DEAD"
+            assert os.path.exists(dead_sch)
+            assert not os.path.exists(outbox_sch)
+            assert os.path.exists(claimed_sch), "Claim envelope unlinked prematurely on schema outbox failure!"
+
+            # Pass 2: Reconciles outbox and unlinks claim
+            os.utime(claimed_sch, (time.time() - 200, time.time() - 200))
+            worker.recover_orphaned_claims()
+
+            assert os.path.exists(outbox_sch)
+            with open(outbox_sch, "r", encoding="utf-8") as f:
+                sch_resp = json.load(f)
+            assert sch_resp["status"] == "FAILED"
+            assert "SCHEMA" in sch_resp["error"]
+            assert not os.path.exists(claimed_sch), "Claim envelope not unlinked after schema outbox reconciliation!"
+
+        # ----------------------------------------------------------------------
+        # Part C: Completion persistence failure with outbox write failure
+        # ----------------------------------------------------------------------
+        msg_id_cpf = "MSG-CPF-OUTBOX-FAIL"
+        corr_id_cpf = "CORR-CPF-FAIL"
+        claimed_cpf = os.path.join(inbox_dir, f"{msg_id_cpf}.claimed")
+        outbox_cpf = os.path.join(outbox_dir, f"{corr_id_cpf}_resp.json")
+        dead_cpf = os.path.join(dead_dir, f"{msg_id_cpf}.dead.json")
+
+        store.admit_submission(msg_id_cpf, corr_id_cpf, "hash", "CODEX", "ANTIGRAVITY", "sub", get_current_ist())
+        msg_cpf_data = {
+            "message_id": msg_id_cpf,
+            "correlation_id": corr_id_cpf,
+            "sender": "CODEX",
+            "recipient": "ANTIGRAVITY",
+            "subject": "sub",
+            "body": {"task": "cpf_test"},
+            "status": "CLAIMED",
+            "worker_pid": 999999,
+            "attempt_count": 0,
+            "created_at_ist": get_current_ist(),
+            "nonce": "NONCE-CPF-FAIL",
+        }
+        msg_cpf_data["auth_signature"] = compute_envelope_hmac(msg_cpf_data, secret_key)
+        with open(claimed_cpf, "w", encoding="utf-8") as f:
+            json.dump(msg_cpf_data, f)
+
+        with patch("antigravity.daemons.inbox_worker.INBOX_DIR", inbox_dir), \
+             patch("antigravity.daemons.inbox_worker.OUTBOX_DIR", outbox_dir), \
+             patch("antigravity.daemons.inbox_worker.DEAD_LETTER_DIR", dead_dir), \
+             patch("antigravity.daemons.inbox_worker.get_agent_secret_key", return_value=secret_key):
+
+            def write_fail_on_outbox_cpf(path, data, **kwargs):
+                if str(path).endswith("_resp.json"):
+                    raise OSError("Injected disk error writing completion outbox")
+                return orig_write(path, data, **kwargs)
+
+            # Injected failure: task completes but mark_message_completed returns False
+            with patch.object(worker, "execute_task", return_value=("COMPLETED", "success_out", {}, None)), \
+                 patch.object(store, "mark_message_completed", return_value=False), \
+                 patch("antigravity.daemons.inbox_worker.write_json_atomic", side_effect=write_fail_on_outbox_cpf):
+
+                worker._process_message_locked(claimed_cpf, msg_cpf_data)
+
+            # Verification Pass 1:
+            assert store.get_message_state(msg_id_cpf) == "DEAD"
+            assert os.path.exists(dead_cpf)
+            assert not os.path.exists(outbox_cpf)
+            assert os.path.exists(claimed_cpf), "Claim envelope unlinked prematurely on completion outbox failure!"
+
+            # Pass 2: Reconciles outbox and unlinks claim
+            os.utime(claimed_cpf, (time.time() - 200, time.time() - 200))
+            worker.recover_orphaned_claims()
+
+            assert os.path.exists(outbox_cpf)
+            with open(outbox_cpf, "r", encoding="utf-8") as f:
+                cpf_resp = json.load(f)
+            assert cpf_resp["status"] == "FAILED"
+            assert cpf_resp["error"] == "COMPLETION_PERSISTENCE_FAILED"
+            assert not os.path.exists(claimed_cpf), "Claim envelope not unlinked after completion outbox reconciliation!"
+
+        # ----------------------------------------------------------------------
+        # Part D: Independent dead-letter reconciliation with claim absent
+        # ----------------------------------------------------------------------
+        msg_id_indep = "MSG-INDEP-NO-CLAIM"
+        corr_id_indep = "CORR-INDEP-NO-CLAIM"
+        outbox_indep = os.path.join(outbox_dir, f"{corr_id_indep}_resp.json")
+        dead_indep = os.path.join(dead_dir, f"{msg_id_indep}.dead.json")
+
+        store.admit_submission(msg_id_indep, corr_id_indep, "hash", "CODEX", "ANTIGRAVITY", "sub", get_current_ist())
+        indep_resp = {
+            "message_id": "resp_indep_123",
+            "correlation_id": corr_id_indep,
+            "status": "FAILED",
+            "error": "INDEPENDENT_DEAD_RECONCILED",
+        }
+        store.mark_message_dead(msg_id_indep, error="INDEPENDENT_DEAD_RECONCILED", response_json=json.dumps(indep_resp))
+
+        # Write dead letter file, NO .claimed file exists
+        with open(dead_indep, "w", encoding="utf-8") as f:
+            json.dump({
+                "message_id": msg_id_indep,
+                "correlation_id": corr_id_indep,
+                "status": "FAILED",
+                "error": "INDEPENDENT_DEAD_RECONCILED",
+            }, f)
+
+        assert not os.path.exists(outbox_indep)
+        assert not os.path.exists(os.path.join(inbox_dir, f"{msg_id_indep}.claimed"))
+
+        with patch("antigravity.daemons.inbox_worker.INBOX_DIR", inbox_dir), \
+             patch("antigravity.daemons.inbox_worker.OUTBOX_DIR", outbox_dir), \
+             patch("antigravity.daemons.inbox_worker.DEAD_LETTER_DIR", dead_dir):
+
+            worker.recover_orphaned_claims()
+
+            assert os.path.exists(outbox_indep), "Independent dead letter sweep failed to publish missing outbox file!"
+            with open(outbox_indep, "r", encoding="utf-8") as f:
+                reconciled_indep = json.load(f)
+            assert reconciled_indep["status"] == "FAILED"
+            assert reconciled_indep["error"] == "INDEPENDENT_DEAD_RECONCILED"
+
+
+# ==============================================================================
+# PROBE 24: Dead-Letter Sweep FileLock Prevents Overwriting Concurrent Publisher
+# ==============================================================================
+def test_dead_letter_sweep_filelock_prevents_overwriting_concurrent_publisher():
+    """
+    Finding P1 (Codex 2026-10-01):
+    Dead-letter recovery sweep must acquire the correlation FileLock and recheck existence
+    before publishing to outbox, preventing any race condition where an older/failed dead-letter
+    response overwrites a concurrently published winning response installed by a live worker.
+    """
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        inbox_dir = os.path.join(tmpdir, "inbox")
+        outbox_dir = os.path.join(tmpdir, "outbox")
+        dead_dir = os.path.join(tmpdir, "dead_letter")
+        os.makedirs(inbox_dir, exist_ok=True)
+        os.makedirs(outbox_dir, exist_ok=True)
+        os.makedirs(dead_dir, exist_ok=True)
+
+        db_path = os.path.join(tmpdir, "admissions.db")
+        store = DurableAdmissionStore(db_path)
+
+        corr_id = "CORR-RACE-C"
+        msg_id = "MSG-OLD-DEAD"
+        outbox_file = os.path.join(outbox_dir, f"{corr_id}_resp.json")
+        dead_file = os.path.join(dead_dir, f"{msg_id}.dead.json")
+
+        store.admit_submission(msg_id, corr_id, "hash", "CODEX", "ANTIGRAVITY", "sub", get_current_ist())
+        old_reply = {"message_id": "old_reply", "correlation_id": corr_id, "status": "FAILED"}
+        store.mark_message_dead(msg_id, error="OLD_FAILURE", response_json=json.dumps(old_reply))
+
+        # Write dead-letter file
+        dead_data = {
+            "message_id": msg_id,
+            "correlation_id": corr_id,
+            "status": "FAILED",
+            "error": "OLD_FAILURE",
+        }
+        with open(dead_file, "w", encoding="utf-8") as f:
+            json.dump(dead_data, f)
+
+        # Injected interleaving: When recovery sweep enters FileLock on outbox_file,
+        # simulate a concurrent publisher installing winning_reply BEFORE the recovery
+        # code re-checks existence and writes.
+        real_file_lock_enter = FileLock.__enter__
+        winning_reply = {"message_id": "winning_reply", "correlation_id": corr_id, "status": "COMPLETED"}
+
+        def hooked_lock_enter(lock_self):
+            res = real_file_lock_enter(lock_self)
+            # If this is the outbox lock for our correlation ID and file does not exist yet,
+            # simulate concurrent publisher installing winning_reply right after lock is acquired!
+            if lock_self.lock_path.startswith(outbox_file) and not os.path.exists(outbox_file):
+                write_json_atomic(outbox_file, winning_reply)
+            return res
+
+        with patch("antigravity.daemons.inbox_worker.INBOX_DIR", inbox_dir), \
+             patch("antigravity.daemons.inbox_worker.OUTBOX_DIR", outbox_dir), \
+             patch("antigravity.daemons.inbox_worker.DEAD_LETTER_DIR", dead_dir), \
+             patch.object(FileLock, "__enter__", side_effect=hooked_lock_enter, autospec=True):
+
+            worker = InboxWorker()
+            worker.db = store
+            worker.recover_orphaned_claims()
+
+            # Verify that winning_reply was NOT overwritten by old_reply!
+            assert os.path.exists(outbox_file)
+            with open(outbox_file, "r", encoding="utf-8") as f:
+                final_outbox = json.load(f)
+            assert final_outbox["message_id"] == "winning_reply", f"Winning reply was overwritten! Got: {final_outbox}"
+            assert final_outbox["status"] == "COMPLETED"
+
+

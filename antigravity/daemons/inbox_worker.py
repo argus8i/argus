@@ -1459,18 +1459,24 @@ class InboxWorker:
                                 # Leftover claim from completed message: reconcile outbox response before unlinking (Finding 5)
                                 outbox_file = os.path.join(OUTBOX_DIR, get_safe_filename(corr_id, "_resp.json"))
                                 if not os.path.exists(outbox_file):
-                                    saved_resp = store.get_message_response(msg_id)
-                                    if saved_resp:
-                                        try:
-                                            resp_data = json.loads(saved_resp)
-                                            write_json_atomic(outbox_file, resp_data)
-                                            logger.info("Reconciled missing outbox response for completed message %s from durable store", msg_id)
-                                        except Exception as pub_err:
-                                            logger.error("Failed to reconcile outbox response for %s: %s; preserving claim", msg_id, pub_err)
-                                            continue  # Do NOT unlink claim if publication reconciliation fails!
-                                    else:
-                                        # Response cannot be retrieved from store (missing or DB error); PRESERVE claim!
-                                        logger.error("Failed to retrieve durable response for completed message %s; preserving claim", msg_id)
+                                    try:
+                                        with FileLock(outbox_file, timeout_sec=5.0, stale_sec=3600.0):
+                                            if not os.path.exists(outbox_file):
+                                                saved_resp = store.get_message_response(msg_id)
+                                                if saved_resp:
+                                                    try:
+                                                        resp_data = json.loads(saved_resp)
+                                                        write_json_atomic(outbox_file, resp_data)
+                                                        logger.info("Reconciled missing outbox response for completed message %s from durable store", msg_id)
+                                                    except Exception as pub_err:
+                                                        logger.error("Failed to reconcile outbox response for %s: %s; preserving claim", msg_id, pub_err)
+                                                        continue  # Do NOT unlink claim if publication reconciliation fails!
+                                                else:
+                                                    # Response cannot be retrieved from store (missing or DB error); PRESERVE claim!
+                                                    logger.error("Failed to retrieve durable response for completed message %s; preserving claim", msg_id)
+                                                    continue
+                                    except TimeoutError:
+                                        logger.warning("Outbox lock busy while reconciling completed message %s; preserving claim", msg_id)
                                         continue
                                 try:
                                     os.remove(claimed_path)
@@ -1480,42 +1486,48 @@ class InboxWorker:
                             elif cur_st == "DEAD":
                                 outbox_file = os.path.join(OUTBOX_DIR, get_safe_filename(corr_id, "_resp.json"))
                                 if not os.path.exists(outbox_file):
-                                    saved_resp = store.get_message_response(msg_id)
-                                    if saved_resp:
-                                        try:
-                                            resp_data = json.loads(saved_resp)
-                                            write_json_atomic(outbox_file, resp_data)
-                                            logger.info("Reconciled missing outbox response for DEAD message %s from durable store", msg_id)
-                                        except Exception as pub_err:
-                                            logger.error("Failed to reconcile outbox response for DEAD message %s: %s; preserving claim", msg_id, pub_err)
-                                            continue
-                                    else:
-                                        # Reconstruct fallback failure response if key available
-                                        antigravity_key = get_agent_secret_key("ANTIGRAVITY")
-                                        if antigravity_key:
-                                            err_resp = {
-                                                "message_id": f"resp_{uuid.uuid4().hex[:12]}",
-                                                "correlation_id": corr_id,
-                                                "responder": "ANTIGRAVITY",
-                                                "route_agent": data.get("recipient"),
-                                                "status": "FAILED",
-                                                "created_at_ist": get_current_ist(),
-                                                "completed_at_ist": get_current_ist(),
-                                                "output_payload": None,
-                                                "artifact_hashes": {},
-                                                "nonce": uuid.uuid4().hex,
-                                                "error": data.get("error") or "Message marked DEAD without saved response",
-                                            }
-                                            err_resp["auth_signature"] = compute_envelope_hmac(err_resp, antigravity_key)
-                                            try:
-                                                write_json_atomic(outbox_file, err_resp)
-                                                store.mark_message_dead(msg_id, error=err_resp["error"], response_json=json.dumps(err_resp))
-                                            except Exception as rec_err:
-                                                logger.error("Failed to write reconstructed outbox response for DEAD message %s: %s; preserving claim", msg_id, rec_err)
-                                                continue
-                                        else:
-                                            logger.error("No ANTIGRAVITY key to reconcile DEAD message %s; preserving claim", msg_id)
-                                            continue
+                                    try:
+                                        with FileLock(outbox_file, timeout_sec=5.0, stale_sec=3600.0):
+                                            if not os.path.exists(outbox_file):
+                                                saved_resp = store.get_message_response(msg_id)
+                                                if saved_resp:
+                                                    try:
+                                                        resp_data = json.loads(saved_resp)
+                                                        write_json_atomic(outbox_file, resp_data)
+                                                        logger.info("Reconciled missing outbox response for DEAD message %s from durable store", msg_id)
+                                                    except Exception as pub_err:
+                                                        logger.error("Failed to reconcile outbox response for DEAD message %s: %s; preserving claim", msg_id, pub_err)
+                                                        continue
+                                                else:
+                                                    # Reconstruct fallback failure response if key available
+                                                    antigravity_key = get_agent_secret_key("ANTIGRAVITY")
+                                                    if antigravity_key:
+                                                        err_resp = {
+                                                            "message_id": f"resp_{uuid.uuid4().hex[:12]}",
+                                                            "correlation_id": corr_id,
+                                                            "responder": "ANTIGRAVITY",
+                                                            "route_agent": data.get("recipient"),
+                                                            "status": "FAILED",
+                                                            "created_at_ist": get_current_ist(),
+                                                            "completed_at_ist": get_current_ist(),
+                                                            "output_payload": None,
+                                                            "artifact_hashes": {},
+                                                            "nonce": uuid.uuid4().hex,
+                                                            "error": data.get("error") or "Message marked DEAD without saved response",
+                                                        }
+                                                        err_resp["auth_signature"] = compute_envelope_hmac(err_resp, antigravity_key)
+                                                        try:
+                                                            write_json_atomic(outbox_file, err_resp)
+                                                            store.mark_message_dead(msg_id, error=err_resp["error"], response_json=json.dumps(err_resp))
+                                                        except Exception as rec_err:
+                                                            logger.error("Failed to write reconstructed outbox response for DEAD message %s: %s; preserving claim", msg_id, rec_err)
+                                                            continue
+                                                    else:
+                                                        logger.error("No ANTIGRAVITY key to reconcile DEAD message %s; preserving claim", msg_id)
+                                                        continue
+                                    except TimeoutError:
+                                        logger.warning("Outbox lock busy while reconciling DEAD message %s; preserving claim", msg_id)
+                                        continue
 
                                 safe_dead = get_safe_filename(msg_id, ".dead.json")
                                 dead_path = os.path.join(DEAD_LETTER_DIR, safe_dead)
@@ -1589,7 +1601,12 @@ class InboxWorker:
                             outbox_file = os.path.join(OUTBOX_DIR, get_safe_filename(corr_id, "_resp.json"))
                             if not os.path.exists(outbox_file):
                                 try:
-                                    write_json_atomic(outbox_file, err_resp)
+                                    with FileLock(outbox_file, timeout_sec=5.0, stale_sec=3600.0):
+                                        if not os.path.exists(outbox_file):
+                                            write_json_atomic(outbox_file, err_resp)
+                                except TimeoutError:
+                                    logger.warning("Outbox lock busy while writing exhaustion response for %s; preserving claim", msg_id)
+                                    continue
                                 except Exception as pub_err:
                                     logger.error("Failed to write outbox response for exhausted claim %s: %s; preserving claim", msg_id, pub_err)
                                     continue
@@ -1648,15 +1665,20 @@ class InboxWorker:
                     if dl_corr_id and dl_msg_id:
                         dl_outbox = os.path.join(OUTBOX_DIR, get_safe_filename(dl_corr_id, "_resp.json"))
                         if not os.path.exists(dl_outbox):
-                            store = getattr(self, "db", None) or get_default_admission_store()
-                            if store:
-                                dl_resp = store.get_message_response(dl_msg_id)
-                                if dl_resp:
-                                    try:
-                                        write_json_atomic(dl_outbox, json.loads(dl_resp))
-                                        logger.info("Reconciled missing outbox response for dead letter %s from durable store", dl_msg_id)
-                                    except Exception:
-                                        pass
+                            try:
+                                with FileLock(dl_outbox, timeout_sec=5.0, stale_sec=3600.0):
+                                    if not os.path.exists(dl_outbox):
+                                        store = getattr(self, "db", None) or get_default_admission_store()
+                                        if store:
+                                            dl_resp = store.get_message_response(dl_msg_id)
+                                            if dl_resp:
+                                                try:
+                                                    write_json_atomic(dl_outbox, json.loads(dl_resp))
+                                                    logger.info("Reconciled missing outbox response for dead letter %s from durable store", dl_msg_id)
+                                                except Exception:
+                                                    pass
+                            except TimeoutError:
+                                pass
                 except Exception:
                     pass
         return recovered_count
