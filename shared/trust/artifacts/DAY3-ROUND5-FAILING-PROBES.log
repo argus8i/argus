@@ -1,0 +1,78 @@
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\yashw\swing trades\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\yashw\swing trades
+configfile: pytest.ini
+collecting ... collected 34 items / 32 deselected / 2 selected
+
+tests/test_day3_strategies.py::test_overridden_str_conversion_strips_alias FAILED [ 50%]
+tests/test_day3_strategies.py::test_datetime_timezone_is_detached FAILED [100%]
+
+================================== FAILURES ===================================
+_________________ test_overridden_str_conversion_strips_alias _________________
+
+    def test_overridden_str_conversion_strips_alias():
+        class SneakyStr(str):
+            def __init__(self, val):
+                self.tags = ["initial"]
+    
+            def __str__(self):
+                return self
+    
+        s = SneakyStr("hello")
+        event = ExitSignalEvent(
+            strategy_id="DELIVERY_ACCUMULATION",
+            symbol="SBIN",
+            session_date="2026-09-25",
+            position_id="POS-001",
+            reason="TARGET_HIT",
+            exit_price=850.0,
+            shares_to_exit=10,
+            trace={"key": s},
+        )
+        s.tags.append("mutated")
+        frozen_val = event.trace["key"]
+>       assert type(frozen_val) is str
+E       AssertionError: assert <class 'test_day3_strategies.test_overridden_str_conversion_strips_alias.<locals>.SneakyStr'> is str
+E        +  where <class 'test_day3_strategies.test_overridden_str_conversion_strips_alias.<locals>.SneakyStr'> = type('hello')
+
+tests\test_day3_strategies.py:1184: AssertionError
+_____________________ test_datetime_timezone_is_detached ______________________
+
+    def test_datetime_timezone_is_detached():
+        class MutableTz(tzinfo):
+            def __init__(self, offset_hours):
+                self.offset = timedelta(hours=offset_hours)
+    
+            def utcoffset(self, dt):
+                return self.offset
+    
+            def dst(self, dt):
+                return timedelta(0)
+    
+            def tzname(self, dt):
+                return "MUT"
+    
+        mut_tz = MutableTz(0)
+        dt = datetime(2026, 9, 25, 12, 0, tzinfo=mut_tz, fold=1)
+        event = ExitSignalEvent(
+            strategy_id="DELIVERY_ACCUMULATION",
+            symbol="SBIN",
+            session_date="2026-09-25",
+            position_id="POS-001",
+            reason="TARGET_HIT",
+            exit_price=850.0,
+            shares_to_exit=10,
+            trace={"ts": dt},
+        )
+        frozen_dt = event.trace["ts"]
+        assert type(frozen_dt) is datetime
+>       assert frozen_dt.fold == 1
+E       assert 0 == 1
+E        +  where 0 = datetime.datetime(2026, 9, 25, 12, 0, tzinfo=<test_day3_strategies.test_datetime_timezone_is_detached.<locals>.MutableTz object at 0x00000175EA9BAF90>).fold
+
+tests\test_day3_strategies.py:1217: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_day3_strategies.py::test_overridden_str_conversion_strips_alias
+FAILED tests/test_day3_strategies.py::test_datetime_timezone_is_detached - as...
+====================== 2 failed, 32 deselected in 0.11s =======================

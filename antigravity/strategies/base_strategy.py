@@ -63,16 +63,37 @@ def _deep_freeze(obj: Any) -> Any:
     elif isinstance(obj, bool):  # bool is a subclass of int, check bool before int
         return bool(obj)
     elif isinstance(obj, int):
-        return int(obj)
+        val = int.__int__(obj)
+        if type(val) is not int or val is obj:
+            val = int(str(obj))
+        return val
     elif isinstance(obj, float):
-        return float(obj)
+        val = float.__float__(obj)
+        if type(val) is not float or val is obj:
+            val = float(str(obj))
+        return val
     elif isinstance(obj, str):
-        return str(obj)
+        val = str.__str__(obj)
+        if type(val) is not str or val is obj:
+            val = "".join([chr(c) for c in bytes(obj.encode("utf-8"))])
+        return val
     elif isinstance(obj, bytes):
-        return bytes(obj)
+        val = bytes.__bytes__(obj)
+        if type(val) is not bytes or val is obj:
+            val = bytes(list(obj))
+        return val
     elif isinstance(obj, datetime):  # datetime is a subclass of date, check datetime before date
+        tz = None
+        if obj.tzinfo is not None:
+            offset = obj.utcoffset()
+            if offset is not None:
+                tz_name = obj.tzname()
+                tz = timezone(offset, name=tz_name) if tz_name else timezone(offset)
         return datetime(
-            obj.year, obj.month, obj.day, obj.hour, obj.minute, obj.second, obj.microsecond, obj.tzinfo
+            obj.year, obj.month, obj.day,
+            obj.hour, obj.minute, obj.second, obj.microsecond,
+            tzinfo=tz,
+            fold=getattr(obj, "fold", 0)
         )
     elif isinstance(obj, date):
         return date(obj.year, obj.month, obj.day)

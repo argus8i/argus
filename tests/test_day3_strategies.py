@@ -15,6 +15,7 @@ Verifies:
 
 import hashlib
 import math
+from datetime import datetime, date, timedelta, tzinfo, timezone
 from pathlib import Path
 import pytest
 
@@ -1157,6 +1158,70 @@ def test_codex_round4_blocker2_spec_binding_fail_closed(tmp_path):
     }
     with pytest.raises(ValueError, match="unapproved track|expected TRACK_2"):
         strat._validate_config()
+
+
+def test_overridden_str_conversion_strips_alias():
+    class SneakyStr(str):
+        def __init__(self, val):
+            self.tags = ["initial"]
+
+        def __str__(self):
+            return self
+
+    s = SneakyStr("hello")
+    event = ExitSignalEvent(
+        strategy_id="DELIVERY_ACCUMULATION",
+        symbol="SBIN",
+        session_date="2026-09-25",
+        position_id="POS-001",
+        reason="TARGET_HIT",
+        exit_price=850.0,
+        shares_to_exit=10,
+        trace={"key": s},
+    )
+    s.tags.append("mutated")
+    frozen_val = event.trace["key"]
+    assert type(frozen_val) is str
+    assert not hasattr(frozen_val, "tags")
+    assert frozen_val is not s
+
+
+def test_datetime_timezone_is_detached():
+    class MutableTz(tzinfo):
+        def __init__(self, offset_hours):
+            self.offset = timedelta(hours=offset_hours)
+
+        def utcoffset(self, dt):
+            return self.offset
+
+        def dst(self, dt):
+            return timedelta(0)
+
+        def tzname(self, dt):
+            return "MUT"
+
+    mut_tz = MutableTz(0)
+    dt = datetime(2026, 9, 25, 12, 0, tzinfo=mut_tz, fold=1)
+    event = ExitSignalEvent(
+        strategy_id="DELIVERY_ACCUMULATION",
+        symbol="SBIN",
+        session_date="2026-09-25",
+        position_id="POS-001",
+        reason="TARGET_HIT",
+        exit_price=850.0,
+        shares_to_exit=10,
+        trace={"ts": dt},
+    )
+    frozen_dt = event.trace["ts"]
+    assert type(frozen_dt) is datetime
+    assert frozen_dt.fold == 1
+    assert frozen_dt.isoformat() == "2026-09-25T12:00:00+00:00"
+
+    # Mutate the custom timezone externally
+    mut_tz.offset = timedelta(hours=5)
+    # The accepted trace timestamp must remain completely detached and unchanged
+    assert frozen_dt.isoformat() == "2026-09-25T12:00:00+00:00"
+
 
 
 
