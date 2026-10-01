@@ -235,14 +235,17 @@ def test_permanent_retention_and_terminal_immunity_from_recovery():
 
 
 # ==============================================================================
-# PROBE 4: Pre-Upgrade Recovery & Leftover Claim Reconciled without Resurrection
+# PROBE 4: Pre-Upgrade Recovery, Terminal Immunity & Leftover Claim Reconciled
 # ==============================================================================
 def test_pre_upgrade_recovery_and_leftover_reconciliation():
     """
-    Finding P2:
-    1. Pre-upgrade claims insert complete metadata into message_admissions.
-    2. Leftover .claimed files from already COMPLETED messages are reconciled (unlinked)
-       and NEVER reverted back to .json.
+    Finding P1 & P2:
+    1. Leftover .claimed files from already COMPLETED messages are reconciled (unlinked)
+       and NEVER reverted back to .json or marked DEAD, regardless of policy or attempt count.
+    2. Terminal states are protected in SQL: mark_message_dead cannot overwrite COMPLETED,
+       and mark_message_completed cannot overwrite DEAD.
+    3. mark_message_recovering returns False on zero rowcount update without touching nonce.
+    4. Recovery persistence failure preserves .claimed envelope.
     """
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         db_path = os.path.join(tmpdir, "admissions.db")
@@ -265,23 +268,73 @@ def test_pre_upgrade_recovery_and_leftover_reconciliation():
             worker = InboxWorker()
             worker.db = store
 
-            # Scenario A: Completed message has leftover .claimed file (e.g. crash after complete)
-            completed_msg_id = "MSG-LEFTOVER-COMP"
-            store.admit_submission(completed_msg_id, "CORR-L", "hash", "CODEX", "ANTIGRAVITY", "task", "2026-10-01T09:00:00+05:30")
-            store.mark_message_completed(completed_msg_id)
+            # Scenario A1: WORKER_RETRY mode with attempts >= MAX_ATTEMPTS on COMPLETED message
+            comp_id_1 = "MSG-LEFTOVER-MAX-ATTEMPTS"
+            store.admit_submission(comp_id_1, "CORR-L1", "hash", "CODEX", "ANTIGRAVITY", "task", "2026-10-01T09:00:00+05:30")
+            store.mark_message_completed(comp_id_1)
+            claimed_file_1 = os.path.join(inbox_dir, f"{comp_id_1}.claimed")
+            with open(claimed_file_1, "w", encoding="utf-8") as f:
+                json.dump({"message_id": comp_id_1, "worker_pid": 999999, "status": "CLAIMED", "attempt_count": 5}, f)
+            os.utime(claimed_file_1, (time.time() - 200, time.time() - 200))
 
-            claimed_file = os.path.join(inbox_dir, f"{completed_msg_id}.claimed")
-            with open(claimed_file, "w", encoding="utf-8") as f:
-                json.dump({"message_id": completed_msg_id, "worker_pid": 999999, "status": "CLAIMED"}, f)
-            os.utime(claimed_file, (time.time() - 200, time.time() - 200))
-
-            # Run orphan recovery
+            worker.orphan_recovery_policy = "WORKER_RETRY"
             worker.recover_orphaned_claims()
 
-            # Leftover .claimed file must be removed, and NOT reverted to .json!
-            assert not os.path.exists(claimed_file), "Leftover claim file was not unlinked"
-            assert not os.path.exists(os.path.join(inbox_dir, f"{completed_msg_id}.json")), "Completed message was resurrected as .json!"
-            assert store.get_message_state(completed_msg_id) == "COMPLETED"
+            assert not os.path.exists(claimed_file_1), "Leftover claim file was not unlinked"
+            assert not os.path.exists(os.path.join(inbox_dir, f"{comp_id_1}.json")), "Resurrected as .json"
+            assert not os.path.exists(os.path.join(dead_dir, f"{comp_id_1}.dead.json")), "COMPLETED message was wrongly dead-lettered!"
+            assert store.get_message_state(comp_id_1) == "COMPLETED"
+
+            # Scenario A2: RETRY_REQUIRED policy on COMPLETED message
+            comp_id_2 = "MSG-LEFTOVER-RETRY-REQ"
+            store.admit_submission(comp_id_2, "CORR-L2", "hash", "CODEX", "ANTIGRAVITY", "task", "2026-10-01T09:00:00+05:30")
+            store.mark_message_completed(comp_id_2)
+            claimed_file_2 = os.path.join(inbox_dir, f"{comp_id_2}.claimed")
+            with open(claimed_file_2, "w", encoding="utf-8") as f:
+                json.dump({"message_id": comp_id_2, "worker_pid": 999999, "status": "CLAIMED", "attempt_count": 0}, f)
+            os.utime(claimed_file_2, (time.time() - 200, time.time() - 200))
+
+            worker.orphan_recovery_policy = "RETRY_REQUIRED"
+            worker.recover_orphaned_claims()
+
+            assert not os.path.exists(claimed_file_2), "Leftover claim file was not unlinked"
+            assert not os.path.exists(os.path.join(dead_dir, f"{comp_id_2}.dead.json")), "COMPLETED message was wrongly dead-lettered under RETRY_REQUIRED!"
+            assert store.get_message_state(comp_id_2) == "COMPLETED"
+
+            # Scenario B: SQL terminal state protection
+            assert store.mark_message_dead(comp_id_1, error="MUTATION_ATTEMPT") is False
+            assert store.get_message_state(comp_id_1) == "COMPLETED"
+
+            dead_id = "MSG-DEAD-TERM"
+            store.admit_submission(dead_id, "CORR-D", "hash", "CODEX", "ANTIGRAVITY", "task", "2026-10-01T09:00:00+05:30")
+            store.mark_message_dead(dead_id, error="INITIAL_DEAD")
+            assert store.mark_message_completed(dead_id) is False
+            assert store.get_message_state(dead_id) == "DEAD"
+
+            # Scenario C: Zero-rowcount recovery refusal in mark_message_recovering
+            store.check_and_record_nonce("TEST-NONCE-ZC", "CODEX", "2026-10-01T09:00:00+05:30", message_id=comp_id_1)
+            auth_res = store.mark_message_recovering(comp_id_1, nonce="TEST-NONCE-ZC")
+            assert auth_res is False, "mark_message_recovering authorized recovery on COMPLETED message!"
+            # Verify nonce state was NOT mutated to RECOVERED_RETRY_PENDING
+            import sqlite3
+            with sqlite3.connect(store.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                nrow = conn.execute("SELECT state FROM seen_nonces WHERE nonce = 'TEST-NONCE-ZC'").fetchone()
+                assert nrow["state"] != "RECOVERED_RETRY_PENDING"
+
+            # Scenario D: Recovery persistence failure preserves envelope
+            active_id = "MSG-ACTIVE-REC-FAIL"
+            store.admit_submission(active_id, "CORR-A", "hash", "CODEX", "ANTIGRAVITY", "task", "2026-10-01T09:00:00+05:30")
+            claimed_active = os.path.join(inbox_dir, f"{active_id}.claimed")
+            with open(claimed_active, "w", encoding="utf-8") as f:
+                json.dump({"message_id": active_id, "worker_pid": 999999, "status": "CLAIMED"}, f)
+            os.utime(claimed_active, (time.time() - 200, time.time() - 200))
+
+            worker.orphan_recovery_policy = "WORKER_RETRY"
+            with patch.object(store, "mark_message_recovering", return_value=False):
+                worker.recover_orphaned_claims()
+                # Must preserve .claimed file when recovery authorization fails due to DB error!
+                assert os.path.exists(claimed_active), "Recovery persistence error deleted the envelope!"
 
 
 # ==============================================================================
@@ -380,28 +433,34 @@ def test_claim_message_rejects_terminal_and_db_errors():
 
 
 # ==============================================================================
-# PROBE 7: Durable Completion & Dead-Letter Updates with Claim Failure Abort
+# PROBE 7: Durable Completion & Dead-Letter Updates with Zero-Loss Claim Failure
 # ==============================================================================
 def test_durable_lifecycle_transitions_and_claim_failure_abort():
     """
-    Finding P2:
+    Finding P1 & P2:
     1. Task completions and dead-lettering durably update admission store state.
-    2. If store.mark_message_claimed returns False, claim_message aborts and cleans up.
+    2. If store.mark_message_claimed returns False on active message, claim_message
+       aborts AND restores the envelope in the inbox (zero envelope loss).
+    3. If store.mark_message_completed returns False, _process_message_locked
+       routes to dead letter with COMPLETION_PERSISTENCE_FAILED.
     """
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         db_path = os.path.join(tmpdir, "admissions.db")
         inbox_dir = os.path.join(tmpdir, "inbox")
         outbox_dir = os.path.join(tmpdir, "outbox")
         dead_dir = os.path.join(tmpdir, "dead")
+        archive_dir = os.path.join(tmpdir, "archive")
         os.makedirs(inbox_dir, exist_ok=True)
         os.makedirs(outbox_dir, exist_ok=True)
         os.makedirs(dead_dir, exist_ok=True)
+        os.makedirs(archive_dir, exist_ok=True)
 
         store = DurableAdmissionStore(db_path)
 
         with patch("antigravity.daemons.inbox_worker.INBOX_DIR", inbox_dir), \
              patch("antigravity.daemons.inbox_worker.OUTBOX_DIR", outbox_dir), \
-             patch("antigravity.daemons.inbox_worker.DEAD_LETTER_DIR", dead_dir):
+             patch("antigravity.daemons.inbox_worker.DEAD_LETTER_DIR", dead_dir), \
+             patch("antigravity.daemons.inbox_worker.ARCHIVE_DIR", archive_dir):
             worker = InboxWorker()
             worker.db = store
 
@@ -414,7 +473,8 @@ def test_durable_lifecycle_transitions_and_claim_failure_abort():
             with open(claimed_path, "w", encoding="utf-8") as f:
                 json.dump(msg_data, f)
 
-            worker.route_to_dead_letter(claimed_path, msg_data, "ERROR_TEST")
+            persisted = worker.route_to_dead_letter(claimed_path, msg_data, "ERROR_TEST")
+            assert persisted is True
             assert store.get_message_state(msg_id) == "DEAD"
 
             # Completion updates store
@@ -423,36 +483,86 @@ def test_durable_lifecycle_transitions_and_claim_failure_abort():
             assert store.mark_message_completed(msg_id_comp) is True
             assert store.get_message_state(msg_id_comp) == "COMPLETED"
 
-            # Claim failure abort: if mark_message_claimed fails, claim_message returns None
+            # Claim failure zero-loss envelope preservation:
+            # If mark_message_claimed fails due to DB error, claim_message returns None
+            # and RESTORES the .json envelope in inbox with status 'CREATED'!
             msg_id_fail = "MSG-CLAIM-FAIL"
+            store.admit_submission(msg_id_fail, "CORR-FAIL", "hash", "CODEX", "ANTIGRAVITY", "sub", "2026-10-01T09:00:00+05:30")
             inbox_fail = os.path.join(inbox_dir, f"{msg_id_fail}.json")
             with open(inbox_fail, "w", encoding="utf-8") as f:
-                json.dump({"message_id": msg_id_fail, "status": "CREATED"}, f)
+                json.dump({
+                    "message_id": msg_id_fail, "correlation_id": "CORR-FAIL",
+                    "sender": "CODEX", "recipient": "ANTIGRAVITY", "subject": "sub",
+                    "status": "CREATED", "created_at_ist": "2026-10-01T09:00:00+05:30",
+                    "body": "test"
+                }, f)
 
             with patch.object(store, "mark_message_claimed", return_value=False), \
                  patch("antigravity.daemons.inbox_worker.validate_message_schema", return_value=(True, None)):
                 claim_res = worker.claim_message(f"{msg_id_fail}.json")
                 assert claim_res is None
                 assert not os.path.exists(os.path.join(inbox_dir, f"{msg_id_fail}.claimed"))
+                # ZERO LOSS: The message envelope must still exist in the inbox!
+                assert os.path.exists(inbox_fail), "Persistence failure deleted the only recoverable envelope!"
+                with open(inbox_fail, "r", encoding="utf-8") as f:
+                    restored_data = json.load(f)
+                assert restored_data["status"] == "CREATED"
+
+            # Completion persistence failure handling:
+            # If mark_message_completed returns False, routes to dead letter with COMPLETION_PERSISTENCE_FAILED
+            msg_id_comp_fail = "MSG-COMP-PERSIST-FAIL"
+            store.admit_submission(msg_id_comp_fail, "CORR-CPF", "hash", "CODEX", "ANTIGRAVITY", "sub", "2026-10-01T09:00:00+05:30")
+            claimed_cpf = os.path.join(inbox_dir, f"{msg_id_comp_fail}.claimed")
+            msg_cpf = {
+                "message_id": msg_id_comp_fail, "correlation_id": "CORR-CPF", "nonce": "NONCE-CPF",
+                "recipient": "ANTIGRAVITY", "sender": "CODEX", "status": "CLAIMED"
+            }
+            with open(claimed_cpf, "w", encoding="utf-8") as f:
+                json.dump(msg_cpf, f)
+
+            with patch.object(worker, "execute_task", return_value=("COMPLETED", "output", {}, None)), \
+                 patch("antigravity.daemons.inbox_worker.validate_message_schema", return_value=(True, None)), \
+                 patch.object(store, "mark_message_completed", return_value=False):
+                worker._process_message_locked(claimed_cpf, msg_cpf)
+                # Must be dead-lettered due to completion persistence failure
+                dead_cpf = os.path.join(dead_dir, f"{msg_id_comp_fail}.dead.json")
+                assert os.path.exists(dead_cpf), "Completion persistence failure was not routed to dead letter!"
+                with open(dead_cpf, "r", encoding="utf-8") as f:
+                    dead_cpf_data = json.load(f)
+                assert dead_cpf_data["error"] == "COMPLETION_PERSISTENCE_FAILED"
 
 
 # ==============================================================================
-# PROBE 8: Strict SemVer 2.0.0 Floor & Pre-Release Rejection (Fails Closed)
+# PROBE 8: Strict SemVer 2.0.0 Floor & Decoupled Bus Import
 # ==============================================================================
 def test_codex_bin_strict_semver_floor_and_rejection():
     """
     Finding P2:
-    1. Outdated version (0.158.0) rejected.
-    2. Pre-release version (0.159.2-rc.1) rejected.
-    3. If no candidate qualifies, get_codex_bin() raises RuntimeError (fail-closed).
-    4. Valid version (0.159.2) accepted.
+    1. Anchored SemVer rejects:
+       - 'codex-cli 0.158.0' (below floor)
+       - 'codex-cli 0.159.2-rc.1' (prerelease)
+       - 'codex-cli 0.159.2-' (trailing hyphen)
+       - 'codex-cli 00.159.2' (leading zeros)
+       - 'unverified text 0.159.2garbage' (trailing/leading garbage)
+    2. Anchored SemVer accepts:
+       - 'codex-cli 0.159.2'
+       - 'codex 0.159.2'
+       - '0.159.2'
+       - 'codex-cli 0.160.0'
+    3. get_codex_bin raises RuntimeError if no candidate qualifies.
+    4. Bus import succeeds and tri_agent_bus.CODEX_BIN is None even if Codex is absent.
+    5. ask_codex_detailed returns error dict without unhandled exception when resolution fails.
     """
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         bin_old = os.path.join(tmpdir, "old_codex.exe")
         bin_rc = os.path.join(tmpdir, "rc_codex.exe")
+        bin_trail_hyphen = os.path.join(tmpdir, "trail_hyphen_codex.exe")
+        bin_leading_zero = os.path.join(tmpdir, "leading_zero_codex.exe")
+        bin_garbage = os.path.join(tmpdir, "garbage_codex.exe")
         bin_valid = os.path.join(tmpdir, "valid_codex.exe")
 
-        for p in (bin_old, bin_rc, bin_valid):
+        all_bins = [bin_old, bin_rc, bin_trail_hyphen, bin_leading_zero, bin_garbage, bin_valid]
+        for p in all_bins:
             with open(p, "wb") as f:
                 f.write(b"MZ" + b"\x00" * 100)
 
@@ -464,14 +574,21 @@ def test_codex_bin_strict_semver_floor_and_rejection():
                 res.stdout = "codex-cli 0.158.0\n"
             elif b == bin_rc:
                 res.stdout = "codex-cli 0.159.2-rc.1\n"
+            elif b == bin_trail_hyphen:
+                res.stdout = "codex-cli 0.159.2-\n"
+            elif b == bin_leading_zero:
+                res.stdout = "codex-cli 00.159.2\n"
+            elif b == bin_garbage:
+                res.stdout = "unverified text 0.159.2garbage\n"
             elif b == bin_valid:
                 res.stdout = "codex-cli 0.159.2\n"
             return res
 
-        # Case 1: Only outdated (0.158.0) and pre-release (0.159.2-rc.1) exist -> MUST RAISE RuntimeError
+        # Case 1: Outdated, pre-release, malformed SemVer all REJECTED -> MUST RAISE RuntimeError
+        bad_candidates = [bin_old, bin_rc, bin_trail_hyphen, bin_leading_zero, bin_garbage]
         with patch("subprocess.run", side_effect=mock_subprocess), \
-             patch("antigravity.daemons.tri_agent_bus.glob.glob", return_value=[bin_old, bin_rc]), \
-             patch("os.path.isfile", side_effect=lambda p: p in (bin_old, bin_rc)):
+             patch("antigravity.daemons.tri_agent_bus.glob.glob", return_value=bad_candidates), \
+             patch("os.path.isfile", side_effect=lambda p: p in bad_candidates):
 
             with pytest.raises(RuntimeError) as exc_info:
                 get_codex_bin()
@@ -479,8 +596,19 @@ def test_codex_bin_strict_semver_floor_and_rejection():
 
         # Case 2: Valid candidate (0.159.2) present -> resolved
         with patch("subprocess.run", side_effect=mock_subprocess), \
-             patch("antigravity.daemons.tri_agent_bus.glob.glob", return_value=[bin_old, bin_rc, bin_valid]), \
-             patch("os.path.isfile", side_effect=lambda p: p in (bin_old, bin_rc, bin_valid)):
+             patch("antigravity.daemons.tri_agent_bus.glob.glob", return_value=all_bins), \
+             patch("os.path.isfile", side_effect=lambda p: p in all_bins):
 
             resolved = get_codex_bin()
             assert resolved == bin_valid
+
+        # Case 3: Bus import decoupled from Codex resolution
+        import antigravity.daemons.tri_agent_bus as bus
+        assert bus.CODEX_BIN is None, "CODEX_BIN must be lazily resolved, not bound at module import!"
+
+        # Case 4: ask_codex_detailed handles missing Codex gracefully
+        with patch("antigravity.daemons.tri_agent_bus.get_codex_bin", side_effect=RuntimeError("No candidate")):
+            res = bus.ask_codex_detailed("test prompt")
+            assert res["success"] is False
+            assert "Failed to resolve compatible Codex binary" in res["error"]
+

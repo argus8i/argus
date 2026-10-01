@@ -665,7 +665,7 @@ class DurableAdmissionStore:
         try:
             with sqlite3.connect(self.db_path, timeout=10.0) as conn:
                 cur = conn.execute(
-                    "UPDATE message_admissions SET state = 'COMPLETED', completed_at = ? WHERE message_id = ?",
+                    "UPDATE message_admissions SET state = 'COMPLETED', completed_at = ? WHERE message_id = ? AND state != 'DEAD'",
                     (time.time(), message_id)
                 )
                 conn.commit()
@@ -679,7 +679,7 @@ class DurableAdmissionStore:
         try:
             with sqlite3.connect(self.db_path, timeout=10.0) as conn:
                 cur = conn.execute(
-                    "UPDATE message_admissions SET state = 'DEAD', completed_at = ? WHERE message_id = ?",
+                    "UPDATE message_admissions SET state = 'DEAD', completed_at = ? WHERE message_id = ? AND state != 'COMPLETED'",
                     (time.time(), message_id)
                 )
                 conn.commit()
@@ -729,10 +729,13 @@ class DurableAdmissionStore:
                     if row["state"] in ("COMPLETED", "DEAD"):
                         # Terminal state: NEVER reverse back to RECOVERING!
                         return False
-                    conn.execute(
+                    cur_up = conn.execute(
                         "UPDATE message_admissions SET state = 'RECOVERING', attempt_count = attempt_count + 1 WHERE message_id = ? AND state NOT IN ('COMPLETED', 'DEAD')",
                         (message_id,)
                     )
+                    if cur_up.rowcount == 0:
+                        # Row transition did not occur (e.g. concurrent transition to terminal state)
+                        return False
                 if nonce:
                     conn.execute("UPDATE seen_nonces SET state = 'RECOVERED_RETRY_PENDING' WHERE nonce = ?", (nonce,))
                 conn.commit()
@@ -1282,10 +1285,23 @@ class InboxWorker:
                         if _pid_is_running(worker_pid, expected_create_time=worker_ct):
                             if stale_threshold_sec is None or worker_pid != os.getpid():
                                 continue
-                        attempts = data.get("attempt_count", 0) + 1
-                        data["attempt_count"] = attempts
                         msg_id = data.get("message_id", filename.replace(".claimed", ""))
                         corr_id = data.get("correlation_id", uuid.uuid4().hex)
+
+                        # Reconcile terminal state first across ALL policy and attempt branches (Finding 1)
+                        store = getattr(self, "db", None) or get_default_admission_store()
+                        if store:
+                            cur_st = store.get_message_state(msg_id)
+                            if cur_st in ("COMPLETED", "DEAD"):
+                                # Leftover claim from terminal message: clean up leftover .claimed and do not revert, retry, or mark dead!
+                                try:
+                                    os.remove(claimed_path)
+                                except OSError:
+                                    pass
+                                continue
+
+                        attempts = data.get("attempt_count", 0) + 1
+                        data["attempt_count"] = attempts
 
                         if self.orphan_recovery_policy == "RETRY_REQUIRED" or attempts >= MAX_ATTEMPTS:
                             # Explicit RETRY_REQUIRED or dead-letter when max attempts reached
@@ -1298,7 +1314,6 @@ class InboxWorker:
                                 else f"MAX_ATTEMPTS_EXCEEDED: Claim timed out {attempts} times."
                             )
                             write_json_atomic(dead_path, data)
-                            store = getattr(self, "db", None) or get_default_admission_store()
                             if store and msg_id:
                                 store.mark_message_dead(msg_id, error=data["error"])
 
@@ -1328,16 +1343,7 @@ class InboxWorker:
                         else:
                             # WORKER_RETRY mode: Mark nonce and admission for recovery
                             nonce = data.get("nonce")
-                            store = getattr(self, "db", None) or get_default_admission_store()
                             if store:
-                                cur_st = store.get_message_state(msg_id)
-                                if cur_st in ("COMPLETED", "DEAD"):
-                                    # Leftover claim from terminal message: clean up leftover .claimed and do not revert
-                                    try:
-                                        os.remove(claimed_path)
-                                    except OSError:
-                                        pass
-                                    continue
                                 authorized = store.mark_message_recovering(
                                     msg_id,
                                     nonce=nonce,
@@ -1349,10 +1355,15 @@ class InboxWorker:
                                     timestamp_ist=data.get("created_at_ist"),
                                 )
                                 if not authorized:
-                                    try:
-                                        os.remove(claimed_path)
-                                    except OSError:
-                                        pass
+                                    cur_st_check = store.get_message_state(msg_id)
+                                    if cur_st_check in ("COMPLETED", "DEAD"):
+                                        try:
+                                            os.remove(claimed_path)
+                                        except OSError:
+                                            pass
+                                    else:
+                                        # Persistence failure: preserve envelope! Do NOT delete claimed_path! (Finding 2)
+                                        logger.error("Failed to authorize recovery for %s due to persistence error; preserving envelope", msg_id)
                                     continue
                             if nonce:
                                 replay_store = get_default_admission_store()
@@ -1495,11 +1506,26 @@ class InboxWorker:
                             timestamp_ist=data.get("created_at_ist"),
                         )
                         if not claimed_ok:
-                            # State transition failed (e.g. database error or already terminal): fail closed
-                            try:
-                                os.remove(claimed_path)
-                            except OSError:
-                                pass
+                            # State transition failed: distinguish terminal refusal from persistence failure (Finding 2)
+                            msg_id = data.get("message_id", json_filename.replace(".json", ""))
+                            cur_st = store.get_message_state(msg_id)
+                            if cur_st in ("COMPLETED", "DEAD", "CLAIMED"):
+                                try:
+                                    os.remove(claimed_path)
+                                except OSError:
+                                    pass
+                            else:
+                                # Persistence failure (QUEUED, RECOVERING, ERROR, None):
+                                # Revert envelope to base_path with CREATED status so message is preserved in inbox!
+                                data["status"] = "CREATED"
+                                for rm_k in ("worker_pid", "worker_create_time_nt", "claimed_at_ist", "claimed_at_ts"):
+                                    data.pop(rm_k, None)
+                                write_json_atomic(claimed_path, data)
+                                try:
+                                    os.replace(claimed_path, base_path)
+                                except OSError:
+                                    pass
+                                logger.error("Failed to persist CLAIMED state for message %s (cur_state=%s); preserved envelope in inbox", msg_id, cur_st)
                             return None
                     try:
                         os.utime(claimed_path, (time.time(), time.time()))
@@ -1527,7 +1553,7 @@ class InboxWorker:
         except TimeoutError:
             return None
 
-    def route_to_dead_letter(self, claimed_path: str, msg: Dict[str, Any], error_msg: str):
+    def route_to_dead_letter(self, claimed_path: str, msg: Dict[str, Any], error_msg: str) -> bool:
         """Moves a rejected or failed message to dead_letter with full diagnostics using sanitized path."""
         msg_id = msg.get("message_id")
         safe_name = get_safe_filename(msg_id, ".dead.json")
@@ -1536,13 +1562,17 @@ class InboxWorker:
         msg["error"] = error_msg
         msg["failed_at_ist"] = get_current_ist()
         write_json_atomic(dead_path, msg)
+        persisted = True
         store = getattr(self, "db", None) or get_default_admission_store()
         if store and msg_id:
-            store.mark_message_dead(msg_id, error=error_msg)
+            persisted = store.mark_message_dead(msg_id, error=error_msg)
+            if not persisted:
+                logger.error("Failed to persist DEAD state for message %s in durable store", msg_id)
         try:
             os.remove(claimed_path)
         except OSError:
             pass
+        return persisted
 
     def execute_task(self, msg: Dict[str, Any], claimed_path: Optional[str] = None) -> Tuple[str, Any, Dict[str, str], Optional[str]]:
         """
@@ -1821,10 +1851,17 @@ class InboxWorker:
         nonce = msg.get("nonce")
         store = getattr(self, "db", None) or get_default_admission_store()
         if status == "COMPLETED":
+            comp_ok = True
+            if store and msg_id:
+                comp_ok = store.mark_message_completed(msg_id)
+            if not comp_ok:
+                logger.error("Failed to persist COMPLETED state for message %s in durable store; routing to dead-letter", msg_id)
+                if nonce and store:
+                    store.mark_nonce_failed(nonce, msg_id)
+                self.route_to_dead_letter(claimed_path, msg, "COMPLETION_PERSISTENCE_FAILED")
+                return
             if nonce and store:
                 store.mark_nonce_completed(nonce, msg_id)
-            if store and msg_id:
-                store.mark_message_completed(msg_id)
             msg["status"] = "COMPLETED"
             msg["completed_at_ist"] = resp_envelope["completed_at_ist"]
             safe_archive_name = get_safe_filename(msg_id, ".json")

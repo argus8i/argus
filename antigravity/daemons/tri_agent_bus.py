@@ -119,8 +119,11 @@ def get_codex_bin() -> str:
                     res = subprocess.run([c, "--version"], capture_output=True, text=True, timeout=5)
                     if res.returncode == 0 and res.stdout.strip():
                         v_str = res.stdout.strip()
-                        # Strict SemVer 2.0.0 parsing: digits.digits.digits with optional pre-release tag
-                        m = re.search(r"\b(\d+)\.(\d+)\.(\d+)(?:-([a-zA-Z0-9.\-_]+))?", v_str)
+                        # Strict SemVer 2.0.0 parsing: anchored regex enforcing SemVer 2.0.0 without leading zeros
+                        m = re.match(
+                            r"^(?:(?:codex|codex-cli)\s+)?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$",
+                            v_str,
+                        )
                         if m:
                             maj, min_, pat = int(m.group(1)), int(m.group(2)), int(m.group(3))
                             prerelease = m.group(4)
@@ -157,7 +160,7 @@ def get_antigravity_bin() -> str:
 
 
 CLAUDE_BIN = get_claude_bin()
-CODEX_BIN = get_codex_bin()
+CODEX_BIN = None  # Resolved lazily at dispatch boundary to avoid blocking module import
 AGY_BIN = get_antigravity_bin()
 WORKSPACE = r"c:\Users\yashw\swing trades"
 from antigravity.daemons.agent_access import prepare_dispatch, TASK_BOUNDARIES
@@ -432,8 +435,15 @@ tokens used
     """
     recipient = "OpenAI Codex"
     dispatch_id = begin_dispatch(recipient, prompt)
-    if not os.path.exists(CODEX_BIN):
-        err = f"ERROR: Codex binary not found at {CODEX_BIN}"
+    try:
+        codex_bin = CODEX_BIN or get_codex_bin()
+    except Exception as e:
+        err = f"ERROR: Failed to resolve compatible Codex binary: {e}"
+        log_interaction(recipient, prompt, err, 0.0, 1, dispatch_id)
+        return {"success": False, "output": err, "returncode": 1, "elapsed": 0.0, "error": err}
+
+    if not codex_bin or not os.path.exists(codex_bin):
+        err = f"ERROR: Codex binary not found at {codex_bin}"
         log_interaction(recipient, prompt, err, 0.0, 1, dispatch_id)
         return {"success": False, "output": err, "returncode": 1, "elapsed": 0.0, "error": err}
 
@@ -448,7 +458,7 @@ tokens used
             boundary = CHAT_BOUNDARIES if chat_only else TASK_BOUNDARIES
             creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
             proc = subprocess.run(
-                [CODEX_BIN, "exec", "--skip-git-repo-check", "--ephemeral",
+                [codex_bin, "exec", "--skip-git-repo-check", "--ephemeral",
                  *cli_flags,
                  "--output-last-message", last_message_path, "-"],
                 input=boundary + prompt,

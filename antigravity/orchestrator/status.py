@@ -41,9 +41,9 @@ from antigravity.daemons.tri_agent_bus import (
 )
 
 
-def inspect_agent_health(agent_name: str, binary_path: str) -> Dict[str, Any]:
+def inspect_agent_health(agent_name: str, binary_path: Optional[str]) -> Dict[str, Any]:
     """Inspects agent binary existence and external key readiness."""
-    bin_exists = os.path.exists(binary_path)
+    bin_exists = bool(binary_path and os.path.exists(binary_path))
     key = get_agent_secret_key(agent_name)
     key_configured = bool(key and len(key) >= 16)
 
@@ -62,7 +62,14 @@ def get_hub_status() -> Dict[str, Any]:
     # 1. Adapter Health
     antigravity_health = inspect_agent_health("ANTIGRAVITY", AGY_BIN)
     claude_health = inspect_agent_health("CLAUDE", CLAUDE_BIN)
-    codex_health = inspect_agent_health("CODEX", CODEX_BIN)
+    codex_bin = CODEX_BIN
+    if not codex_bin:
+        try:
+            from antigravity.daemons.tri_agent_bus import get_codex_bin
+            codex_bin = get_codex_bin()
+        except Exception:
+            codex_bin = None
+    codex_health = inspect_agent_health("CODEX", codex_bin)
 
     # 2. Queue & Task Counts
     inbox_files = glob.glob(os.path.join(INBOX_DIR, "*.json"))
