@@ -666,12 +666,32 @@ class DurableAdmissionStore:
         """Persists COMPLETED terminal state with completion timestamp and optional response JSON in admission store."""
         try:
             with sqlite3.connect(self.db_path, timeout=10.0) as conn:
-                cur = conn.execute(
-                    "UPDATE message_admissions SET state = 'COMPLETED', completed_at = ?, response_json = COALESCE(?, response_json) WHERE message_id = ? AND state != 'DEAD'",
-                    (time.time(), response_json, message_id)
-                )
-                conn.commit()
-                return cur.rowcount > 0
+                conn.row_factory = sqlite3.Row
+                cur = conn.execute("SELECT state FROM message_admissions WHERE message_id = ?", (message_id,))
+                row = cur.fetchone()
+                if row is None:
+                    # Pre-upgrade or unrecorded envelope: record directly as COMPLETED
+                    conn.execute(
+                        """
+                        INSERT INTO message_admissions (
+                            message_id, correlation_id, payload_hash, sender, recipient, subject,
+                            admitted_at, original_timestamp_ist, state, completed_at, response_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'COMPLETED', ?, ?)
+                        """,
+                        (message_id, f"corr_{message_id}", "", "", "", "", time.time(), get_current_ist(), time.time(), response_json)
+                    )
+                    conn.commit()
+                    return True
+                elif row["state"] == "DEAD":
+                    # Cannot overwrite DEAD terminal state
+                    return False
+                else:
+                    cur_up = conn.execute(
+                        "UPDATE message_admissions SET state = 'COMPLETED', completed_at = ?, response_json = COALESCE(?, response_json) WHERE message_id = ? AND state != 'DEAD'",
+                        (time.time(), response_json, message_id)
+                    )
+                    conn.commit()
+                    return cur_up.rowcount > 0
         except Exception as e:
             logger.error("Failed to mark message %s completed in store: %s", message_id, e)
             return False
@@ -704,12 +724,32 @@ class DurableAdmissionStore:
         """Persists DEAD terminal state with completion timestamp in admission store."""
         try:
             with sqlite3.connect(self.db_path, timeout=10.0) as conn:
-                cur = conn.execute(
-                    "UPDATE message_admissions SET state = 'DEAD', completed_at = ? WHERE message_id = ? AND state != 'COMPLETED'",
-                    (time.time(), message_id)
-                )
-                conn.commit()
-                return cur.rowcount > 0
+                conn.row_factory = sqlite3.Row
+                cur = conn.execute("SELECT state FROM message_admissions WHERE message_id = ?", (message_id,))
+                row = cur.fetchone()
+                if row is None:
+                    # Pre-upgrade or unrecorded envelope: record directly as DEAD
+                    conn.execute(
+                        """
+                        INSERT INTO message_admissions (
+                            message_id, correlation_id, payload_hash, sender, recipient, subject,
+                            admitted_at, original_timestamp_ist, state, completed_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DEAD', ?)
+                        """,
+                        (message_id, f"corr_{message_id}", "", "", "", "", time.time(), get_current_ist(), time.time())
+                    )
+                    conn.commit()
+                    return True
+                elif row["state"] == "COMPLETED":
+                    # Cannot overwrite COMPLETED terminal state
+                    return False
+                else:
+                    cur_up = conn.execute(
+                        "UPDATE message_admissions SET state = 'DEAD', completed_at = ? WHERE message_id = ? AND state != 'COMPLETED'",
+                        (time.time(), message_id)
+                    )
+                    conn.commit()
+                    return cur_up.rowcount > 0
         except Exception as e:
             logger.error("Failed to mark message %s dead in store: %s", message_id, e)
             return False
@@ -761,6 +801,7 @@ class DurableAdmissionStore:
                     )
                     if cur_up.rowcount == 0:
                         # Row transition did not occur (e.g. concurrent transition to terminal state)
+                        conn.rollback()
                         return False
                 if nonce:
                     conn.execute("UPDATE seen_nonces SET state = 'RECOVERED_RETRY_PENDING' WHERE nonce = ? AND state NOT IN ('COMPLETED', 'FAILED')", (nonce,))
@@ -826,6 +867,7 @@ class DurableAdmissionStore:
                     (nonce,)
                 )
                 if cur_n.rowcount == 0:
+                    conn.rollback()
                     return False
                 if message_id:
                     cur_m = conn.execute(
@@ -833,6 +875,7 @@ class DurableAdmissionStore:
                         (message_id,)
                     )
                     if cur_m.rowcount == 0:
+                        conn.rollback()
                         return False
                 conn.commit()
                 return True
@@ -848,6 +891,7 @@ class DurableAdmissionStore:
                     (time.time(), nonce)
                 )
                 if cur_n.rowcount == 0:
+                    conn.rollback()
                     return False
                 if message_id:
                     cur_m = conn.execute(
@@ -855,6 +899,7 @@ class DurableAdmissionStore:
                         (time.time(), message_id)
                     )
                     if cur_m.rowcount == 0:
+                        conn.rollback()
                         return False
                 conn.commit()
                 return True
@@ -870,6 +915,7 @@ class DurableAdmissionStore:
                     (time.time(), nonce)
                 )
                 if cur_n.rowcount == 0:
+                    conn.rollback()
                     return False
                 if message_id:
                     cur_m = conn.execute(
@@ -877,6 +923,7 @@ class DurableAdmissionStore:
                         (time.time(), message_id)
                     )
                     if cur_m.rowcount == 0:
+                        conn.rollback()
                         return False
                 conn.commit()
                 return True
@@ -1023,6 +1070,29 @@ def verify_message_auth(
     if not nonce or not isinstance(nonce, str) or len(nonce) < 8:
         return False, "AUTH_FAILED: Missing or invalid 'nonce' in message envelope."
 
+    # Determine recovery status STRICTLY from durable store (never trust caller flags or attempt_count!)
+    store = admission_store or get_default_admission_store()
+    msg_id = msg.get("message_id")
+    is_recovered = False
+    if store and msg_id:
+        p_hash = compute_payload_hash(msg.get("body"))
+        if store.is_message_recovering(msg_id, p_hash):
+            is_recovered = True
+    if not is_recovered and store and nonce:
+        if hasattr(store, "is_nonce_recovering") and store.is_nonce_recovering(nonce, msg_id):
+            is_recovered = True
+        else:
+            try:
+                with sqlite3.connect(store.db_path, timeout=5.0) as conn:
+                    conn.row_factory = sqlite3.Row
+                    cur = conn.execute("SELECT state, message_id FROM seen_nonces WHERE nonce = ?", (nonce,))
+                    nrow = cur.fetchone()
+                    if nrow and nrow["state"] == "RECOVERED_RETRY_PENDING":
+                        if not nrow["message_id"] or nrow["message_id"] == msg_id:
+                            is_recovered = True
+            except Exception:
+                pass
+
     # 1. Timestamp Freshness Check (checked BEFORE burning nonce)
     if check_freshness:
         ts_str = msg.get("created_at_ist", "")
@@ -1034,29 +1104,6 @@ def verify_message_auth(
             delta_sec = (now_dt - msg_dt).total_seconds()
             val_sec = auth_cfg.get("token_validity_sec", 300)
             skew_sec = auth_cfg.get("max_future_skew_sec", 60)
-
-            # Check if recovery is allowed either explicitly or via durable store state (never trust caller attempt_count alone!)
-            store = admission_store or get_default_admission_store()
-            msg_id = msg.get("message_id")
-            is_recovered = bool(allow_recovery)
-            if not is_recovered and store and msg_id:
-                p_hash = compute_payload_hash(msg.get("body"))
-                if store.is_message_recovering(msg_id, p_hash):
-                    is_recovered = True
-            if not is_recovered and store and nonce:
-                if hasattr(store, "is_nonce_recovering") and store.is_nonce_recovering(nonce, msg_id):
-                    is_recovered = True
-                else:
-                    try:
-                        with sqlite3.connect(store.db_path, timeout=5.0) as conn:
-                            conn.row_factory = sqlite3.Row
-                            cur = conn.execute("SELECT state, message_id FROM seen_nonces WHERE nonce = ?", (nonce,))
-                            nrow = cur.fetchone()
-                            if nrow and nrow["state"] == "RECOVERED_RETRY_PENDING":
-                                if not nrow["message_id"] or nrow["message_id"] == msg_id:
-                                    is_recovered = True
-                    except Exception:
-                        pass
 
             if delta_sec > val_sec:
                 if not is_recovered:
@@ -1073,10 +1120,6 @@ def verify_message_auth(
 
     # 3. Durable SQLite Nonce Replay Check (recorded ONLY after timestamp and HMAC pass)
     if record_nonce:
-        store = admission_store or get_default_admission_store()
-        msg_id = msg.get("message_id")
-        if 'is_recovered' not in locals():
-            is_recovered = allow_recovery or (isinstance(msg.get("attempt_count"), int) and msg["attempt_count"] > 0)
         nonce_ok, nonce_err = store.check_and_record_nonce(
             nonce, sender, msg.get("created_at_ist", ""),
             message_id=msg_id, allow_recovery=is_recovered
@@ -1204,18 +1247,29 @@ def validate_message_schema(
             if not pre_hash:
                 return False, f"PRE_TASK_HASH_REQUIRED: Modifying existing file '{target_path_to_check}' requires 'pre_task_hash' (or 'expected_base_hash')."
 
-    # Check durable store for active recovery status
+    # Check durable store for active recovery status (never trust caller flags!)
     msg_id = msg.get("message_id")
     nonce = msg.get("nonce")
     store = admission_store or get_default_admission_store()
-    is_recovering = bool(allow_recovery)
-    if not is_recovering and msg_id and store:
+    is_recovering = False
+    if msg_id and store:
         p_hash = compute_payload_hash(msg.get("body"))
         if store.is_message_recovering(msg_id, p_hash):
             is_recovering = True
     if not is_recovering and nonce and store:
         if hasattr(store, "is_nonce_recovering") and store.is_nonce_recovering(nonce, msg_id):
             is_recovering = True
+        else:
+            try:
+                with sqlite3.connect(store.db_path, timeout=5.0) as conn:
+                    conn.row_factory = sqlite3.Row
+                    cur = conn.execute("SELECT state, message_id FROM seen_nonces WHERE nonce = ?", (nonce,))
+                    nrow = cur.fetchone()
+                    if nrow and nrow["state"] == "RECOVERED_RETRY_PENDING":
+                        if not nrow["message_id"] or nrow["message_id"] == msg_id:
+                            is_recovered = True
+            except Exception:
+                pass
 
     # Cryptographic Authentication & Nonce Verification
     should_record = record_nonce if record_nonce is not None else True
@@ -1391,6 +1445,10 @@ class InboxWorker:
                                         except Exception as pub_err:
                                             logger.error("Failed to reconcile outbox response for %s: %s; preserving claim", msg_id, pub_err)
                                             continue  # Do NOT unlink claim if publication reconciliation fails!
+                                    else:
+                                        # Response cannot be retrieved from store (missing or DB error); PRESERVE claim!
+                                        logger.error("Failed to retrieve durable response for completed message %s; preserving claim", msg_id)
+                                        continue
                                 try:
                                     os.remove(claimed_path)
                                 except OSError:
@@ -1407,18 +1465,24 @@ class InboxWorker:
                         data["attempt_count"] = attempts
 
                         if self.orphan_recovery_policy == "RETRY_REQUIRED" or attempts >= MAX_ATTEMPTS:
-                            # Explicit RETRY_REQUIRED or dead-letter when max attempts reached
-                            safe_dead = get_safe_filename(msg_id, ".dead.json")
-                            dead_path = os.path.join(DEAD_LETTER_DIR, safe_dead)
-                            data["status"] = "FAILED"
-                            data["error"] = (
+                            err_desc = (
                                 f"RETRY_REQUIRED: Worker crashed during processing. Resend with new nonce."
                                 if self.orphan_recovery_policy == "RETRY_REQUIRED"
                                 else f"MAX_ATTEMPTS_EXCEEDED: Claim timed out {attempts} times."
                             )
-                            write_json_atomic(dead_path, data)
+                            dead_persisted = True
                             if store and msg_id:
-                                store.mark_message_dead(msg_id, error=data["error"])
+                                dead_persisted = store.mark_message_dead(msg_id, error=err_desc)
+                            if not dead_persisted:
+                                logger.error("Failed to mark message %s dead during orphan exhaustion; preserving claim envelope", msg_id)
+                                continue
+
+                            # Explicit RETRY_REQUIRED or dead-letter when max attempts reached
+                            safe_dead = get_safe_filename(msg_id, ".dead.json")
+                            dead_path = os.path.join(DEAD_LETTER_DIR, safe_dead)
+                            data["status"] = "FAILED"
+                            data["error"] = err_desc
+                            write_json_atomic(dead_path, data)
 
                             outbox_file = os.path.join(OUTBOX_DIR, get_safe_filename(corr_id, "_resp.json"))
                             if not os.path.exists(outbox_file):
@@ -1912,22 +1976,25 @@ class InboxWorker:
         # 1. Schema, Identifier, and Authentication Validation (already admitted; check HMAC & schema)
         is_valid, schema_err = validate_message_schema(msg, record_nonce=False, check_freshness=False)
         if not is_valid:
-            self.route_to_dead_letter(claimed_path, msg, schema_err or "SCHEMA_VALIDATION_FAILED")
-            err_resp = {
-                "message_id": f"resp_{uuid.uuid4().hex[:12]}",
-                "correlation_id": corr_id,
-                "responder": "ANTIGRAVITY",
-                "route_agent": route_agent,
-                "status": "FAILED",
-                "created_at_ist": get_current_ist(),
-                "completed_at_ist": get_current_ist(),
-                "output_payload": None,
-                "artifact_hashes": {},
-                "nonce": uuid.uuid4().hex,
-                "error": schema_err
-            }
-            err_resp["auth_signature"] = compute_envelope_hmac(err_resp, antigravity_key)
-            write_json_atomic(outbox_file, err_resp)
+            persisted_dead = self.route_to_dead_letter(claimed_path, msg, schema_err or "SCHEMA_VALIDATION_FAILED")
+            if persisted_dead:
+                err_resp = {
+                    "message_id": f"resp_{uuid.uuid4().hex[:12]}",
+                    "correlation_id": corr_id,
+                    "responder": "ANTIGRAVITY",
+                    "route_agent": route_agent,
+                    "status": "FAILED",
+                    "created_at_ist": get_current_ist(),
+                    "completed_at_ist": get_current_ist(),
+                    "output_payload": None,
+                    "artifact_hashes": {},
+                    "nonce": uuid.uuid4().hex,
+                    "error": schema_err
+                }
+                err_resp["auth_signature"] = compute_envelope_hmac(err_resp, antigravity_key)
+                write_json_atomic(outbox_file, err_resp)
+            else:
+                logger.error("Failed to persist DEAD state for invalid schema message %s; preserving envelope and suppressing outbox reply", msg.get("message_id"))
             return
 
         # 2. Check for Permission Seeking / Hedging in Body (Warning only; do not dead-letter)
