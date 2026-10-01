@@ -1066,4 +1066,28 @@ def test_codex_round3_target_validation_finite_positive():
             engine.simulate_exit(pos, bar, trigger_reason="TAKE_PROFIT", target_price=invalid_target)
 
 
+# ============================================================================
+# PART 7: CODEX ROUND 4 ACCEPTANCE REGRESSION TESTS
+# ============================================================================
+
+def test_codex_round4_partial_fill_precision_and_post_fill_risk_cap():
+    """
+    Round 4 Finding: confirm_fill rounded weighted entry to 4 decimals, causing
+    recalculated risk to breach Rs 1,500.
+    Must preserve full weighted-entry precision, compute risk consistently from
+    cumulative notional and stop basis, and enforce risk cap on final recorded ledger.
+    """
+    gov = PortfolioRiskGovernor()
+    stop = 10.000051 - 1500 / 3799
+    gov.reserve_slot("SUZLON", 3799, 10.0, stop, "GREEN_ENERGY_POWER")
+    gov.confirm_fill_from_reservation("SUZLON", 10.0, 1)
+    gov.confirm_fill_from_reservation("SUZLON", 10.000051, 3798)
+
+    pos = gov.active_positions["SUZLON"]
+    assert pos["shares"] == 3799
+    assert pos["open_risk_rs"] <= 1500.0 + 1e-4
+    assert pos["notional_rs"] <= 38000.0 + 1e-4
+
+
+
 

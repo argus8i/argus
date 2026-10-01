@@ -535,26 +535,32 @@ class PortfolioRiskGovernor:
         sym = str(symbol).strip().upper()
         sec = sector or self.resolve_sector(sym)
         notional = round(shares * entry_price, 2)
-        risk = round(shares * (entry_price - stop_price), 2)
         if sym in self.active_positions:
-            # Add to existing position if partial fill aggregation (Codex Round 3 Finding 1)
+            # Add to existing position if partial fill aggregation (Codex Round 3 & 4)
             existing = self.active_positions[sym]
             new_shares = existing["shares"] + int(shares)
             new_notional = round(existing["notional_rs"] + notional, 2)
-            weighted_entry_price = round(new_notional / new_shares, 4)
+            # Preserve full weighted-entry precision (Codex Round 4 Finding)
+            weighted_entry_price = new_notional / new_shares
+            # Compute risk consistently from cumulative notional and stop basis
+            stop_basis = round(new_shares * existing["stop_price"], 2)
+            new_risk = round(new_notional - stop_basis, 2)
+
             existing["shares"] = new_shares
             existing["entry_price"] = weighted_entry_price
             existing["notional_rs"] = new_notional
-            existing["open_risk_rs"] = round(new_shares * (weighted_entry_price - existing["stop_price"]), 2)
+            existing["open_risk_rs"] = new_risk
             existing["entry_costs"] = round(existing.get("entry_costs", 0.0) + float(transaction_costs), 2)
         else:
+            stop_basis = round(shares * stop_price, 2)
+            initial_risk = round(notional - stop_basis, 2)
             self.active_positions[sym] = {
                 "symbol": sym,
                 "shares": int(shares),
                 "entry_price": float(entry_price),
                 "stop_price": float(stop_price),
                 "notional_rs": notional,
-                "open_risk_rs": risk,
+                "open_risk_rs": initial_risk,
                 "sector": sec,
                 "entry_costs": round(float(transaction_costs), 2),
             }
@@ -617,16 +623,18 @@ class PortfolioRiskGovernor:
         actual_notional = round(shares * fill_price, 2)
         actual_risk = round(shares * (fill_price - stop_p), 2)
 
-        # Cumulative position ceiling checks (Codex Round 3 Finding 1)
+        # Cumulative position ceiling checks (Codex Round 3 & 4)
         existing_pos = self.active_positions.get(sym)
         if existing_pos:
             comb_shares = existing_pos["shares"] + shares
             comb_notional = round(existing_pos["notional_rs"] + actual_notional, 2)
-            comb_risk = round(existing_pos["open_risk_rs"] + actual_risk, 2)
+            comb_stop_basis = round(comb_shares * stop_p, 2)
+            comb_risk = round(comb_notional - comb_stop_basis, 2)
         else:
             comb_shares = shares
             comb_notional = actual_notional
-            comb_risk = actual_risk
+            comb_stop_basis = round(shares * stop_p, 2)
+            comb_risk = round(comb_notional - comb_stop_basis, 2)
 
         if comb_notional > self.slot_cap_rs + 1e-4 or comb_risk > self.risk_per_trade_rs + 1e-4:
             raise ValueError(
@@ -749,7 +757,8 @@ class PortfolioRiskGovernor:
             # Partial exit: update residual holdings, open risk, notional, and prorate entry costs (Codex Round 3 Finding 3)
             pos["shares"] = remaining_shares
             pos["notional_rs"] = round(remaining_shares * pos["entry_price"], 2)
-            pos["open_risk_rs"] = round(remaining_shares * (pos["entry_price"] - pos["stop_price"]), 2)
+            rem_stop_basis = round(remaining_shares * pos["stop_price"], 2)
+            pos["open_risk_rs"] = round(pos["notional_rs"] - rem_stop_basis, 2)
             if "entry_costs" in pos and open_shares > 0:
                 prop_entry = round(pos["entry_costs"] * (shares_to_sell / open_shares), 2)
                 pos["entry_costs"] = round(max(0.0, pos["entry_costs"] - prop_entry), 2)

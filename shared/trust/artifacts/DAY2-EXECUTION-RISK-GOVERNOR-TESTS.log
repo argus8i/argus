@@ -1,14 +1,14 @@
 ================================================================================
 COMMAND: .venv\Scripts\python.exe -m pytest tests/test_day1_data_contracts.py tests/test_execution_risk_governor.py -v
 CWD: C:\Users\yashw\swing trades
-START TIME: 2026-10-01T22:16:59.126733+05:30
+START TIME: 2026-10-01T22:24:18.454912+05:30
 ================================================================================
 ============================= test session starts =============================
 platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\yashw\swing trades\.venv\Scripts\python.exe
 cachedir: .pytest_cache
 rootdir: C:\Users\yashw\swing trades
 configfile: pytest.ini
-collecting ... collected 56 items
+collecting ... collected 57 items
 
 tests/test_day1_data_contracts.py::test_eligibility_scrip_eligible PASSED [  1%]
 tests/test_day1_data_contracts.py::test_eligibility_blocks_surveillance_scrip PASSED [  3%]
@@ -18,59 +18,60 @@ tests/test_day1_data_contracts.py::test_eligibility_fails_closed_on_lookahead_ti
 tests/test_day1_data_contracts.py::test_audit_gz_csv_udiff_cm PASSED     [ 10%]
 tests/test_day1_data_contracts.py::test_audit_mto_dat PASSED             [ 12%]
 tests/test_day1_data_contracts.py::test_eligibility_fails_closed_when_fno_master_missing PASSED [ 14%]
-tests/test_day1_data_contracts.py::test_eligibility_fails_closed_when_surveillance_corrupted PASSED [ 16%]
+tests/test_day1_data_contracts.py::test_eligibility_fails_closed_when_surveillance_corrupted PASSED [ 15%]
 tests/test_day1_data_contracts.py::test_eligibility_stale_surveillance_exceeding_max_age_blocked PASSED [ 17%]
 tests/test_day1_data_contracts.py::test_audit_gz_csv_udiff_fo PASSED     [ 19%]
 tests/test_day1_data_contracts.py::test_audit_gz_csv_corrupt_rejected PASSED [ 21%]
-tests/test_execution_risk_governor.py::test_statutory_costs_exact_breakdown_buy PASSED [ 23%]
-tests/test_execution_risk_governor.py::test_statutory_costs_exact_breakdown_sell PASSED [ 25%]
+tests/test_execution_risk_governor.py::test_statutory_costs_exact_breakdown_buy PASSED [ 22%]
+tests/test_execution_risk_governor.py::test_statutory_costs_exact_breakdown_sell PASSED [ 24%]
 tests/test_execution_risk_governor.py::test_statutory_costs_fail_closed_inputs PASSED [ 26%]
 tests/test_execution_risk_governor.py::test_slippage_base_and_stress PASSED [ 28%]
-tests/test_execution_risk_governor.py::test_sub_10_floor_rejection PASSED [ 30%]
-tests/test_execution_risk_governor.py::test_inverted_stop_loss_rejection PASSED [ 32%]
+tests/test_execution_risk_governor.py::test_sub_10_floor_rejection PASSED [ 29%]
+tests/test_execution_risk_governor.py::test_inverted_stop_loss_rejection PASSED [ 31%]
 tests/test_execution_risk_governor.py::test_locked_upper_circuit_buy_no_offer PASSED [ 33%]
 tests/test_execution_risk_governor.py::test_locked_lower_circuit_exit_no_bid PASSED [ 35%]
-tests/test_execution_risk_governor.py::test_gap_up_open_entry_execution PASSED [ 37%]
-tests/test_execution_risk_governor.py::test_gap_down_open_stop_loss_actual_loss_exceeds_1r PASSED [ 39%]
-tests/test_execution_risk_governor.py::test_volume_participation_cap_partial_fill PASSED [ 41%]
+tests/test_execution_risk_governor.py::test_gap_up_open_entry_execution PASSED [ 36%]
+tests/test_execution_risk_governor.py::test_gap_down_open_stop_loss_actual_loss_exceeds_1r PASSED [ 38%]
+tests/test_execution_risk_governor.py::test_volume_participation_cap_partial_fill PASSED [ 40%]
 tests/test_execution_risk_governor.py::test_governor_single_slot_cap_rs_38000 PASSED [ 42%]
-tests/test_execution_risk_governor.py::test_governor_single_trade_risk_rs_1500 PASSED [ 44%]
-tests/test_execution_risk_governor.py::test_governor_max_concurrent_positions_3_slots PASSED [ 46%]
-tests/test_execution_risk_governor.py::test_governor_aggregate_exposure_cap_rs_114000 PASSED [ 48%]
-tests/test_execution_risk_governor.py::test_governor_aggregate_open_risk_cap_rs_4500 PASSED [ 50%]
-tests/test_execution_risk_governor.py::test_governor_cash_buffer_preservation_rs_136000 PASSED [ 51%]
-tests/test_execution_risk_governor.py::test_governor_missing_atr_fails_closed PASSED [ 53%]
-tests/test_execution_risk_governor.py::test_governor_sizing_exact_floor PASSED [ 55%]
-tests/test_execution_risk_governor.py::test_governor_unmapped_sector_fails_closed PASSED [ 57%]
-tests/test_execution_risk_governor.py::test_governor_sector_concentration_max_2 PASSED [ 58%]
-tests/test_execution_risk_governor.py::test_governor_duplicate_symbol_prohibited PASSED [ 60%]
-tests/test_execution_risk_governor.py::test_governor_simultaneous_signals_deterministic_priority PASSED [ 62%]
-tests/test_execution_risk_governor.py::test_governor_circuit_lock_preserves_slot_and_exposure PASSED [ 64%]
-tests/test_execution_risk_governor.py::test_governor_gap_down_loss_reconciliation PASSED [ 66%]
-tests/test_execution_risk_governor.py::test_full_position_lifecycle_state_machine PASSED [ 67%]
-tests/test_execution_risk_governor.py::test_codex_finding_1_exit_touch_and_volume_participation PASSED [ 69%]
-tests/test_execution_risk_governor.py::test_codex_finding_2_partial_exit_and_duplicate_credit PASSED [ 71%]
-tests/test_execution_risk_governor.py::test_codex_finding_3_actual_fill_reassessment PASSED [ 73%]
-tests/test_execution_risk_governor.py::test_codex_finding_4_strict_cash_buffer_enforcement PASSED [ 75%]
-tests/test_execution_risk_governor.py::test_codex_finding_5_sector_whitelist_and_unwidened_limit PASSED [ 76%]
-tests/test_execution_risk_governor.py::test_codex_finding_6_exact_floor_no_premature_rounding PASSED [ 78%]
-tests/test_execution_risk_governor.py::test_codex_finding_7_buy_limit_ceiling_and_order_validation PASSED [ 80%]
-tests/test_execution_risk_governor.py::test_codex_finding_8_net_realized_pnl_includes_entry_and_exit_costs PASSED [ 82%]
-tests/test_execution_risk_governor.py::test_codex_round2_cash_buffer_at_fill PASSED [ 83%]
-tests/test_execution_risk_governor.py::test_codex_round2_partial_fill_preserves_reservation PASSED [ 85%]
-tests/test_execution_risk_governor.py::test_codex_round2_actual_fill_nan_rejected PASSED [ 87%]
-tests/test_execution_risk_governor.py::test_codex_round2_exit_event_idempotency PASSED [ 89%]
-tests/test_execution_risk_governor.py::test_codex_round2_take_profit_touch_and_benchmark PASSED [ 91%]
-tests/test_execution_risk_governor.py::test_codex_round2_exit_reconciliation_no_double_entry_deduction PASSED [ 92%]
-tests/test_execution_risk_governor.py::test_codex_round3_partial_fills_cumulative_risk_and_entry_basis PASSED [ 94%]
-tests/test_execution_risk_governor.py::test_codex_round3_exit_idempotency_mandatory_and_atomic PASSED [ 96%]
-tests/test_execution_risk_governor.py::test_codex_round3_partial_exit_prorates_entry_costs PASSED [ 98%]
-tests/test_execution_risk_governor.py::test_codex_round3_target_validation_finite_positive PASSED [100%]
+tests/test_execution_risk_governor.py::test_governor_single_trade_risk_rs_1500 PASSED [ 43%]
+tests/test_execution_risk_governor.py::test_governor_max_concurrent_positions_3_slots PASSED [ 45%]
+tests/test_execution_risk_governor.py::test_governor_aggregate_exposure_cap_rs_114000 PASSED [ 47%]
+tests/test_execution_risk_governor.py::test_governor_aggregate_open_risk_cap_rs_4500 PASSED [ 49%]
+tests/test_execution_risk_governor.py::test_governor_cash_buffer_preservation_rs_136000 PASSED [ 50%]
+tests/test_execution_risk_governor.py::test_governor_missing_atr_fails_closed PASSED [ 52%]
+tests/test_execution_risk_governor.py::test_governor_sizing_exact_floor PASSED [ 54%]
+tests/test_execution_risk_governor.py::test_governor_unmapped_sector_fails_closed PASSED [ 56%]
+tests/test_execution_risk_governor.py::test_governor_sector_concentration_max_2 PASSED [ 57%]
+tests/test_execution_risk_governor.py::test_governor_duplicate_symbol_prohibited PASSED [ 59%]
+tests/test_execution_risk_governor.py::test_governor_simultaneous_signals_deterministic_priority PASSED [ 61%]
+tests/test_execution_risk_governor.py::test_governor_circuit_lock_preserves_slot_and_exposure PASSED [ 63%]
+tests/test_execution_risk_governor.py::test_governor_gap_down_loss_reconciliation PASSED [ 64%]
+tests/test_execution_risk_governor.py::test_full_position_lifecycle_state_machine PASSED [ 66%]
+tests/test_execution_risk_governor.py::test_codex_finding_1_exit_touch_and_volume_participation PASSED [ 68%]
+tests/test_execution_risk_governor.py::test_codex_finding_2_partial_exit_and_duplicate_credit PASSED [ 70%]
+tests/test_execution_risk_governor.py::test_codex_finding_3_actual_fill_reassessment PASSED [ 71%]
+tests/test_execution_risk_governor.py::test_codex_finding_4_strict_cash_buffer_enforcement PASSED [ 73%]
+tests/test_execution_risk_governor.py::test_codex_finding_5_sector_whitelist_and_unwidened_limit PASSED [ 75%]
+tests/test_execution_risk_governor.py::test_codex_finding_6_exact_floor_no_premature_rounding PASSED [ 77%]
+tests/test_execution_risk_governor.py::test_codex_finding_7_buy_limit_ceiling_and_order_validation PASSED [ 78%]
+tests/test_execution_risk_governor.py::test_codex_finding_8_net_realized_pnl_includes_entry_and_exit_costs PASSED [ 80%]
+tests/test_execution_risk_governor.py::test_codex_round2_cash_buffer_at_fill PASSED [ 82%]
+tests/test_execution_risk_governor.py::test_codex_round2_partial_fill_preserves_reservation PASSED [ 84%]
+tests/test_execution_risk_governor.py::test_codex_round2_actual_fill_nan_rejected PASSED [ 85%]
+tests/test_execution_risk_governor.py::test_codex_round2_exit_event_idempotency PASSED [ 87%]
+tests/test_execution_risk_governor.py::test_codex_round2_take_profit_touch_and_benchmark PASSED [ 89%]
+tests/test_execution_risk_governor.py::test_codex_round2_exit_reconciliation_no_double_entry_deduction PASSED [ 91%]
+tests/test_execution_risk_governor.py::test_codex_round3_partial_fills_cumulative_risk_and_entry_basis PASSED [ 92%]
+tests/test_execution_risk_governor.py::test_codex_round3_exit_idempotency_mandatory_and_atomic PASSED [ 94%]
+tests/test_execution_risk_governor.py::test_codex_round3_partial_exit_prorates_entry_costs PASSED [ 96%]
+tests/test_execution_risk_governor.py::test_codex_round3_target_validation_finite_positive PASSED [ 98%]
+tests/test_execution_risk_governor.py::test_codex_round4_partial_fill_precision_and_post_fill_risk_cap PASSED [100%]
 
-============================= 56 passed in 0.30s ==============================
+============================= 57 passed in 0.16s ==============================
 
 ================================================================================
-END TIME: 2026-10-01T22:16:59.992433+05:30
-ELAPSED SECONDS: 0.87
+END TIME: 2026-10-01T22:24:19.016865+05:30
+ELAPSED SECONDS: 0.56
 EXIT CODE: 0
 ================================================================================
