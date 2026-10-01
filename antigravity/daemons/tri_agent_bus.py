@@ -109,23 +109,35 @@ def get_codex_bin() -> str:
     fallback = r"c:\Users\yashw\.antigravity-ide\extensions\openai.chatgpt-26.721.30844-win32-x64\bin\windows-x86_64\codex.exe"
     candidates.append(fallback)
 
-    resolved = candidates[0] if candidates else fallback
+    valid_candidates = []
     for c in candidates:
-        if os.path.exists(c):
-            resolved = c
-            break
+        if os.path.isfile(c):
+            try:
+                with open(c, "rb") as f:
+                    header = f.read(2)
+                if header == b"MZ":
+                    res = subprocess.run([c, "--version"], capture_output=True, text=True, timeout=5)
+                    if res.returncode == 0 and res.stdout.strip():
+                        v_str = res.stdout.strip()
+                        m = re.search(r"(\d+)\.(\d+)\.(\d+)", v_str)
+                        if m:
+                            maj, min_, pat = map(int, m.groups())
+                            if (maj, min_, pat) >= (0, 159, 2):
+                                valid_candidates.append((c, v_str, (maj, min_, pat)))
+            except Exception:
+                pass
 
-    version_str = "unknown"
-    if os.path.isfile(resolved):
-        try:
-            with open(resolved, "rb") as f:
-                header = f.read(2)
-            if header == b"MZ":
-                res = subprocess.run([resolved, "--version"], capture_output=True, text=True, timeout=5)
-                if res.returncode == 0 and res.stdout.strip():
-                    version_str = res.stdout.strip()
-        except Exception:
-            pass
+    if valid_candidates:
+        valid_candidates.sort(key=lambda item: (item[2], os.path.getmtime(item[0])), reverse=True)
+        resolved = valid_candidates[0][0]
+        version_str = valid_candidates[0][1]
+    else:
+        resolved = candidates[0] if candidates else fallback
+        version_str = "unverified"
+        for c in candidates:
+            if os.path.exists(c):
+                resolved = c
+                break
 
     logger.info("Resolved Codex binary: %s (version: %s)", resolved, version_str)
     return resolved
