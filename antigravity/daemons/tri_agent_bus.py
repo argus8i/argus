@@ -48,6 +48,9 @@ from antigravity.daemons.inbox_worker import (
     VALID_RECIPIENTS,
     FileLock,
     DurableReplayStore,
+    DurableAdmissionStore,
+    get_default_admission_store,
+    compute_payload_hash,
     InboxWorker
 )
 
@@ -354,7 +357,7 @@ def ask_claude_detailed(prompt: str, timeout_sec: int = 300, min_chars: int = MI
         return {"success": False, "output": err, "returncode": 1, "elapsed": 0.0, "error": err}
     t0 = time.time()
     try:
-        cli_flags = [] if chat_only else prepare_dispatch("CLAUDE")
+        cli_flags = ["--tools", "Read,Grep,Glob", "--permission-mode", "dontAsk"] if chat_only else prepare_dispatch("CLAUDE")
         boundary = CHAT_BOUNDARIES if chat_only else TASK_BOUNDARIES
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         proc = subprocess.run(
@@ -627,20 +630,24 @@ def send_to_agent(
     if not IDENTIFIER_REGEX.match(corr_id):
         raise ValueError(f"Invalid correlation_id '{corr_id}'; must match ^[a-zA-Z0-9_\\-]{{8,64}}$")
 
-    # Check for duplicate message_id across all directories and states (.json, .claimed, .dead.json)
-    safe_msg_file = get_safe_filename(msg_id, ".json")
-    safe_claimed_file = get_safe_filename(msg_id, ".claimed")
-    safe_dead_file = get_safe_filename(msg_id, ".dead.json")
-    for check_dir in [INBOX_DIR, ARCHIVE_DIR, DEAD_LETTER_DIR]:
-        for candidate in [safe_msg_file, safe_claimed_file, safe_dead_file]:
-            candidate_path = os.path.join(check_dir, candidate)
-            if os.path.exists(candidate_path):
-                try:
-                    with open(candidate_path, "r", encoding="utf-8") as f:
-                        existing_data = json.load(f)
-                    return msg_id, existing_data.get("correlation_id", corr_id)
-                except Exception:
-                    return msg_id, corr_id
+    payload_hash = compute_payload_hash(body)
+    created_at_ist = get_current_ist()
+
+    # Shared SQLite admission coordinates message_id, correlation_id, and payload_hash across processes
+    admission_store = get_default_admission_store()
+    is_new, winning_corr, err, state = admission_store.admit_submission(
+        message_id=msg_id,
+        correlation_id=corr_id,
+        payload_hash=payload_hash,
+        sender=sender,
+        recipient=recipient,
+        subject=subject,
+        timestamp_ist=created_at_ist,
+    )
+    if err:
+        raise ValueError(err)
+    if not is_new and state != "QUEUED":
+        return msg_id, winning_corr
 
     # Load sender secret key from external storage
     secret_key = auth_secret or get_agent_secret_key(sender)
@@ -648,13 +655,14 @@ def send_to_agent(
         raise RuntimeError(f"No signing key configured for sender {sender}")
     msg_nonce = nonce or uuid.uuid4().hex
 
+    safe_msg_file = get_safe_filename(msg_id, ".json")
     envelope = {
         "message_id": msg_id,
-        "correlation_id": corr_id,
+        "correlation_id": winning_corr,
         "sender": sender,
         "recipient": recipient,
         "track": track,
-        "created_at_ist": get_current_ist(),
+        "created_at_ist": created_at_ist,
         "subject": subject,
         "body": body,
         "status": "CREATED",
@@ -673,13 +681,7 @@ def send_to_agent(
 
     inbox_path = os.path.join(INBOX_DIR, safe_msg_file)
     write_json_atomic(inbox_path, envelope)
-    # Re-read persisted message to return the winner's correlation_id if raced
-    try:
-        with open(inbox_path, "r", encoding="utf-8") as f:
-            persisted = json.load(f)
-        return msg_id, persisted.get("correlation_id", corr_id)
-    except Exception:
-        return msg_id, corr_id
+    return msg_id, winning_corr
 
 
 def send_to_antigravity(*args: Any, **kwargs: Any) -> Tuple[str, str]:

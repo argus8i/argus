@@ -34,28 +34,29 @@
 | **7** | R7 (Breaker Recovery Visibility) | Expired breaker cooldown returned `COOLDOWN_EXPIRED` without checking if a healthy restarted supervisor was active. | `antigravity/daemons/supervised_inbox_worker.py`, `scripts/register_nexus_tasks.ps1` | `test_expired_breaker_does_not_hide_healthy_restarted_supervisor` | **PASSED** | `get_status()` inspects live supervisor PID + creation time; retires expired breaker if healthy. Watchdog interval set to 1m. |
 | **8** | R8 (Atomic Duplicate Receipt) | Check-then-write race between concurrent submissions returned different correlation IDs for same message_id. | `antigravity/daemons/tri_agent_bus.py` | `test_concurrent_duplicate_submit_returns_one_original_receipt` | **PASSED** | Atomic file publication re-reads persisted file to return winner's `correlation_id` to all callers. |
 | **9** | F9 (Codex Dispatch Reliability) | Windows console events (0xC000013A) terminated Codex children; old v0.146 binary rejected `gpt-6.1-sol`. | `antigravity/daemons/tri_agent_bus.py` | `test_get_codex_bin_prefers_localappdata`, `test_real_codex_bin_resolves_v0159_or_newer` | **PASSED** | LocalAppData v0.159.2 resolved by mtime; `subprocess.CREATE_NO_WINDOW` isolates all peer CLI processes. |
+| **10** | F10 (FileLock Successor Safety) | Contender B acquiring while A releases could see lock deleted by A's late cleanup. | `antigravity/daemons/inbox_worker.py` | `test_filelock_never_deletes_successor_active_lock` | **PASSED** | Owner A writes `{"released": true}` without unlinking; contender B acquires cleanly without race deletion. |
+| **11** | F11 (Atomic Cross-Process Admission) | Duplicate submissions across processes could admit conflicting bodies or return divergent receipts. | `antigravity/daemons/tri_agent_bus.py`, `antigravity/daemons/inbox_worker.py` | `test_cross_process_duplicate_submission_atomic_receipt` | **PASSED** | Coordinated atomic SQLite binding of `(message_id, correlation_id, payload_hash)` across all lifecycle states (`QUEUED`, `CLAIMED`, `COMPLETED`, `DEAD`). Conflicting payloads raise explicit `ValueError("CONFLICT: ...")`. |
+| **12** | F12 (Recovery Arrival Freshness) | Legitimate crashed requests recovered >300s after arrival were rejected by timestamp expiration. | `antigravity/daemons/inbox_worker.py` | `test_recovered_request_admitted_even_if_timestamp_older_than_300s` | **PASSED** | Requests admitted on arrival and marked recovering bypass `delta_sec > val_sec` arrival expiry via durable admission store `is_message_recovering()`. |
+| **13** | F13 (Claude Review Read-Only Tools) | Claude review invocations passed empty tools instead of explicit read-only tools and permission bypass. | `antigravity/daemons/tri_agent_bus.py` | `test_claude_route_enforces_read_only_tools` | **PASSED** | Passed `--tools Read,Grep,Glob --permission-mode dontAsk` when `chat_only=True`. Codex semver asserted `>= (0, 159, 2)`. |
 
 ---
 
 ## 3. Exact Verification Commands & Exit Codes
 
-### A. Codex Attack Probes (14/14 Green)
+### A. Codex Attack & Followup Probes (19/19 Green)
 ```powershell
 $env:ARGUS_NEXUS_REVIEW_ROOT = (Get-Location).Path
-.venv\Scripts\python.exe -m pytest shared/reviews/test_codex_nexus_11364b2_attack.py -v
+.venv\Scripts\python.exe -m pytest shared/reviews/test_codex_nexus_11364b2_attack.py tests/test_codex_nexus_followup_probes.py -v
 ```
 - **Exit Code:** 0
-- **Output:** 14 passed in 1.80s
+- **Output:** 19 passed in 2.92s
 
-### B. Consolidated Test Suite (959/959 Green)
+### B. Consolidated Test Suite (964/964 Green)
 ```powershell
-.venv\Scripts\python.exe -m pytest tests/ -q
-# Exit Code: 0 (761 passed in 144.16s)
-
-.venv\Scripts\python.exe -m pytest research/tests/ -q
-# Exit Code: 0 (198 passed in 12.40s)
+.venv\Scripts\python.exe -m pytest tests/ research/tests/ -q
 ```
-- **Total:** 959 passed, 0 failed, 0 errors.
+- **Exit Code:** 0
+- **Total:** 964 passed in 201.80s, 0 failed, 0 errors.
 
 ### C. Live Tri-Agent Deep Health Verification
 ```powershell
@@ -76,21 +77,20 @@ $env:ARGUS_NEXUS_REVIEW_ROOT = (Get-Location).Path
 ```text
 To: OpenAI Codex (Senior Systems, Execution-Reality & Reliability Engineer)
 From: Antigravity (Quantitative Modeling & Infrastructure Orchestrator)
-Subject: Exact-Commit Re-Review Request for ARGUS Nexus Bus & Supervisor
+Subject: Exact-Commit Whole-Bus Verification for ARGUS Nexus Bus & Supervisor
 
-Please perform an independent, unsparing peer review of the Nexus reliability repair at exact commit:
-Commit: 83e53cbce6aa753248a6e1760458b38de01e357b
-Branch: fix/nexus-and-bridge-repair
+Please perform an independent, unsparing peer review of the Nexus reliability repair at this exact commit.
 
 Scope:
-- antigravity/daemons/inbox_worker.py (R1, R2, R3, R4, R5, R6)
-- antigravity/daemons/supervised_inbox_worker.py (R7)
-- antigravity/daemons/tri_agent_bus.py (R8, F9, LocalAppData Codex v0.159.2, CREATE_NO_WINDOW, HEALTH_DEEP)
+- antigravity/daemons/inbox_worker.py (FileLock release safety, atomic admission store, replay store, runtime metadata hmac normalization, recovery freshness exemption)
+- antigravity/daemons/supervised_inbox_worker.py (Heartbeat, breaker, process identity)
+- antigravity/daemons/tri_agent_bus.py (Atomic cross-process admission, Claude read-only CLI flags, LocalAppData Codex v0.159.2, CREATE_NO_WINDOW, HEALTH_DEEP)
 - scripts/register_nexus_tasks.ps1 (Watchdog 1m cadence)
 - docs/NEXUS_DEPLOYMENT_RUNBOOK.md (One-page deployment runbook)
 
 Acceptance Criteria:
 - Verify that all 14 attack probes in shared/reviews/test_codex_nexus_11364b2_attack.py pass.
-- Verify that the full repository test suite (959 tests) passes hermetically.
+- Verify that all 5 followup probes in tests/test_codex_nexus_followup_probes.py pass.
+- Verify that the full repository test suite (964 tests) passes hermetically.
 - If satisfied, record your independent review verdict (APPROVED) in shared/trust/reviews.jsonl.
 ```

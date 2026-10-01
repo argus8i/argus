@@ -59,6 +59,11 @@ def test_real_codex_bin_resolves_v0159_or_newer():
     res = subprocess.run([bin_path, "--version"], capture_output=True, text=True, timeout=5)
     assert res.returncode == 0
     assert "codex-cli" in res.stdout
+    import re
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", res.stdout)
+    assert m is not None, f"Could not parse semver from: {res.stdout}"
+    major, minor, patch = map(int, m.groups())
+    assert (major, minor, patch) >= (0, 159, 2), f"Codex version {major}.{minor}.{patch} is below 0.159.2"
 
 
 def test_chat_boundaries_grants_read_only_workspace_access():
@@ -68,8 +73,8 @@ def test_chat_boundaries_grants_read_only_workspace_access():
     assert "read-only" in tab.CHAT_BOUNDARIES.lower()
 
 
-def test_claude_route_does_not_pass_empty_tools(monkeypatch):
-    """Verifies ask_claude_detailed with chat_only=True does not disable tools with --tools ''."""
+def test_claude_route_enforces_read_only_tools(monkeypatch):
+    """Verifies ask_claude_detailed with chat_only=True enforces read-only tools and permission mode."""
     recorded_cmd = []
 
     def mock_run(cmd, *args, **kwargs):
@@ -85,7 +90,15 @@ def test_claude_route_does_not_pass_empty_tools(monkeypatch):
     monkeypatch.setattr(os.path, "exists", lambda p: True)
 
     tab.ask_claude_detailed("test prompt", chat_only=True)
-    assert "--tools" not in recorded_cmd, "Claude chat route must not disable read tools with --tools ''"
+    assert "--tools" in recorded_cmd
+    tool_idx = recorded_cmd.index("--tools")
+    assert recorded_cmd[tool_idx + 1] == "Read,Grep,Glob"
+    assert "--permission-mode" in recorded_cmd
+    perm_idx = recorded_cmd.index("--permission-mode")
+    assert recorded_cmd[perm_idx + 1] == "dontAsk"
+    cmd_str = " ".join(recorded_cmd)
+    assert "Edit" not in cmd_str
+    assert "Write" not in cmd_str
 
 
 def test_get_last_review_id_extracts_from_reviews_jsonl():

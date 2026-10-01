@@ -382,14 +382,26 @@ def test_duplicate_message_idempotency(msg_test_env):
     )
     assert id1 == fixed_msg_id
 
+    # Identical resubmission deduplicates cleanly
     id2, corr2 = send_to_antigravity(
         sender="CODEX",
         subject="ECHO",
-        body="Conflicting second payload",
+        body="First payload",
         message_id=fixed_msg_id,
         correlation_id=fixed_corr_id
     )
     assert id2 == fixed_msg_id
+    assert corr2 == corr1
+
+    # Conflicting payload under same message_id raises atomic CONFLICT error
+    with pytest.raises(ValueError, match="CONFLICT"):
+        send_to_antigravity(
+            sender="CODEX",
+            subject="ECHO",
+            body="Conflicting second payload",
+            message_id=fixed_msg_id,
+            correlation_id=fixed_corr_id
+        )
 
     inbox_files = [f for f in os.listdir(msg_test_env["inbox"]) if f.endswith(".json")]
     assert len(inbox_files) == 1

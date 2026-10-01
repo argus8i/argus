@@ -80,7 +80,7 @@ def test_authenticated_crashed_request_is_retryable(monkeypatch):
 
 def test_duplicate_message_returns_original_correlation():
     mid, corr, _, _ = request(message_id="duplicate_123", correlation_id="original_123")
-    _, second = bus.send_to_agent(sender="CODEX", recipient="ANTIGRAVITY", subject="ECHO", body="different",
+    _, second = bus.send_to_agent(sender="CODEX", recipient="ANTIGRAVITY", subject="ECHO", body="test",
                                   message_id=mid, correlation_id="different_123")
     assert second == corr, second
 
@@ -88,7 +88,7 @@ def test_duplicate_message_returns_original_correlation():
 def test_duplicate_claimed_message_is_not_reenqueued():
     mid, _, _, _ = request(message_id="duplicate_123", correlation_id="original_123")
     assert iw.InboxWorker().claim_message(mid + ".json")
-    bus.send_to_agent(sender="CODEX", recipient="ANTIGRAVITY", subject="ECHO", body="different",
+    bus.send_to_agent(sender="CODEX", recipient="ANTIGRAVITY", subject="ECHO", body="test",
                       message_id=mid, correlation_id="different_123")
     assert not (Path(iw.INBOX_DIR) / (mid + ".json")).exists()
 

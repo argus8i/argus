@@ -352,11 +352,9 @@ class FileLock:
             except OSError:
                 pass
             self.fd = None
-        try:
-            if os.path.exists(self.lock_path):
-                os.remove(self.lock_path)
-        except OSError:
-            pass
+        # Note: Do NOT unlink self.lock_path here. Unlinking after closing fd creates an
+        # ownership race where owner A unlinks successor B's newly acquired lock!
+        # Successors safely clear released markers when acquiring via _break_stale_lock().
 
     def __enter__(self):
         if not self.acquire():
@@ -367,20 +365,20 @@ class FileLock:
         self.release()
 
 
-class DurableReplayStore:
+class DurableAdmissionStore:
     """
-    Durable, SQLite-backed nonce replay prevention store with WAL mode.
-    Guarantees replay rejection persists across worker crashes and restarts.
-    Supports state tracking for worker orphan recovery retry.
+    Durable, SQLite-backed cross-process admission and replay prevention store with WAL mode.
+    Coordinates message admission, receipt binding, lifecycle tracking, and orphan recovery
+    across all processes and life-cycle states (QUEUED, CLAIMED, RECOVERING, RECOVERED_ACTIVE, COMPLETED, DEAD).
     """
     def __init__(self, db_path: Optional[str] = None):
-        self.db_path = db_path or os.path.join(MESSAGES_ROOT, "replay_store.db")
+        self.db_path = db_path or os.path.join(MESSAGES_ROOT, "admission_store.db")
         os.makedirs(os.path.dirname(os.path.abspath(self.db_path)), exist_ok=True)
         self._init_db()
 
     def _init_db(self):
         try:
-            with sqlite3.connect(self.db_path, timeout=10.0) as conn:
+            with sqlite3.connect(self.db_path, timeout=15.0) as conn:
                 conn.execute("PRAGMA journal_mode=WAL;")
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS seen_nonces (
@@ -392,12 +390,119 @@ class DurableReplayStore:
                         state TEXT NOT NULL DEFAULT 'RECORDED'
                     );
                 """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS message_admissions (
+                        message_id TEXT PRIMARY KEY,
+                        correlation_id TEXT NOT NULL,
+                        payload_hash TEXT NOT NULL,
+                        sender TEXT NOT NULL,
+                        recipient TEXT NOT NULL,
+                        subject TEXT NOT NULL,
+                        admitted_at REAL NOT NULL,
+                        original_timestamp_ist TEXT NOT NULL,
+                        state TEXT NOT NULL DEFAULT 'QUEUED',
+                        attempt_count INTEGER NOT NULL DEFAULT 0
+                    );
+                """)
                 cursor = conn.execute("PRAGMA table_info(seen_nonces);")
                 cols = {row[1] for row in cursor.fetchall()}
                 if "message_id" not in cols:
                     conn.execute("ALTER TABLE seen_nonces ADD COLUMN message_id TEXT;")
                 if "state" not in cols:
                     conn.execute("ALTER TABLE seen_nonces ADD COLUMN state TEXT NOT NULL DEFAULT 'RECORDED';")
+                conn.commit()
+        except Exception:
+            pass
+
+    def admit_submission(
+        self,
+        message_id: str,
+        correlation_id: str,
+        payload_hash: str,
+        sender: str,
+        recipient: str,
+        subject: str,
+        timestamp_ist: str,
+    ) -> Tuple[bool, str, Optional[str], str]:
+        """
+        Atomically coordinates submission across multiple processes.
+        Returns: (is_new_admission, winning_correlation_id, error_or_conflict, state)
+        """
+        now = time.time()
+        try:
+            with sqlite3.connect(self.db_path, timeout=15.0) as conn:
+                conn.execute("PRAGMA journal_mode=WAL;")
+                cur = conn.execute(
+                    "SELECT correlation_id, payload_hash, state FROM message_admissions WHERE message_id = ?",
+                    (message_id,)
+                )
+                row = cur.fetchone()
+                if row is not None:
+                    existing_corr, existing_hash, existing_state = row[0], row[1], row[2]
+                    if existing_hash != payload_hash:
+                        return False, existing_corr, f"CONFLICT: message_id '{message_id}' already admitted with different payload hash", existing_state
+                    return False, existing_corr, None, existing_state
+
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO message_admissions (
+                            message_id, correlation_id, payload_hash, sender, recipient, subject,
+                            admitted_at, original_timestamp_ist, state, attempt_count
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'QUEUED', 0)
+                        """,
+                        (message_id, correlation_id, payload_hash, sender, recipient, subject, now, timestamp_ist)
+                    )
+                    conn.commit()
+                    return True, correlation_id, None, "QUEUED"
+                except sqlite3.IntegrityError:
+                    cur = conn.execute(
+                        "SELECT correlation_id, payload_hash, state FROM message_admissions WHERE message_id = ?",
+                        (message_id,)
+                    )
+                    row = cur.fetchone()
+                    if row and row[1] != payload_hash:
+                        return False, row[0], f"CONFLICT: message_id '{message_id}' already admitted with different payload hash", row[2]
+                    return False, row[0] if row else correlation_id, None, row[2] if row else "QUEUED"
+        except Exception as e:
+            return False, correlation_id, f"ADMISSION_STORE_ERROR: {e}", "ERROR"
+
+    def is_message_recovering(self, message_id: str, payload_hash: Optional[str] = None) -> bool:
+        """Checks if a message has been authorized for recovery retry in the durable store."""
+        try:
+            with sqlite3.connect(self.db_path, timeout=10.0) as conn:
+                cur = conn.execute(
+                    "SELECT state, payload_hash FROM message_admissions WHERE message_id = ?",
+                    (message_id,)
+                )
+                row = cur.fetchone()
+                if row and row[0] in ("RECOVERING", "RECOVERED_ACTIVE"):
+                    if payload_hash is None or row[1] == payload_hash:
+                        return True
+        except Exception:
+            pass
+        return False
+
+    def mark_message_claimed(self, message_id: str) -> None:
+        try:
+            with sqlite3.connect(self.db_path, timeout=10.0) as conn:
+                conn.execute(
+                    "UPDATE message_admissions SET state = 'CLAIMED' WHERE message_id = ? AND state = 'QUEUED'",
+                    (message_id,)
+                )
+                conn.commit()
+        except Exception:
+            pass
+
+    def mark_message_recovering(self, message_id: str, nonce: Optional[str] = None) -> None:
+        try:
+            with sqlite3.connect(self.db_path, timeout=10.0) as conn:
+                conn.execute(
+                    "UPDATE message_admissions SET state = 'RECOVERING', attempt_count = attempt_count + 1 WHERE message_id = ?",
+                    (message_id,)
+                )
+                if nonce:
+                    conn.execute("UPDATE seen_nonces SET state = 'RECOVERED_RETRY_PENDING' WHERE nonce = ?", (nonce,))
                 conn.commit()
         except Exception:
             pass
@@ -415,12 +520,16 @@ class DurableReplayStore:
         try:
             with sqlite3.connect(self.db_path, timeout=10.0) as conn:
                 conn.row_factory = sqlite3.Row
-                conn.execute("DELETE FROM seen_nonces WHERE recorded_at < ?", (now - ttl_sec,))
+                # Prune only completed/failed records older than TTL; never prune active recovery records!
+                conn.execute("DELETE FROM seen_nonces WHERE recorded_at < ? AND state IN ('COMPLETED', 'FAILED')", (now - ttl_sec,))
+                conn.execute("DELETE FROM message_admissions WHERE admitted_at < ? AND state IN ('COMPLETED', 'DEAD')", (now - ttl_sec,))
                 cur = conn.execute("SELECT * FROM seen_nonces WHERE nonce = ?", (nonce,))
                 row = cur.fetchone()
                 if row is not None:
                     if allow_recovery and row["state"] == "RECOVERED_RETRY_PENDING" and (row["message_id"] == message_id or not row["message_id"]):
                         conn.execute("UPDATE seen_nonces SET state = 'RECOVERED_RETRY_CONSUMED', recorded_at = ? WHERE nonce = ?", (now, nonce))
+                        if message_id:
+                            conn.execute("UPDATE message_admissions SET state = 'RECOVERED_ACTIVE' WHERE message_id = ?", (message_id,))
                         conn.commit()
                         return True, None
                     return False, f"REPLAY_ATTACK: Nonce '{nonce}' has already been processed."
@@ -428,6 +537,11 @@ class DurableReplayStore:
                     "INSERT INTO seen_nonces (nonce, sender, timestamp_ist, recorded_at, message_id, state) VALUES (?, ?, ?, ?, ?, ?)",
                     (nonce, sender, timestamp_ist, now, message_id, "RECORDED")
                 )
+                if message_id:
+                    conn.execute(
+                        "UPDATE message_admissions SET state = 'CLAIMED' WHERE message_id = ? AND state = 'QUEUED'",
+                        (message_id,)
+                    )
                 conn.commit()
             return True, None
         except sqlite3.IntegrityError:
@@ -443,33 +557,78 @@ class DurableReplayStore:
                     "UPDATE seen_nonces SET state = 'RECOVERED_RETRY_PENDING' WHERE nonce = ?",
                     (nonce,)
                 )
+                if message_id:
+                    conn.execute(
+                        "UPDATE message_admissions SET state = 'RECOVERING', attempt_count = attempt_count + 1 WHERE message_id = ?",
+                        (message_id,)
+                    )
                 conn.commit()
         except Exception:
             pass
 
-    def mark_nonce_completed(self, nonce: str):
-        """Marks a nonce as completed."""
+    def mark_nonce_completed(self, nonce: str, message_id: Optional[str] = None):
+        """Marks a nonce and admission as completed."""
         try:
             with sqlite3.connect(self.db_path, timeout=10.0) as conn:
                 conn.execute(
                     "UPDATE seen_nonces SET state = 'COMPLETED', recorded_at = ? WHERE nonce = ?",
                     (time.time(), nonce)
                 )
+                if message_id:
+                    conn.execute("UPDATE message_admissions SET state = 'COMPLETED' WHERE message_id = ?", (message_id,))
                 conn.commit()
         except Exception:
             pass
 
-    def mark_nonce_failed(self, nonce: str):
-        """Marks a nonce as failed."""
+    def mark_nonce_failed(self, nonce: str, message_id: Optional[str] = None):
+        """Marks a nonce and admission as failed."""
         try:
             with sqlite3.connect(self.db_path, timeout=10.0) as conn:
                 conn.execute(
                     "UPDATE seen_nonces SET state = 'FAILED', recorded_at = ? WHERE nonce = ?",
                     (time.time(), nonce)
                 )
+                if message_id:
+                    conn.execute("UPDATE message_admissions SET state = 'DEAD' WHERE message_id = ?", (message_id,))
                 conn.commit()
         except Exception:
             pass
+
+
+DurableReplayStore = DurableAdmissionStore
+
+
+def compute_payload_hash(body: Any) -> str:
+    """Computes a deterministic SHA-256 hash of the request body/payload."""
+    if isinstance(body, str):
+        payload_bytes = body.encode("utf-8")
+    else:
+        try:
+            payload_bytes = json.dumps(body, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode("utf-8")
+        except Exception:
+            payload_bytes = str(body).encode("utf-8")
+    return hashlib.sha256(payload_bytes).hexdigest()
+
+
+_ACTIVE_STORE: Optional[DurableAdmissionStore] = None
+_DEFAULT_ADMISSION_STORE: Optional[DurableAdmissionStore] = None
+_DEFAULT_ADMISSION_STORE_LOCK = threading.Lock()
+
+def get_default_admission_store() -> DurableAdmissionStore:
+    global _DEFAULT_ADMISSION_STORE, _ACTIVE_STORE
+    if _ACTIVE_STORE is not None:
+        try:
+            if os.path.dirname(os.path.abspath(_ACTIVE_STORE.db_path)) == os.path.abspath(MESSAGES_ROOT):
+                return _ACTIVE_STORE
+        except Exception:
+            pass
+    with _DEFAULT_ADMISSION_STORE_LOCK:
+        replay_db = os.path.join(MESSAGES_ROOT, "replay_store.db")
+        admission_db = os.path.join(MESSAGES_ROOT, "admission_store.db")
+        target_db = admission_db if (os.path.exists(admission_db) and not os.path.exists(replay_db)) else replay_db
+        if _DEFAULT_ADMISSION_STORE is None or _DEFAULT_ADMISSION_STORE.db_path != target_db:
+            _DEFAULT_ADMISSION_STORE = DurableAdmissionStore(target_db)
+        return _DEFAULT_ADMISSION_STORE
 
 
 def load_auth_config() -> Dict[str, Any]:
@@ -513,8 +672,8 @@ def get_agent_secret_key(agent_name: str) -> Optional[str]:
 
 
 RUNTIME_METADATA_FIELDS = {
-    "auth_signature", "claimed_at_ist", "worker_pid", "worker_create_time_nt",
-    "processing_started_at_ist"
+    "auth_signature", "claimed_at_ist", "claimed_at_ts", "worker_pid", "worker_create_time_nt",
+    "processing_started_at_ist", "auth_verified_at_ist"
 }
 
 
@@ -554,7 +713,8 @@ def verify_message_auth(
     msg: Dict[str, Any],
     record_nonce: bool = True,
     allow_recovery: bool = False,
-    check_freshness: bool = True
+    check_freshness: bool = True,
+    admission_store: Optional[DurableAdmissionStore] = None,
 ) -> Tuple[bool, Optional[str]]:
     """Validates message HMAC-SHA256 signature, durable nonce uniqueness, and timestamp freshness.
     Strict evaluation order: schema/fields -> timestamp freshness -> HMAC verification -> record nonce.
@@ -586,7 +746,8 @@ def verify_message_auth(
             skew_sec = auth_cfg.get("max_future_skew_sec", 60)
 
             if delta_sec > val_sec:
-                return False, f"TIMESTAMP_OUT_OF_BOUNDS: Message expired ({delta_sec:.1f}s old > {val_sec}s limit)."
+                if not allow_recovery:
+                    return False, f"TIMESTAMP_OUT_OF_BOUNDS: Message expired ({delta_sec:.1f}s old > {val_sec}s limit)."
             if delta_sec < -skew_sec:
                 return False, f"TIMESTAMP_OUT_OF_BOUNDS: Message timestamp is in the future by {-delta_sec:.1f}s (> {skew_sec}s limit)."
         except Exception as e:
@@ -599,10 +760,10 @@ def verify_message_auth(
 
     # 3. Durable SQLite Nonce Replay Check (recorded ONLY after timestamp and HMAC pass)
     if record_nonce:
-        replay_store = DurableReplayStore(os.path.join(MESSAGES_ROOT, "replay_store.db"))
+        store = admission_store or get_default_admission_store()
         msg_id = msg.get("message_id")
         is_recovered = allow_recovery or (isinstance(msg.get("attempt_count"), int) and msg["attempt_count"] > 0)
-        nonce_ok, nonce_err = replay_store.check_and_record_nonce(
+        nonce_ok, nonce_err = store.check_and_record_nonce(
             nonce, sender, msg.get("created_at_ist", ""),
             message_id=msg_id, allow_recovery=is_recovered
         )
@@ -663,7 +824,8 @@ def validate_message_schema(
     msg: Dict[str, Any],
     record_nonce: Optional[bool] = None,
     allow_recovery: bool = False,
-    check_freshness: bool = True
+    check_freshness: bool = True,
+    admission_store: Optional[DurableAdmissionStore] = None,
 ) -> Tuple[bool, Optional[str]]:
     """Validates incoming message envelope schema and security constraints strictly."""
     required_fields = [
@@ -728,14 +890,23 @@ def validate_message_schema(
             if not pre_hash:
                 return False, f"PRE_TASK_HASH_REQUIRED: Modifying existing file '{target_path_to_check}' requires 'pre_task_hash' (or 'expected_base_hash')."
 
+    # Check durable store for active recovery status
+    msg_id = msg.get("message_id")
+    store = admission_store or get_default_admission_store()
+    is_recovering = allow_recovery
+    if not is_recovering and msg_id and store:
+        p_hash = compute_payload_hash(msg.get("body"))
+        if store.is_message_recovering(msg_id, p_hash):
+            is_recovering = True
+
     # Cryptographic Authentication & Nonce Verification
     should_record = record_nonce if record_nonce is not None else True
-    is_recovered = allow_recovery or (isinstance(msg.get("attempt_count"), int) and msg["attempt_count"] > 0)
     auth_valid, auth_err = verify_message_auth(
         msg,
         record_nonce=should_record,
-        allow_recovery=is_recovered,
-        check_freshness=check_freshness
+        allow_recovery=is_recovering,
+        check_freshness=check_freshness,
+        admission_store=store,
     )
     if not auth_valid:
         return False, auth_err
@@ -848,10 +1019,12 @@ class InboxWorker:
                         recipient = msg_data.get("recipient", "ANTIGRAVITY")
                         self._pending_by_recipient.setdefault(recipient, []).append((claimed_path, msg_data))
 
-    def recover_orphaned_claims(self):
+    def recover_orphaned_claims(self, stale_threshold_sec: Optional[float] = None) -> int:
         """Scans inbox for stale .claimed files from crashed workers and recovers them."""
         ensure_directories()
         now = time.time()
+        threshold = stale_threshold_sec if stale_threshold_sec is not None else CLAIM_TIMEOUT_SEC
+        recovered_count = 0
         for filename in os.listdir(INBOX_DIR):
             if filename.endswith(".claimed"):
                 claimed_path = os.path.join(INBOX_DIR, filename)
@@ -859,14 +1032,27 @@ class InboxWorker:
                     mtime = os.path.getmtime(claimed_path)
                 except OSError:
                     continue
-                if (now - mtime) > CLAIM_TIMEOUT_SEC:
+
+                data = None
+                claim_ts = mtime
+                try:
+                    with open(claimed_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if "claimed_at_ts" in data and isinstance(data["claimed_at_ts"], (int, float)):
+                        claim_ts = data["claimed_at_ts"]
+                except Exception:
+                    pass
+
+                if (now - claim_ts) > threshold or (now - mtime) > threshold:
                     try:
-                        with open(claimed_path, "r", encoding="utf-8") as f:
-                            data = json.load(f)
+                        if data is None:
+                            with open(claimed_path, "r", encoding="utf-8") as f:
+                                data = json.load(f)
                         worker_pid = data.get("worker_pid")
                         worker_ct = data.get("worker_create_time_nt")
                         if _pid_is_running(worker_pid, expected_create_time=worker_ct):
-                            continue
+                            if stale_threshold_sec is None or worker_pid != os.getpid():
+                                continue
                         attempts = data.get("attempt_count", 0) + 1
                         data["attempt_count"] = attempts
                         msg_id = data.get("message_id", filename.replace(".claimed", ""))
@@ -908,16 +1094,19 @@ class InboxWorker:
                             except OSError:
                                 pass
                         else:
-                            # WORKER_RETRY mode: Mark nonce for recovery in replay store
+                            # WORKER_RETRY mode: Mark nonce and admission for recovery
                             nonce = data.get("nonce")
+                            store = getattr(self, "db", None) or get_default_admission_store()
+                            if store:
+                                store.mark_message_recovering(msg_id, nonce=nonce)
                             if nonce:
-                                replay_store = DurableReplayStore(os.path.join(MESSAGES_ROOT, "replay_store.db"))
+                                replay_store = get_default_admission_store()
                                 replay_store.mark_nonce_for_recovery(nonce, msg_id)
 
                             # Revert back to .json to allow worker retry
                             data["status"] = "CREATED"
                             data["attempt_count"] = attempts
-                            for rm_field in ["claimed_at_ist", "worker_pid", "worker_create_time_nt", "processing_started_at_ist", "auth_verified_at_ist"]:
+                            for rm_field in ["claimed_at_ist", "claimed_at_ts", "worker_pid", "worker_create_time_nt", "processing_started_at_ist", "auth_verified_at_ist"]:
                                 data.pop(rm_field, None)
                             safe_revert = get_safe_filename(msg_id, ".json")
                             revert_path = os.path.join(INBOX_DIR, safe_revert)
@@ -926,8 +1115,10 @@ class InboxWorker:
                                 os.remove(claimed_path)
                             except OSError:
                                 pass
+                            recovered_count += 1
                     except Exception:
                         pass
+        return recovered_count
 
     def claim_message(self, json_filename: str) -> Optional[Tuple[str, Dict[str, Any]]]:
         """
@@ -964,7 +1155,7 @@ class InboxWorker:
                         data = json.load(f)
 
                     # Validate schema, timestamp freshness, and HMAC at ARRIVAL (claim time)
-                    is_valid, auth_err = validate_message_schema(data)
+                    is_valid, auth_err = validate_message_schema(data, admission_store=getattr(self, "db", None))
                     if not is_valid:
                         safe_dead = get_safe_filename(data.get("message_id", json_filename.replace(".json", "")), ".dead.json")
                         dead_path = os.path.join(DEAD_LETTER_DIR, safe_dead)
@@ -1016,9 +1207,14 @@ class InboxWorker:
 
                     data["status"] = "CLAIMED"
                     data["claimed_at_ist"] = get_current_ist()
+                    data["claimed_at_ts"] = time.time()
                     data["worker_pid"] = os.getpid()
                     data["worker_create_time_nt"] = get_process_create_time_nt(os.getpid())
                     write_json_atomic(claimed_path, data)
+                    try:
+                        os.utime(claimed_path, (time.time(), time.time()))
+                    except OSError:
+                        pass
                     return claimed_path, data
                 except Exception as e:
                     # Malformed JSON in inbox
@@ -1328,10 +1524,10 @@ class InboxWorker:
         # 5. Archive or Dead-Letter
         msg_id = msg.get("message_id")
         nonce = msg.get("nonce")
-        replay_store = DurableReplayStore(os.path.join(MESSAGES_ROOT, "replay_store.db"))
+        store = getattr(self, "db", None) or get_default_admission_store()
         if status == "COMPLETED":
-            if nonce:
-                replay_store.mark_nonce_completed(nonce)
+            if nonce and store:
+                store.mark_nonce_completed(nonce, msg_id)
             msg["status"] = "COMPLETED"
             msg["completed_at_ist"] = resp_envelope["completed_at_ist"]
             safe_archive_name = get_safe_filename(msg_id, ".json")
@@ -1342,8 +1538,8 @@ class InboxWorker:
             except OSError:
                 pass
         else:
-            if nonce:
-                replay_store.mark_nonce_failed(nonce)
+            if nonce and store:
+                store.mark_nonce_failed(nonce, msg_id)
             self.route_to_dead_letter(claimed_path, msg, error_msg or f"TASK_{status}")
 
     def process_message(self, claimed_path: str, msg: Dict[str, Any]):
