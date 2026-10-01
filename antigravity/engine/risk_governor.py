@@ -24,9 +24,13 @@ Mathematical Guardrails & Invariants (Yashu Adjusted A1 Hardening):
    - Maximum 2 positions per sector (pinned invariant, cannot be widened).
 4. Reassessment on Actual Fill:
    - Actual fills from reservations re-assess exposure and risk against slot cap and risk ceiling.
+   - Re-checks inviolable cash buffer at actual fill time.
+   - Fails closed on NaN, inf, boolean, non-positive price/quantity.
+   - Preserves residual reservation quantities on partial fills.
 5. Ledger Integrity & Partial Fills:
    - Partial exit support preserves residual holdings, open risk, and occupied slot.
-   - Duplicate exit events rejected fail-closed to prevent double-crediting cash.
+   - Duplicate exit events rejected fail-closed via event idempotency tracking.
+   - Reconciles sale proceeds deducting only exit costs (no double deduction of entry costs).
 """
 
 from __future__ import annotations
@@ -240,6 +244,7 @@ class PortfolioRiskGovernor:
         self.active_positions: Dict[str, Dict[str, Any]] = {}
         self.pending_reservations: Dict[str, Dict[str, Any]] = {}
         self.unresolved_exits: Set[str] = set()
+        self.processed_exit_events: Set[str] = set()  # Event idempotency tracking (Codex Finding 2)
 
     @property
     def available_slots(self) -> int:
@@ -531,15 +536,24 @@ class PortfolioRiskGovernor:
         sec = sector or self.resolve_sector(sym)
         notional = round(shares * entry_price, 2)
         risk = round(shares * (entry_price - stop_price), 2)
-        self.active_positions[sym] = {
-            "symbol": sym,
-            "shares": int(shares),
-            "entry_price": float(entry_price),
-            "stop_price": float(stop_price),
-            "notional_rs": notional,
-            "open_risk_rs": risk,
-            "sector": sec,
-        }
+        if sym in self.active_positions:
+            # Add to existing position if partial fill aggregation
+            existing = self.active_positions[sym]
+            new_shares = existing["shares"] + int(shares)
+            existing["shares"] = new_shares
+            existing["notional_rs"] = round(new_shares * existing["entry_price"], 2)
+            existing["open_risk_rs"] = round(new_shares * (existing["entry_price"] - existing["stop_price"]), 2)
+        else:
+            self.active_positions[sym] = {
+                "symbol": sym,
+                "shares": int(shares),
+                "entry_price": float(entry_price),
+                "stop_price": float(stop_price),
+                "notional_rs": notional,
+                "open_risk_rs": risk,
+                "sector": sec,
+                "entry_costs": round(float(transaction_costs), 2),
+            }
         self.cash_rs = round(self.cash_rs - notional - transaction_costs, 2)
 
     def confirm_fill_from_reservation(
@@ -550,14 +564,41 @@ class PortfolioRiskGovernor:
         transaction_costs: float = 0.0,
     ) -> None:
         """
-        Converts a pending reservation to an active position (Codex Finding 3):
+        Converts a pending reservation to an active position (Codex Findings 3 & 4):
+        - Fails closed on NaN, inf, boolean, or non-positive values.
         - Re-assesses actual fill exposure and risk before converting.
-        - Rejects fail-closed if actual fill price or quantity breaches slot cap or risk budget.
-        - Supports partial-fill quantities.
+        - Verifies that actual outlay does not breach the inviolable Rs 136,000 cash buffer.
+        - Preserves residual reservation quantities on partial fills.
         """
         sym = str(symbol).strip().upper()
         if sym not in self.pending_reservations:
             raise KeyError(f"No pending reservation found for '{sym}'")
+
+        # Strict fail-closed input validation (Codex Round 2 Finding 3)
+        if actual_fill_price is not None:
+            if (
+                isinstance(actual_fill_price, bool)
+                or not isinstance(actual_fill_price, numbers.Real)
+                or not math.isfinite(float(actual_fill_price))
+                or float(actual_fill_price) <= 0
+            ):
+                raise ValueError("FAIL-CLOSED: Actual fill price must be a finite positive number.")
+
+        if filled_quantity is not None:
+            if (
+                isinstance(filled_quantity, bool)
+                or not isinstance(filled_quantity, numbers.Integral)
+                or int(filled_quantity) <= 0
+            ):
+                raise ValueError("FAIL-CLOSED: Filled quantity must be a positive integer.")
+
+        if (
+            isinstance(transaction_costs, bool)
+            or not isinstance(transaction_costs, numbers.Real)
+            or not math.isfinite(float(transaction_costs))
+            or float(transaction_costs) < 0
+        ):
+            raise ValueError("FAIL-CLOSED: Transaction costs must be a finite non-negative number.")
 
         res = self.pending_reservations[sym]
         fill_price = float(actual_fill_price) if actual_fill_price is not None else res["entry_price"]
@@ -565,18 +606,36 @@ class PortfolioRiskGovernor:
         stop_p = res["stop_price"]
         sec = res["sector"]
 
-        # Re-assess actual fill notional and risk (Codex Finding 3)
+        if shares > res["quantity"]:
+            raise ValueError(f"FAIL-CLOSED: Cannot fill {shares} shares exceeding reserved quantity {res['quantity']}.")
+
+        # Re-assess actual fill notional and risk
         actual_notional = round(shares * fill_price, 2)
         actual_risk = round(shares * (fill_price - stop_p), 2)
 
+        # Ceiling checks (Rs 38,000 slot cap, Rs 1,500 risk budget)
         if actual_notional > self.slot_cap_rs + 1e-4 or actual_risk > self.risk_per_trade_rs + 1e-4:
             raise ValueError(
                 f"EXPOSURE_OR_RISK_BREACH: Actual fill notional Rs {actual_notional:.2f} (cap: {self.slot_cap_rs:.2f}) "
                 f"or risk Rs {actual_risk:.2f} (budget: {self.risk_per_trade_rs:.2f}) breaches limits."
             )
 
-        # Pop reservation only after verification passes
-        self.pending_reservations.pop(sym)
+        # Enforce Cash Buffer at Actual Fill Time (Codex Round 2 Finding 4)
+        remaining_cash_after_fill = round(self.cash_rs - actual_notional - float(transaction_costs), 2)
+        if remaining_cash_after_fill < self.cash_buffer_rs:
+            raise ValueError(
+                f"CASH_BUFFER_BREACH_AT_FILL: Actual fill outlay (Rs {actual_notional:.2f} + {transaction_costs:.2f}) "
+                f"leaves cash Rs {remaining_cash_after_fill:.2f}, breaching inviolable buffer Rs {self.cash_buffer_rs:.2f}."
+            )
+
+        # Preserve residual reservation on partial fill (Codex Round 2 Finding 3)
+        remaining_reserved_qty = res["quantity"] - shares
+        if remaining_reserved_qty > 0:
+            res["quantity"] = remaining_reserved_qty
+            res["notional_rs"] = round(remaining_reserved_qty * res["entry_price"], 2)
+            res["open_risk_rs"] = round(remaining_reserved_qty * (res["entry_price"] - res["stop_price"]), 2)
+        else:
+            self.pending_reservations.pop(sym)
 
         self.confirm_fill(
             symbol=sym,
@@ -598,14 +657,24 @@ class PortfolioRiskGovernor:
         exit_price: float,
         shares: int,
         transaction_costs: float = 0.0,
+        exit_transaction_costs: Optional[float] = None,
+        exit_event_id: Optional[str] = None,
     ) -> None:
         """
-        Reconciles exit order execution with ledger accounting (Codex Finding 2):
-        - Validates existence of active position (fails closed on duplicate credit attempt).
+        Reconciles exit order execution with ledger accounting (Codex Findings 2, 8):
+        - Enforces event idempotency via exit_event_id to prevent duplicate credits.
+        - Validates existence of active position (fails closed on closed positions).
         - Validates shares quantity (cannot sell <= 0 or > open shares).
         - Deducts sold shares and updates remaining notional, risk, and occupied slot.
         - Removes position and clears unresolved marker only when completely closed.
+        - Deducts ONLY exit transaction friction from sale proceeds (no double deduction of entry costs).
         """
+        # Event idempotency check (Codex Round 2 Finding 2)
+        if exit_event_id is not None:
+            if exit_event_id in self.processed_exit_events:
+                raise ValueError(f"DUPLICATE_EXIT_EVENT: Exit event '{exit_event_id}' has already been processed.")
+            self.processed_exit_events.add(exit_event_id)
+
         sym = str(symbol).strip().upper()
         if sym not in self.active_positions:
             raise KeyError(f"No active position found for '{sym}'. Duplicate or invalid exit prohibited.")
@@ -636,7 +705,9 @@ class PortfolioRiskGovernor:
             if sym in self.unresolved_exits:
                 self.unresolved_exits.remove(sym)
 
-        proceeds = round((shares_to_sell * exit_price) - transaction_costs, 2)
+        # Deduct ONLY exit costs from turnover to avoid double-deducting entry friction (Codex Finding 8)
+        actual_exit_costs = exit_transaction_costs if exit_transaction_costs is not None else transaction_costs
+        proceeds = round((shares_to_sell * exit_price) - actual_exit_costs, 2)
         self.cash_rs = round(self.cash_rs + proceeds, 2)
 
     def rank_and_allocate_signals(

@@ -839,3 +839,124 @@ def test_codex_finding_8_net_realized_pnl_includes_entry_and_exit_costs():
     # Net loss must include entry costs (60) + exit costs
     assert report.net_realized_loss > report.gross_realized_loss + 59.0
 
+
+# ============================================================================
+# PART 5: CODEX ROUND 2 ACCEPTANCE REGRESSION TESTS
+# ============================================================================
+
+def test_codex_round2_cash_buffer_at_fill():
+    """
+    Round 2 Finding: Cash buffer not enforced at actual fill.
+    An approved reservation for 38 shares at 999, with 174,020 cash,
+    subsequently fills at 1,000 with calculated statutory costs of 45.08.
+    Remaining cash becomes 135,974.92, below 136,000.
+    Must raise ValueError('CASH_BUFFER_BREACH_AT_FILL') fail-closed.
+    """
+    gov = PortfolioRiskGovernor()
+    gov.cash_rs = 174_020.00
+    gov.reserve_slot("CDSL", quantity=38, entry_price=999.0, stop_price=961.0, sector="CAPITAL_MARKETS_FINTECH")
+
+    with pytest.raises(ValueError, match="CASH_BUFFER_BREACH_AT_FILL"):
+        gov.confirm_fill_from_reservation("CDSL", actual_fill_price=1000.0, transaction_costs=45.08)
+
+
+def test_codex_round2_partial_fill_preserves_reservation():
+    """
+    Round 2 Finding: Partial fills discard outstanding reservations.
+    Confirming 15 shares against a 100-share reservation must preserve
+    the remaining 85 shares in pending_reservations.
+    """
+    gov = PortfolioRiskGovernor(slot_cap_rs=38000.0)
+    # 100 shares @ 300 = 30,000 notional, stop 285 -> risk 1,500
+    gov.reserve_slot("SUZLON", quantity=100, entry_price=300.0, stop_price=285.0, sector="GREEN_ENERGY_POWER")
+
+    gov.confirm_fill_from_reservation("SUZLON", actual_fill_price=300.0, filled_quantity=15, transaction_costs=10.0)
+    assert "SUZLON" in gov.active_positions
+    assert gov.active_positions["SUZLON"]["shares"] == 15
+
+    # 85 shares must remain in pending_reservations!
+    assert "SUZLON" in gov.pending_reservations
+    assert gov.pending_reservations["SUZLON"]["quantity"] == 85
+    assert gov.pending_reservations["SUZLON"]["notional_rs"] == 85 * 300.0
+
+
+def test_codex_round2_actual_fill_nan_rejected():
+    """
+    Round 2 Finding: Actual-fill validation fails open for NaN.
+    Confirming a fill at float('nan') or invalid prices must raise fail-closed.
+    """
+    gov = PortfolioRiskGovernor()
+    gov.reserve_slot("CDSL", quantity=30, entry_price=1000.0, stop_price=960.0, sector="CAPITAL_MARKETS_FINTECH")
+
+    with pytest.raises(ValueError, match="FAIL-CLOSED"):
+        gov.confirm_fill_from_reservation("CDSL", actual_fill_price=float("nan"))
+
+    with pytest.raises(ValueError, match="FAIL-CLOSED"):
+        gov.confirm_fill_from_reservation("CDSL", actual_fill_price=-100.0)
+
+    with pytest.raises(ValueError, match="FAIL-CLOSED"):
+        gov.confirm_fill_from_reservation("CDSL", actual_fill_price=1000.0, filled_quantity=0)
+
+
+def test_codex_round2_exit_event_idempotency():
+    """
+    Round 2 Finding: Replaying a partial exit credits cash again.
+    reconcile_exit must require/track exit_event_id and prevent duplicate credits.
+    """
+    gov = PortfolioRiskGovernor()
+    gov.confirm_fill("CDSL", 100, 1000.0, 950.0, "CAPITAL_MARKETS_FINTECH")
+    initial_cash = gov.cash_rs
+
+    # First partial exit of 10 shares
+    gov.reconcile_exit("CDSL", exit_price=1050.0, shares=10, transaction_costs=15.0, exit_event_id="EVT_001")
+    cash_after = gov.cash_rs
+    assert cash_after == initial_cash + (10 * 1050.0 - 15.0)
+
+    # Replay of exact same exit event ID must raise duplicate event error
+    with pytest.raises(ValueError, match="DUPLICATE_EXIT_EVENT"):
+        gov.reconcile_exit("CDSL", exit_price=1050.0, shares=10, transaction_costs=15.0, exit_event_id="EVT_001")
+
+
+def test_codex_round2_take_profit_touch_and_benchmark():
+    """
+    Round 2 Finding: Take profit bypasses touch verification and benchmarks against stop.
+    - If trigger is TAKE_PROFIT, must verify bar.high >= target_price.
+    - If bar.high < target_price, state must be QUEUED (unfilled).
+    - If touched, execution benchmarks against target_price, NOT stop_price!
+    """
+    engine = ExecutionSimulator()
+    pos = SwingPosition(symbol="CDSL", shares=50, entry_price=1000.0, stop_price=950.0, sector="CAPITAL_MARKETS_FINTECH")
+
+    # Case A: Target at 1150, but Bar high is only 1120 -> untouched!
+    bar_low = DailyBar(symbol="CDSL", open=1100.0, high=1120.0, low=1080.0, close=1110.0, volume=50000)
+    rep_untouched = engine.simulate_exit(pos, bar_low, trigger_reason="TAKE_PROFIT", target_price=1150.0)
+    assert rep_untouched.state == ExecutionState.QUEUED or rep_untouched.filled_quantity == 0
+    assert rep_untouched.position_remains_open is True
+
+    # Case B: Target at 1150, Bar high is 1160 -> touched!
+    bar_touched = DailyBar(symbol="CDSL", open=1140.0, high=1160.0, low=1130.0, close=1155.0, volume=50000)
+    rep_touched = engine.simulate_exit(pos, bar_touched, trigger_reason="TAKE_PROFIT", target_price=1150.0)
+    assert rep_touched.state == ExecutionState.FILLED
+    # Fill price benchmarks near 1150 (minus 7.5 bps slippage = 1149.14), NOT at 950!
+    assert rep_touched.actual_fill_price > 1140.0
+    assert rep_touched.realized_r_multiple > 0.0  # Profitable exit!
+
+
+def test_codex_round2_exit_reconciliation_no_double_entry_deduction():
+    """
+    Round 2 Finding: total_cost combines previously paid entry costs with exit costs.
+    reconcile_exit must deduct ONLY exit_transaction_costs from sale proceeds,
+    preventing double deduction of entry costs from portfolio cash.
+    """
+    gov = PortfolioRiskGovernor()
+    gov.confirm_fill("CDSL", 50, 1000.0, 950.0, "CAPITAL_MARKETS_FINTECH", transaction_costs=60.0)
+    cash_after_buy = gov.cash_rs
+    # Entry costs (60) already deducted from cash!
+
+    # Exit sold at 1,000. Exit transaction costs are 47.02.
+    # Entry costs were 60.0.
+    gov.reconcile_exit("CDSL", exit_price=1000.0, shares=50, exit_transaction_costs=47.02)
+    # Cash credited must be: 50 * 1000 - 47.02 = 49,952.98
+    assert gov.cash_rs == cash_after_buy + 49952.98
+
+

@@ -66,8 +66,16 @@ def main():
     with open(LOG_PATH, "w", encoding="utf-8") as f:
         f.write(full_log)
 
+    import hashlib
+    file_bytes = LOG_PATH.read_bytes()
+    sha256_hash = hashlib.sha256(file_bytes).hexdigest().upper()
+    sha_path = LOG_PATH.with_suffix(".log.sha256")
+    sha_path.write_text(f"{sha256_hash}  {LOG_PATH.name}\n", encoding="utf-8")
+
     print(f"Execution complete in {elapsed:.2f}s. Exit code: {proc.returncode}")
     print(f"Log written to {LOG_PATH}")
+    print(f"Log SHA-256: {sha256_hash}")
+    print(f"SHA-256 seal written to {sha_path}")
     print("\n--- TEST SUMMARY ---")
     lines = proc.stdout.strip().splitlines()
     for line in lines[-5:]:

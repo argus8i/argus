@@ -220,6 +220,7 @@ class ExecutionReport:
     turnover: float
     transaction_costs: Dict[str, float]
     total_cost: float
+    exit_transaction_costs: float = 0.0
     rejection_reason: Optional[str] = None
     is_gap_exit: bool = False
     position_remains_open: bool = False
@@ -475,14 +476,17 @@ class ExecutionSimulator(ExecutionFrictionEngine):
         position: SwingPosition,
         bar: DailyBar,
         trigger_reason: str = "STOP_LOSS",
+        target_price: Optional[float] = None,
         entry_transaction_costs: float = 0.0,
     ) -> ExecutionReport:
         """
-        Simulates exit order execution against session bar (Codex Findings 1, 8):
+        Simulates exit order execution against session bar (Codex Findings 1, 8, Round 2):
         - Validates symbol consistency.
-        - Verifies exit price touch (stop-loss touched only if bar.low <= stop_price or gap open).
+        - Verifies exit price touch (stop-loss touched only if bar.low <= stop_price or gap open;
+          take-profit touched only if bar.high >= target_price or gap open).
         - Enforces session volume availability and Rule 9 participation cap on exits.
         - Rule 4 & 5 Lower Circuit check (LOCKED_NO_BID -> position carried forward).
+        - Benchmarks execution against target_price (for TAKE_PROFIT) or stop_price (for STOP_LOSS).
         - Gap-down past stop price fills at Open price - slippage, actual loss exceeds 1R.
         - Calculates itemized friction including flat Rs 15.93 DP charge.
         - Calculates complete net PnL accounting for both entry and exit transaction friction.
@@ -504,13 +508,13 @@ class ExecutionSimulator(ExecutionFrictionEngine):
                 turnover=0.0,
                 transaction_costs={},
                 total_cost=0.0,
+                exit_transaction_costs=0.0,
                 position_remains_open=True,
                 rejection_reason=f"SYMBOL_MISMATCH: Position symbol '{position.symbol}' does not match bar symbol '{bar.symbol}'.",
             )
 
-        # Exit trigger touch verification (Codex Finding 1)
-        # For stop-loss: must check if stop price was actually breached
-        if trigger_reason == "STOP_LOSS":
+        # Exit trigger touch verification (Codex Findings 1, Round 2)
+        if trigger_reason in ("STOP_LOSS", "STOP"):
             if bar.low > position.stop_price and bar.open >= position.stop_price:
                 # Stop price was NEVER touched during the session!
                 return ExecutionReport(
@@ -528,8 +532,33 @@ class ExecutionSimulator(ExecutionFrictionEngine):
                     turnover=0.0,
                     transaction_costs={},
                     total_cost=0.0,
+                    exit_transaction_costs=0.0,
                     position_remains_open=True,
                     rejection_reason=f"STOP_NOT_TOUCHED: Session low ({bar.low}) stayed above stop price ({position.stop_price}).",
+                )
+        elif trigger_reason in ("TAKE_PROFIT", "TARGET"):
+            if target_price is None:
+                raise ValueError("FAIL-CLOSED: target_price must be provided when trigger_reason is TAKE_PROFIT or TARGET.")
+            if bar.high < target_price and bar.open <= target_price:
+                # Target price was NEVER reached during the session!
+                return ExecutionReport(
+                    order_id=f"EXIT_{uuid.uuid4().hex[:8].upper()}",
+                    symbol=position.symbol,
+                    side=OrderSide.SELL,
+                    state=ExecutionState.QUEUED,
+                    requested_quantity=position.shares,
+                    filled_quantity=0,
+                    unfilled_quantity=position.shares,
+                    actual_fill_price=0.0,
+                    fill_probability=0.0,
+                    slippage_bps=0.0,
+                    slippage_amount=0.0,
+                    turnover=0.0,
+                    transaction_costs={},
+                    total_cost=0.0,
+                    exit_transaction_costs=0.0,
+                    position_remains_open=True,
+                    rejection_reason=f"TARGET_NOT_TOUCHED: Session high ({bar.high}) stayed below target price ({target_price}).",
                 )
 
         # Check zero-volume session (Codex Finding 1)
@@ -612,13 +641,22 @@ class ExecutionSimulator(ExecutionFrictionEngine):
                 rejection_reason="PARTICIPATION_LIMIT_ZERO_FILL: Session liquidity insufficient for executable participation.",
             )
 
-        # Price determination & Gap-down exit check
+        # Price determination & Gap exit check (Codex Finding 1, Round 2)
         is_gap = False
-        if bar.open < position.stop_price:
-            is_gap = True
-            base_price = bar.open
+        if trigger_reason in ("TAKE_PROFIT", "TARGET") and target_price is not None:
+            if bar.open > target_price:
+                is_gap = True
+                base_price = bar.open
+            else:
+                base_price = target_price
+        elif trigger_reason in ("STOP_LOSS", "STOP"):
+            if bar.open < position.stop_price:
+                is_gap = True
+                base_price = bar.open
+            else:
+                base_price = position.stop_price
         else:
-            base_price = position.stop_price
+            base_price = bar.close
 
         # Apply adverse slippage
         actual_fill_price = self.apply_slippage(base_price, OrderSide.SELL, is_gap=is_gap)
@@ -664,6 +702,7 @@ class ExecutionSimulator(ExecutionFrictionEngine):
             turnover=turnover,
             transaction_costs=costs,
             total_cost=combined_total_cost,
+            exit_transaction_costs=exit_total_cost,
             is_gap_exit=is_gap,
             position_remains_open=remains_open,
             gross_realized_loss=gross_loss,
