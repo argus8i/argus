@@ -142,6 +142,8 @@ class BacktestTrade:
     exit_session: Optional[str] = None
     entry_price: float = 0.0
     exit_price: Optional[float] = None
+    raw_entry_price: float = 0.0
+    raw_exit_price: Optional[float] = None
     shares: int = 0
     initial_risk_per_share: float = 0.0
     stop_loss: float = 0.0
@@ -158,6 +160,7 @@ class BacktestTrade:
     unrealized_pnl: float = 0.0
     mtm_value: float = 0.0
     exit_reason: Optional[str] = None
+    as_of_session: Optional[str] = None
 
     @property
     def initial_risk_rs(self) -> float:
@@ -166,6 +169,7 @@ class BacktestTrade:
     def mark_to_market(self, last_close: float, as_of_session: str) -> None:
         self.mtm_value = last_close * self.shares
         self.unrealized_pnl = (last_close - self.entry_price) * self.shares
+        self.as_of_session = as_of_session
         if self.status == TradeStatus.OPEN:
             self.status = TradeStatus.UNRESOLVED
 
@@ -175,9 +179,11 @@ class BacktestTrade:
         exit_price: float,
         exit_reason: str,
         exit_costs: float = 0.0,
+        raw_exit_price: Optional[float] = None,
     ) -> None:
         self.exit_session = exit_session
         self.exit_price = exit_price
+        self.raw_exit_price = raw_exit_price if raw_exit_price is not None else exit_price
         self.exit_reason = exit_reason
         self.exit_costs = exit_costs
         self.gross_pnl = (self.exit_price - self.entry_price) * self.shares
@@ -212,6 +218,7 @@ class RejectedSignal:
 class BarExitEvent:
     reason: str
     exit_price: float
+    raw_exit_price: float = 0.0
 
 
 @dataclass
@@ -389,22 +396,22 @@ class BacktestSimulation:
         # Check gap-down opening below stop loss
         if bar.open < trade.stop_loss:
             gap_exit_price = bar.open * (1.0 - policy.gap_slippage_bps / 10000.0)
-            return BarExitEvent(reason="GAP_STOP_LOSS", exit_price=gap_exit_price)
+            return BarExitEvent(reason="GAP_STOP_LOSS", exit_price=gap_exit_price, raw_exit_price=bar.open)
 
         # Conservative path invariant: Stop loss hit
         if bar.low <= trade.stop_loss:
             sl_exit_price = trade.stop_loss * (1.0 - policy.normal_slippage_bps / 10000.0)
-            return BarExitEvent(reason="STOP_LOSS", exit_price=sl_exit_price)
+            return BarExitEvent(reason="STOP_LOSS", exit_price=sl_exit_price, raw_exit_price=trade.stop_loss)
 
         # Target hit
         if bar.high >= trade.target:
             tgt_exit_price = trade.target * (1.0 - policy.normal_slippage_bps / 10000.0)
-            return BarExitEvent(reason="TARGET", exit_price=tgt_exit_price)
+            return BarExitEvent(reason="TARGET", exit_price=tgt_exit_price, raw_exit_price=trade.target)
 
         # Trailing stop hit
         if trade.trailing_stop is not None and bar.low <= trade.trailing_stop:
             ts_exit_price = trade.trailing_stop * (1.0 - policy.normal_slippage_bps / 10000.0)
-            return BarExitEvent(reason="TRAILING_STOP", exit_price=ts_exit_price)
+            return BarExitEvent(reason="TRAILING_STOP", exit_price=ts_exit_price, raw_exit_price=trade.trailing_stop)
 
         return None
 
@@ -461,29 +468,45 @@ class BacktestSimulation:
     ) -> float:
         """
         Reprices an identical closed trade ledger under a given friction policy,
-        verifying monotonic net PnL degradation.
+        deriving execution prices freshly from raw baseline execution levels,
+        and grouping DP charges per symbol per sell day.
         """
         total_net_pnl = 0.0
+        dp_seen: Set[Tuple[str, str]] = set()
+
         for t in trades:
-            if t.exit_price is None:
+            if t.status != TradeStatus.CLOSED or t.exit_session is None:
                 continue
 
-            entry_p = t.entry_price
-            exit_p = t.exit_price
+            raw_entry = t.raw_entry_price if t.raw_entry_price > 0 else t.entry_price
+            raw_exit = t.raw_exit_price if t.raw_exit_price is not None else (t.exit_price if t.exit_price is not None else 0.0)
+            if raw_exit <= 0:
+                continue
 
-            # Apply slippage
-            if policy.normal_slippage_bps > 0:
-                entry_p_slipped = entry_p * (1.0 + policy.normal_slippage_bps / 10000.0)
-                exit_p_slipped = exit_p * (1.0 - policy.normal_slippage_bps / 10000.0)
-            else:
-                entry_p_slipped = entry_p
-                exit_p_slipped = exit_p
+            # Determine exit slippage rate (gap vs normal)
+            is_gap_exit = (t.exit_reason == "GAP_STOP_LOSS")
+            exit_slip_bps = policy.gap_slippage_bps if is_gap_exit else policy.normal_slippage_bps
+
+            entry_p_slipped = raw_entry * (1.0 + policy.normal_slippage_bps / 10000.0)
+            exit_p_slipped = raw_exit * (1.0 - exit_slip_bps / 10000.0)
 
             gross = (exit_p_slipped - entry_p_slipped) * t.shares
 
             if policy.include_statutory_costs:
                 buy_cost = calculate_statutory_costs(entry_p_slipped, t.shares, "BUY", True)["total_cost"]
-                sell_cost = calculate_statutory_costs(exit_p_slipped, t.shares, "SELL", True)["total_cost"]
+
+                # DP grouping check
+                dp_key = (t.symbol, t.exit_session)
+                apply_dp = False
+                if dp_key not in dp_seen:
+                    dp_seen.add(dp_key)
+                    apply_dp = True
+
+                sell_cost_dict = calculate_statutory_costs(exit_p_slipped, t.shares, "SELL", True)
+                sell_cost = sell_cost_dict["total_cost"]
+                if not apply_dp:
+                    sell_cost = round(sell_cost - sell_cost_dict["dp_charges"], 2)
+
                 net = gross - (buy_cost + sell_cost)
             else:
                 net = gross
@@ -566,7 +589,7 @@ def compute_backtest_metrics(
     # 2. Maximum Drawdown Calculation
     max_dd_rs = 0.0
     if equity_curve:
-        peak = equity_curve[0].equity
+        peak = max(corpus_rs, equity_curve[0].equity)
         for pt in equity_curve:
             if pt.equity > peak:
                 peak = pt.equity
@@ -578,11 +601,12 @@ def compute_backtest_metrics(
     max_dd_r = (max_dd_rs / risk_per_trade_rs) if risk_per_trade_rs > 0 else 0.0
 
     # 3. Hurdle Verification (Tier 2 baseline criteria)
-    # Win rate >= 45%, Profit factor >= 1.30, Net expectancy > 0.25R
+    # Win rate >= 45%, Profit factor >= 1.30, Net expectancy > 0.25R, Max Drawdown <= 6.0%
     hurdle_passed = (
         win_rate >= 0.45
         and profit_factor >= 1.30
         and net_expectancy_r >= 0.25
+        and max_dd_pct <= 6.0
     )
 
     return BacktestMetrics(

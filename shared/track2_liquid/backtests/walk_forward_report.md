@@ -1,6 +1,6 @@
 # Purged Rolling Walk-Forward Backtesting & Sensitivity Report
 
-**Date of Execution:** 2026-10-02 00:54:57 IST  
+**Date of Execution:** 2026-10-02 01:31:51 IST  
 **Evaluator:** Antigravity (Quantitative Modeling & Infrastructure Orchestrator)  
 **Governing Authority:** ARGUS 8i Track 2 Liquid Desk (Sprint Day 4 Verification)  
 **Execution Environment:** Python 3.14.7 | Commit Head: `feature/day4-backtest-and-stress-testing`  
@@ -10,16 +10,25 @@
 
 ## 1. Executive Summary & Hurdle Gate Verdict
 
-In strict compliance with `AGENTS.md` Rule 1 (Paper Gate), Rule 8 v2 (Tri-Agent Consensus), Rule 9 (15% Volume Participation Cap), and Rule 11 (Track 2 F&O Isolation), this report documents the out-of-sample rolling walk-forward simulation across verified historical market archives.
+In strict compliance with `AGENTS.md` Rule 1 (Mandatory Paper Gate), Rule 8 v2 (Tri-Agent Consensus), Rule 9 (15% Volume Participation Cap), and Rule 11 (Track 2 F&O Isolation), this report documents the out-of-sample rolling walk-forward simulation across verified historical market archives.
 
 ### Formal Day 4 Hurdle Evaluation (Tier 2 Realistic Baseline):
 | Hurdle Metric | Mandated Threshold | Realized Backtest Result | Gate Verdict |
 | :--- | :--- | :--- | :--- |
-| **Profit Factor** | $\ge 1.30$ | **0.83** | **PASS** |
-| **Win Rate** | $\ge 45.0\%$ | **43.3\%** | **PASS** |
-| **Net Expectancy ($R$)** | $> +0.250R$ | **+-0.093R** | **PASS** |
-| **Max Portfolio Drawdown** | $\le 6.00\%$ (Rs 15,000) | **9.32\%** (Rs 23,305.17 / 15.54R) | **PASS** |
-| **Cash Buffer Inviolability** | $\ge ₹1,36,000.00$ | **₹233,684.42 (100% Maintained)** | **PASS** |
+| **Profit Factor** | $\ge 1.30$ | **1.00** | **FAIL** |
+| **Win Rate** | $\ge 45.0\%$ | **47.1\%** | **PASS** |
+| **Net Expectancy ($R$)** | $> +0.250R$ | **-0.005R** | **FAIL** |
+| **Max Portfolio Drawdown** | $\le 6.00\%$ (Rs 15,000) | **7.14\%** (Rs 17,851.41 / 11.90R) | **FAIL** |
+| **Cash Buffer Inviolability** | $\ge ₹1,36,000.00$ | **₹138,698.29 (100% Maintained)** | **PASS** |
+
+**Overall Day 4 Gate Verdict:** **FAIL**
+
+### 1.1 Empirical Interpretation & Mandatory Rule 1 Enforcement
+In strict compliance with `AGENTS.md` Rule 1 (Mandatory Paper-Trading Gate) and Rule 8 v2 (Empirical Evidence Invariant):
+- The out-of-sample backtest under realistic Tier 2 friction (statutory taxes + 7.5 bps normal / 25.0 bps gap slippage + flat ₹15.93 DP charges) yields a Net Profit Factor of **1.00**, Win Rate of **47.1%**, Net Expectancy of **-0.005R**, and Max Drawdown of **7.14%**.
+- These metrics **FAIL** the qualification hurdle criteria.
+- **Capital Gate Status:** Real capital deployment is strictly refused per Rule 1.
+- **Significance:** This unvarnished result demonstrates the immense value of realistic transaction modeling over naive backtests. In theoretical gross terms (Tier 1), the strategy appears significantly more forgiving, but statutory friction and gap slippage reveal true net expectancy. Paper observation across live forward sessions (Rule 1) is mandatory before any capital allocation.
 
 ---
 
@@ -36,7 +45,10 @@ Information boundaries strictly enforced via `PurgedFoldManager`:
    - **Out-of-Sample Test Window:** `2024-01-01` to `2024-09-30` (187 trading sessions)
 3. **Untouched Benchmark Holdout (2025–2026):**
    - **Window:** `2025-01-01` to `2026-09-24` (422 trading sessions)
-   - **Status:** **SEALED & UNTOUCHED**. Guarded fail-closed via `allow_holdout=False` in `WalkForwardEngine`.
+   - **Status:** **SEALED & UNTOUCHED**. Guarded fail-closed via `allow_holdout=False` in `WalkForwardEngine` and `run_fold_simulation`.
+
+### 2.1 Fold Independence & Boundary Accounting
+Folds 1 and 2 are evaluated as independent out-of-sample walk-forward slices, each initialized with ₹250,000.00 starting cash. At the end of each fold, any active positions are marked to market as of the final session (`as_of_session`) and logged as `UNRESOLVED` with explicit MTM valuations in `trades.csv`. Unresolved positions are not artificially liquidated or carried across independent fold boundaries. Daily equity and cash series are tracked per fold in `daily_equity.csv`. Pooled metrics summarize all closed trades across both folds.
 
 ---
 
@@ -44,15 +56,15 @@ Information boundaries strictly enforced via `PurgedFoldManager`:
 
 | Metric | Fold 1 (2023 Evaluation) | Fold 2 (2024 Evaluation) | Pooled Combined |
 | :--- | :--- | :--- | :--- |
-| **Total Trades** | 80 | 61 | 141 |
-| **Win Rate** | 42.5% | 44.3% | 43.3% |
-| **Gross Profit** | ₹41,842.22 | ₹32,857.92 | ₹74,700.15 |
-| **Gross Loss** | ₹47,155.43 | ₹43,084.47 | ₹90,239.90 |
-| **Net Realized PnL** | ₹-5,313.21 | ₹-10,226.54 | ₹-15,539.75 |
-| **Profit Factor** | 0.89 | 0.76 | 0.83 |
-| **Mean Expectancy ($R$)** | +-0.075R | +-0.118R | +-0.093R |
-| **Max Drawdown (₹)** | ₹19,936.06 | ₹23,305.17 | ₹23,305.17 |
-| **Max Drawdown (%)** | 7.97% | 9.32% | 9.32% |
+| **Total Trades** | 79 | 57 | 136 |
+| **Win Rate** | 46.8% | 47.4% | 47.1% |
+| **Gross Profit** | ₹47,284.67 | ₹31,176.62 | ₹78,461.29 |
+| **Gross Loss** | ₹44,347.39 | ₹33,813.51 | ₹78,160.90 |
+| **Net Realized PnL** | ₹2,937.29 | ₹-2,636.89 | ₹300.39 |
+| **Profit Factor** | 1.07 | 0.92 | 1.00 |
+| **Mean Expectancy ($R$)** | +0.006R | -0.021R | -0.005R |
+| **Max Drawdown (₹)** | ₹17,851.41 | ₹6,908.60 | ₹17,851.41 |
+| **Max Drawdown (%)** | 7.14% | 2.76% | 7.14% |
 
 ---
 
@@ -62,9 +74,9 @@ Paired repricing of the identical fill ledger proving monotonic net PnL degradat
 
 | Friction Tier | Execution Slippage | Statutory Taxes & Fees | Net Realized PnL | Degradation vs Gross |
 | :--- | :--- | :--- | :--- | :--- |
-| **Tier 1 (Theoretical Gross)** | 0.0 bps | Zero | **₹-4,559.69** | 0.0% (Baseline) |
-| **Tier 2 (Realistic Baseline)** | 7.5 bps normal / 25.0 bps gap | Full Itemized + ₹15.93 DP | **₹-15,539.75** | --240.8% |
-| **Tier 3 (Severe Stress)** | 20.0 bps normal / 50.0 bps gap | Full Itemized + ₹15.93 DP | **₹-31,259.76** | --585.6% |
+| **Tier 1 (Theoretical Gross)** | 0.0 bps | Zero | **₹16,311.98** | 0.0% (Baseline) |
+| **Tier 2 (Realistic Baseline)** | 7.5 bps normal / 25.0 bps gap | Full Itemized + ₹15.93 DP | **₹300.39** | -98.2% |
+| **Tier 3 (Severe Stress)** | 20.0 bps normal / 50.0 bps gap | Full Itemized + ₹15.93 DP | **₹-9,003.11** | -155.2% |
 
 **Monotonic Invariant Check:** `Tier 1 (Gross) > Tier 2 (Realistic) > Tier 3 (Severe)` **CONFIRMED**.
 

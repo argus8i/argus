@@ -40,6 +40,7 @@ def main():
         "tests/test_execution_risk_governor.py",
         "tests/test_day3_strategies.py",
         "tests/test_day4_backtest.py",
+        "shared/trust/artifacts/test_codex_day4_9157a86_review.py",
     ]
 
     cmd = [python_exe, "-m", "pytest", *test_files, "-v"]
