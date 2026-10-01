@@ -7,26 +7,26 @@ Part of Project Swing Trades (ARGUS 8i Track 2 Liquid Desk).
 Mathematical Guardrails & Invariants (Yashu Adjusted A1 Hardening):
 1. Capacity Limits:
    - Total Portfolio Capital Corpus: Rs 2,50,000.00
-   - Unencumbered Inviolable Cash Buffer: Rs 1,36,000.00
+   - Unencumbered Inviolable Cash Buffer: Rs 1,36,000.00 (Strictly enforced, 0 breach allowed)
    - Maximum Deployable Capital / Exposure Ceiling: Rs 1,14,000.00
-   - Maximum Concurrent Position Slots: 3 slots (MAX_SLOTS = 3)
+   - Maximum Concurrent Position Slots: 3 slots (MAX_SLOTS = 3, pinned invariant)
    - Maximum Single Position Slot Cap: Rs 38,000.00 (SLOT_CAP_RS = 38,000.00)
    - Planned Rupee Risk Budget per Trade: Rs 1,500.00 (1R)
    - Maximum Aggregate Open Risk Cap: Rs 4,500.00 (3 * Rs 1,500.00)
 2. Mathematical Sizing:
    - Exact mathematical floor sizing: min(floor(38000 / price), floor(1500 / (price - stop))).
-   - Strict integer sizing without float-boundary rounding up.
+   - Strict integer sizing without float-boundary rounding up or premature price rounding.
 3. Fail-Closed Default Invariants:
    - Missing, non-finite, or <= 0 ATR strictly sizes to 0 shares (fail-closed).
-   - Absolute Rs 10.00 price floor (AGENTS.md Rule 2).
+   - Absolute Rs 10.00 price floor (AGENTS.md Rule 2; unrounded evaluation).
    - Inverted stop-loss (stop >= entry) rejected immediately.
-   - Unmapped sector rejected immediately (fail-closed).
-   - Maximum 2 positions per sector (sector concentration defense).
-4. Deterministic Simultaneous Signal Priority:
-   - When simultaneous signals exceed available slots, deterministic ranking allocates top slots.
-5. Realism Accounting:
-   - Circuit-locked exit lockout (LOCKED_NO_BID) preserves position and slot in portfolio ledger.
-   - Gap-down exit losses (> 1R) reconciled truthfully into cash and equity without state corruption.
+   - Unmapped sector rejected immediately (fail-closed; whitelisted authorized sectors only).
+   - Maximum 2 positions per sector (pinned invariant, cannot be widened).
+4. Reassessment on Actual Fill:
+   - Actual fills from reservations re-assess exposure and risk against slot cap and risk ceiling.
+5. Ledger Integrity & Partial Fills:
+   - Partial exit support preserves residual holdings, open risk, and occupied slot.
+   - Duplicate exit events rejected fail-closed to prevent double-crediting cash.
 """
 
 from __future__ import annotations
@@ -68,6 +68,32 @@ DEFAULT_SECTOR_MAP: Dict[str, str] = {
     "INFY": "IT_SERVICES",
 }
 
+# Whitelist of authorized NSE sectors for Track 2 (Codex Finding 5)
+VALID_SECTORS: Set[str] = {
+    "CAPITAL_MARKETS_FINTECH",
+    "GREEN_ENERGY_POWER",
+    "PSU_RENEWABLE_FINANCE",
+    "PSU_RAILWAYS_INFRA",
+    "DEFENSE_SHIPBUILDING",
+    "DEFENSE_AEROSPACE",
+    "CHEMICALS_SPECIALTY",
+    "ELECTRONICS_EMS",
+    "METALS_MINING",
+    "OIL_GAS_PETROCHEM",
+    "IT_SERVICES",
+    "AUTOMOBILES",
+    "PHARMACEUTICALS",
+    "BANKING_PRIVATE",
+    "BANKING_PSU",
+    "CONSUMER_FMCG",
+    "INFRASTRUCTURE",
+    "POWER_ENERGY",
+    "FINANCIAL_SERVICES",
+    "COMMODITIES_MATERIALS",
+    "ELECTRONICS_MANUFACTURING",
+    "DEFENSE_MANUFACTURING",
+}
+
 
 def compute_position_size(
     entry_price: float,
@@ -80,7 +106,7 @@ def compute_position_size(
     Computes integer position sizing with exact mathematical floor (ROUND_FLOOR).
     Fails closed to 0 shares if:
       - ATR is missing, None, NaN, inf, boolean, or <= 0.
-      - Entry price < Rs 10.00 (Rule 2 price floor).
+      - Entry price < Rs 10.00 (Rule 2 price floor; evaluated without premature rounding).
       - Stop price >= Entry price (inverted stop).
       - Prices or caps are non-positive or non-finite.
     Formula:
@@ -96,7 +122,7 @@ def compute_position_size(
     ):
         return 0
 
-    # Validate entry price (Rule 2 Floor)
+    # Validate entry price (Rule 2 Floor - evaluated raw, no premature rounding)
     if (
         isinstance(entry_price, bool)
         or not isinstance(entry_price, numbers.Real)
@@ -128,8 +154,9 @@ def compute_position_size(
     ):
         return 0
 
-    entry_d = Decimal(str(round(float(entry_price), 2)))
-    stop_d = Decimal(str(round(float(stop_price), 2)))
+    # Use raw string representation for exact precision without pre-rounding (Codex Finding 6)
+    entry_d = Decimal(str(entry_price))
+    stop_d = Decimal(str(stop_price))
     diff_d = entry_d - stop_d
     if diff_d <= 0:
         return 0
@@ -205,7 +232,8 @@ class PortfolioRiskGovernor:
         self.risk_per_trade_rs = float(min(risk_per_trade_rs, RISK_PER_TRADE_RS))
         self.aggregate_risk_cap_rs = round(self.risk_per_trade_rs * self.max_slots, 2)
         self.aggregate_exposure_cap_rs = round(self.slot_cap_rs * self.max_slots, 2)
-        self.max_positions_per_sector = int(max_positions_per_sector)
+        # Codex Finding 5: max_positions_per_sector is pinned and cannot be widened beyond 2
+        self.max_positions_per_sector = int(min(max_positions_per_sector, MAX_POSITIONS_PER_SECTOR))
         self.sector_mapping = dict(sector_mapping or DEFAULT_SECTOR_MAP)
 
         # Portfolio state ledgers
@@ -252,7 +280,7 @@ class PortfolioRiskGovernor:
         if not sym:
             return self._rejected(sym, "INVALID_SYMBOL", "Symbol is empty or invalid.")
 
-        # Price & Quantity validations
+        # Price & Quantity validations (raw precision, no rounding up)
         for val in [entry_price, stop_price]:
             if (
                 isinstance(val, bool)
@@ -269,17 +297,17 @@ class PortfolioRiskGovernor:
         ):
             return self._rejected(sym, "INVALID_QUANTITY", f"Quantity must be positive integer: {quantity}")
 
-        entry_p = round(float(entry_price), 2)
-        stop_p = round(float(stop_price), 2)
-        qty_i = int(quantity)
-
-        # Rule 2 Floor Check
-        if entry_p < MIN_PRICE_FLOOR_RS:
+        # Codex Finding 6: Evaluate price floor strictly on exact value without rounding
+        if float(entry_price) < MIN_PRICE_FLOOR_RS:
             return self._rejected(
                 sym,
                 "RULE_2_PRICE_FLOOR_VIOLATION",
-                f"Entry price Rs {entry_p:.2f} is below absolute Rs 10.00 floor.",
+                f"Entry price Rs {entry_price} is below absolute Rs 10.00 floor.",
             )
+
+        entry_p = float(entry_price)
+        stop_p = float(stop_price)
+        qty_i = int(quantity)
 
         if stop_p >= entry_p:
             return self._rejected(
@@ -288,17 +316,28 @@ class PortfolioRiskGovernor:
                 f"Stop price ({stop_p}) must be strictly below entry price ({entry_p}).",
             )
 
-        # Sector resolution
-        sector = custom_sector or self.resolve_sector(sym)
-        if sector == "UNKNOWN_SECTOR":
+        # Sector resolution & Whitelist validation (Codex Finding 5)
+        if custom_sector:
+            cand_sec = str(custom_sector).strip().upper()
+            if cand_sec not in VALID_SECTORS:
+                return self._rejected(
+                    sym,
+                    "UNMAPPED_SECTOR",
+                    f"Custom sector '{cand_sec}' is not in authorized sector whitelist. Fail-closed.",
+                )
+            sector = cand_sec
+        else:
+            sector = self.resolve_sector(sym)
+
+        if sector == "UNKNOWN_SECTOR" or sector not in VALID_SECTORS:
             return self._rejected(
                 sym,
                 "UNMAPPED_SECTOR",
-                f"Symbol '{sym}' does not have a verified sector mapping. Fail-closed.",
+                f"Symbol '{sym}' does not have a verified authorized sector mapping. Fail-closed.",
             )
 
         # Proposed Metrics
-        risk_per_share = round(entry_p - stop_p, 3)
+        risk_per_share = round(entry_p - stop_p, 4)
         proposed_risk = round(qty_i * risk_per_share, 2)
         proposed_notional = round(qty_i * entry_p, 2)
 
@@ -419,6 +458,26 @@ class PortfolioRiskGovernor:
                 sector_count=existing_sec_count,
             )
 
+        # Strict Inviolable Cash Buffer Gate (Codex Finding 4)
+        # Account for cash, outstanding reservations, proposed notional, and estimated friction
+        estimated_friction = round(proposed_notional * 0.0015, 2)  # ~0.15% statutory friction
+        pending_reservations_notional = sum(p["notional_rs"] for p in self.pending_reservations.values())
+        projected_cash_remaining = round(
+            self.cash_rs - pending_reservations_notional - proposed_notional - estimated_friction, 2
+        )
+        if projected_cash_remaining < self.cash_buffer_rs:
+            return self._rejected(
+                sym,
+                "INSUFFICIENT_UNENCUMBERED_CASH",
+                f"Projected remaining cash Rs {projected_cash_remaining:.2f} breaches inviolable cash buffer Rs {self.cash_buffer_rs:.2f}.",
+                sector=sector,
+                proposed_risk=proposed_risk,
+                proposed_notional=proposed_notional,
+                current_notional=cur_notional,
+                new_total_notional=new_total_notional,
+                sector_count=existing_sec_count,
+            )
+
         # Approved
         return RiskAssessmentVerdict(
             is_approved=True,
@@ -487,16 +546,38 @@ class PortfolioRiskGovernor:
         self,
         symbol: str,
         actual_fill_price: Optional[float] = None,
+        filled_quantity: Optional[int] = None,
         transaction_costs: float = 0.0,
     ) -> None:
+        """
+        Converts a pending reservation to an active position (Codex Finding 3):
+        - Re-assesses actual fill exposure and risk before converting.
+        - Rejects fail-closed if actual fill price or quantity breaches slot cap or risk budget.
+        - Supports partial-fill quantities.
+        """
         sym = str(symbol).strip().upper()
         if sym not in self.pending_reservations:
             raise KeyError(f"No pending reservation found for '{sym}'")
-        res = self.pending_reservations.pop(sym)
-        fill_price = actual_fill_price or res["entry_price"]
-        shares = res["quantity"]
+
+        res = self.pending_reservations[sym]
+        fill_price = float(actual_fill_price) if actual_fill_price is not None else res["entry_price"]
+        shares = int(filled_quantity) if filled_quantity is not None else res["quantity"]
         stop_p = res["stop_price"]
         sec = res["sector"]
+
+        # Re-assess actual fill notional and risk (Codex Finding 3)
+        actual_notional = round(shares * fill_price, 2)
+        actual_risk = round(shares * (fill_price - stop_p), 2)
+
+        if actual_notional > self.slot_cap_rs + 1e-4 or actual_risk > self.risk_per_trade_rs + 1e-4:
+            raise ValueError(
+                f"EXPOSURE_OR_RISK_BREACH: Actual fill notional Rs {actual_notional:.2f} (cap: {self.slot_cap_rs:.2f}) "
+                f"or risk Rs {actual_risk:.2f} (budget: {self.risk_per_trade_rs:.2f}) breaches limits."
+            )
+
+        # Pop reservation only after verification passes
+        self.pending_reservations.pop(sym)
+
         self.confirm_fill(
             symbol=sym,
             shares=shares,
@@ -518,12 +599,44 @@ class PortfolioRiskGovernor:
         shares: int,
         transaction_costs: float = 0.0,
     ) -> None:
+        """
+        Reconciles exit order execution with ledger accounting (Codex Finding 2):
+        - Validates existence of active position (fails closed on duplicate credit attempt).
+        - Validates shares quantity (cannot sell <= 0 or > open shares).
+        - Deducts sold shares and updates remaining notional, risk, and occupied slot.
+        - Removes position and clears unresolved marker only when completely closed.
+        """
         sym = str(symbol).strip().upper()
-        if sym in self.active_positions:
+        if sym not in self.active_positions:
+            raise KeyError(f"No active position found for '{sym}'. Duplicate or invalid exit prohibited.")
+
+        pos = self.active_positions[sym]
+        open_shares = pos["shares"]
+
+        if (
+            isinstance(shares, bool)
+            or not isinstance(shares, numbers.Integral)
+            or int(shares) <= 0
+        ):
+            raise ValueError(f"Invalid shares quantity for exit: {shares}")
+
+        shares_to_sell = int(shares)
+        if shares_to_sell > open_shares:
+            raise ValueError(f"Cannot sell {shares_to_sell} shares: only {open_shares} shares currently open.")
+
+        remaining_shares = open_shares - shares_to_sell
+        if remaining_shares > 0:
+            # Partial exit: update residual holdings, open risk, and notional
+            pos["shares"] = remaining_shares
+            pos["notional_rs"] = round(remaining_shares * pos["entry_price"], 2)
+            pos["open_risk_rs"] = round(remaining_shares * (pos["entry_price"] - pos["stop_price"]), 2)
+        else:
+            # Complete exit: remove position from active ledger
             self.active_positions.pop(sym)
-        if sym in self.unresolved_exits:
-            self.unresolved_exits.remove(sym)
-        proceeds = round((shares * exit_price) - transaction_costs, 2)
+            if sym in self.unresolved_exits:
+                self.unresolved_exits.remove(sym)
+
+        proceeds = round((shares_to_sell * exit_price) - transaction_costs, 2)
         self.cash_rs = round(self.cash_rs + proceeds, 2)
 
     def rank_and_allocate_signals(

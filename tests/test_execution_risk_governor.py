@@ -405,9 +405,9 @@ def test_governor_max_concurrent_positions_3_slots():
     """Portfolio already with 3 active/pending slots rejects a 4th slot."""
     gov = PortfolioRiskGovernor()
     # Fill 3 slots
-    gov.confirm_fill("POS1", 30, 1000.0, 950.0, "SECTOR1")
-    gov.confirm_fill("POS2", 30, 1000.0, 950.0, "SECTOR2")
-    gov.confirm_fill("POS3", 30, 1000.0, 950.0, "SECTOR3")
+    gov.confirm_fill("POS1", 30, 1000.0, 950.0, "IT_SERVICES")
+    gov.confirm_fill("POS2", 30, 1000.0, 950.0, "DEFENSE_AEROSPACE")
+    gov.confirm_fill("POS3", 30, 1000.0, 950.0, "METALS_MINING")
 
     # 4th slot candidate
     res = gov.assess_candidate(
@@ -415,7 +415,7 @@ def test_governor_max_concurrent_positions_3_slots():
         entry_price=1000.0,
         stop_price=950.0,
         quantity=30,
-        custom_sector="SECTOR4",
+        custom_sector="CHEMICALS_SPECIALTY",
     )
     assert res.is_approved is False
     assert "MAX_CONCURRENT_POSITIONS_REACHED" in res.rejection_reason
@@ -425,8 +425,8 @@ def test_governor_aggregate_exposure_cap_rs_114000():
     """Aggregate deployable capital cannot exceed ₹114,000."""
     gov = PortfolioRiskGovernor()
     # 2 positions taking 38,000 + 38,000 = 76,000
-    gov.confirm_fill("POS1", 38, 1000.0, 960.0, "SECTOR1")
-    gov.confirm_fill("POS2", 38, 1000.0, 960.0, "SECTOR2")
+    gov.confirm_fill("POS1", 38, 1000.0, 960.0, "IT_SERVICES")
+    gov.confirm_fill("POS2", 38, 1000.0, 960.0, "DEFENSE_AEROSPACE")
 
     # 3rd position proposed with 39,000 -> Total = 115,000 > 114,000
     # Stop at 962 ensures risk = 39 * (1000 - 962) = 1482 Rs <= 1500 Rs
@@ -435,7 +435,7 @@ def test_governor_aggregate_exposure_cap_rs_114000():
         entry_price=1000.0,
         stop_price=962.0,
         quantity=39,
-        custom_sector="SECTOR3",
+        custom_sector="METALS_MINING",
     )
     assert res.is_approved is False
     # Will fail either slot cap or total capital cap
@@ -446,8 +446,8 @@ def test_governor_aggregate_open_risk_cap_rs_4500():
     """Aggregate open risk cannot exceed ₹4,500."""
     gov = PortfolioRiskGovernor()
     # 2 positions with 1,500 each = 3,000 Rs open risk
-    gov.confirm_fill("POS1", 30, 1000.0, 950.0, "SECTOR1")  # risk = 1,500
-    gov.confirm_fill("POS2", 30, 1000.0, 950.0, "SECTOR2")  # risk = 1,500
+    gov.confirm_fill("POS1", 30, 1000.0, 950.0, "IT_SERVICES")  # risk = 1,500
+    gov.confirm_fill("POS2", 30, 1000.0, 950.0, "DEFENSE_AEROSPACE")  # risk = 1,500
 
     # 3rd proposed trade with 1,550 risk -> Total = 4,550 > 4,500
     res = gov.assess_candidate(
@@ -455,7 +455,7 @@ def test_governor_aggregate_open_risk_cap_rs_4500():
         entry_price=1000.0,
         stop_price=948.0,
         quantity=30,  # risk = 30 * 52 = 1,560 Rs
-        custom_sector="SECTOR3",
+        custom_sector="METALS_MINING",
     )
     assert res.is_approved is False
     assert any(code in res.rejection_reason for code in ["SINGLE_TRADE_RISK_EXCEEDED", "AGGREGATE_PORTFOLIO_RISK_EXCEEDED"])
@@ -468,12 +468,12 @@ def test_governor_cash_buffer_preservation_rs_136000():
     assert gov.cash_buffer_rs == CASH_BUFFER_RS
 
     # Deploy 3 full slots @ 38,000 = 114,000 Rs
-    gov.confirm_fill("POS1", 38, 1000.0, 960.0, "SECTOR1")
-    gov.confirm_fill("POS2", 38, 1000.0, 960.0, "SECTOR2")
-    gov.confirm_fill("POS3", 38, 1000.0, 960.0, "SECTOR3")
+    gov.confirm_fill("POS1", 38, 1000.0, 960.0, "IT_SERVICES")
+    gov.confirm_fill("POS2", 38, 1000.0, 960.0, "DEFENSE_AEROSPACE")
+    gov.confirm_fill("POS3", 38, 1000.0, 960.0, "METALS_MINING")
 
-    # Remaining cash must be >= 136,000 Rs (excluding minor transaction friction)
-    assert gov.cash_rs >= CASH_BUFFER_RS - 500.0  # allows small statutory fees
+    # Remaining cash must be >= 136,000 Rs (exact inviolable cash buffer)
+    assert gov.cash_rs >= CASH_BUFFER_RS
 
 
 def test_governor_missing_atr_fails_closed():
@@ -592,9 +592,9 @@ def test_governor_circuit_lock_preserves_slot_and_exposure():
     Subsequent new orders cannot steal the locked slot.
     """
     gov = PortfolioRiskGovernor()
-    gov.confirm_fill("POS1", 30, 1000.0, 950.0, "SECTOR1")
-    gov.confirm_fill("POS2", 30, 1000.0, 950.0, "SECTOR2")
-    gov.confirm_fill("POS3", 30, 1000.0, 950.0, "SECTOR3")
+    gov.confirm_fill("POS1", 30, 1000.0, 950.0, "IT_SERVICES")
+    gov.confirm_fill("POS2", 30, 1000.0, 950.0, "DEFENSE_AEROSPACE")
+    gov.confirm_fill("POS3", 30, 1000.0, 950.0, "METALS_MINING")
     assert gov.available_slots == 0
 
     # Attempt to exit POS1, but circuit lock occurs
@@ -608,7 +608,7 @@ def test_governor_circuit_lock_preserves_slot_and_exposure():
         entry_price=500.0,
         stop_price=480.0,
         quantity=50,
-        custom_sector="NEW_SECTOR",
+        custom_sector="CHEMICALS_SPECIALTY",
     )
     assert res.is_approved is False
     assert "MAX_CONCURRENT_POSITIONS_REACHED" in res.rejection_reason
@@ -674,3 +674,168 @@ def test_full_position_lifecycle_state_machine():
     assert "TATACHEM" not in gov.active_positions
     assert "TATACHEM" not in gov.unresolved_exits
     assert gov.available_slots == 3  # slot completely freed
+
+
+# ============================================================================
+# PART 4: CODEX REVIEW REGRESSION TESTS (FINDINGS 1 - 8)
+# ============================================================================
+
+def test_codex_finding_1_exit_touch_and_volume_participation():
+    """
+    Finding 1: Exits fabricate executable liquidity.
+    - Stop at 95, session low 108: Stop was not touched -> state UNTOUCHED, filled=0.
+    - Zero volume session -> filled=0, position remains open.
+    - Position 100 shares, session volume 100 -> Rule 9 limits fill to 15 shares (PARTIAL), 85 remain open.
+    """
+    engine = ExecutionSimulator()
+    pos = SwingPosition(symbol="CDSL", shares=100, entry_price=100.0, stop_price=95.0, sector="CAPITAL_MARKETS_FINTECH")
+
+    # Case A: Stop not touched (Low = 108 > 95)
+    bar_untouched = DailyBar(symbol="CDSL", open=110.0, high=115.0, low=108.0, close=112.0, volume=50000)
+    rep_untouched = engine.simulate_exit(pos, bar_untouched, trigger_reason="STOP_LOSS")
+    assert rep_untouched.state == ExecutionState.QUEUED or rep_untouched.filled_quantity == 0
+    assert rep_untouched.position_remains_open is True
+
+    # Case B: Zero-volume session
+    bar_zero_vol = DailyBar(symbol="CDSL", open=94.0, high=96.0, low=92.0, close=93.0, volume=0)
+    rep_zero = engine.simulate_exit(pos, bar_zero_vol, trigger_reason="STOP_LOSS")
+    assert rep_zero.filled_quantity == 0
+    assert rep_zero.position_remains_open is True
+
+    # Case C: 15% volume participation cap on exit (volume 100 -> max fill 15 shares)
+    bar_low_vol = DailyBar(symbol="CDSL", open=94.0, high=96.0, low=92.0, close=93.0, volume=100)
+    rep_part = engine.simulate_exit(pos, bar_low_vol, trigger_reason="STOP_LOSS")
+    assert rep_part.state == ExecutionState.PARTIAL
+    assert rep_part.filled_quantity == 15
+    assert rep_part.unfilled_quantity == 85
+    assert rep_part.position_remains_open is True
+
+
+def test_codex_finding_2_partial_exit_and_duplicate_credit():
+    """
+    Finding 2: Exit reconciliation corrupts remaining holdings and permits duplicate cash credits.
+    - Selling 10 of 100 shares keeps 90 shares open, slot still occupied.
+    - Selling invalid quantity (> position shares or <= 0) rejected.
+    - Repeating exit on closed position rejected fail-closed.
+    """
+    gov = PortfolioRiskGovernor()
+    gov.confirm_fill("CDSL", 100, 1000.0, 950.0, "CAPITAL_MARKETS_FINTECH")
+    assert gov.available_slots == 2
+
+    # Partial exit: sell 10 shares
+    gov.reconcile_exit(symbol="CDSL", exit_price=1050.0, shares=10, transaction_costs=15.0)
+    assert "CDSL" in gov.active_positions
+    assert gov.active_positions["CDSL"]["shares"] == 90
+    assert gov.available_slots == 2  # slot still occupied!
+
+    # Selling 90 remaining shares completes exit
+    gov.reconcile_exit(symbol="CDSL", exit_price=1050.0, shares=90, transaction_costs=15.0)
+    assert "CDSL" not in gov.active_positions
+    assert gov.available_slots == 3  # slot now freed
+
+    # Duplicate exit attempt rejected fail-closed
+    with pytest.raises(KeyError, match="No active position found"):
+        gov.reconcile_exit(symbol="CDSL", exit_price=1050.0, shares=10)
+
+
+def test_codex_finding_3_actual_fill_reassessment():
+    """
+    Finding 3: Actual entry fills bypass risk ceilings.
+    - Reservation for 38 shares at 1,000 (stop 970).
+    - If actual fill slips/gaps to 1,100: notional is 41,800 > 38,000 cap, risk is 4,940 > 1,500.
+    - Must reject or resize fail-closed rather than blindly admitting.
+    """
+    gov = PortfolioRiskGovernor()
+    gov.reserve_slot("CDSL", quantity=38, entry_price=1000.0, stop_price=970.0, sector="CAPITAL_MARKETS_FINTECH")
+
+    with pytest.raises(ValueError, match="EXPOSURE_OR_RISK_BREACH"):
+        gov.confirm_fill_from_reservation("CDSL", actual_fill_price=1100.0, transaction_costs=50.0)
+
+
+def test_codex_finding_4_strict_cash_buffer_enforcement():
+    """
+    Finding 4: Cash buffer is stored but not enforced (breached by fee friction or gap loss).
+    - Deployable capital must strictly maintain cash >= 136,000 without exception.
+    - If gap loss reduces cash below 136,000 + proposed notional + friction, reject candidate.
+    """
+    gov = PortfolioRiskGovernor()
+    # Simulate a prior account drawdown/gap loss so available cash is 170,000 Rs
+    # Deploying 38,000 Rs leaves 132,000 Rs < 136,000 Rs buffer
+    gov.cash_rs = 170_000.0
+
+    res = gov.assess_candidate("POS3", 1000.0, 961.0, 38, custom_sector="DEFENSE_AEROSPACE")
+    assert res.is_approved is False
+    assert "INSUFFICIENT_UNENCUMBERED_CASH" in res.rejection_reason or "BUFFER_BREACH" in res.rejection_reason
+
+
+def test_codex_finding_5_sector_whitelist_and_unwidened_limit():
+    """
+    Finding 5: Sector restrictions can be overridden.
+    - Unmapped custom_sector="invented" must be rejected.
+    - max_positions_per_sector cannot be widened beyond 2.
+    """
+    gov = PortfolioRiskGovernor()
+    res = gov.assess_candidate("UNKNOWN", 100.0, 95.0, 10, custom_sector="invented_sector")
+    assert res.is_approved is False
+    assert "UNMAPPED_SECTOR" in res.rejection_reason or "INVALID_SECTOR" in res.rejection_reason
+
+    # Attempting to instantiate with max_positions_per_sector > 2 must be clamped or rejected
+    gov_wide = PortfolioRiskGovernor(max_positions_per_sector=3)
+    assert gov_wide.max_positions_per_sector <= 2
+
+
+def test_codex_finding_6_exact_floor_no_premature_rounding():
+    """
+    Finding 6: Sizing rounds inputs before applying exact floor.
+    - Price 1000.004 -> slot shares floor(38000 / 1000.004) = 37, NOT 38.
+    - Price 9.999 is below 10.00 floor -> rejected, not rounded to 10.00.
+    """
+    # Stop at 970 -> diff = 30.004 -> risk shares floor(1500 / 30.004) = 49
+    # Slot shares floor(38000 / 1000.004) = 37.9998... -> 37
+    # Min(37, 49) = 37
+    shares = compute_position_size(entry_price=1000.004, stop_price=970.0, atr=25.0)
+    assert shares == 37
+
+    # Price 9.999
+    shares_penny = compute_position_size(entry_price=9.999, stop_price=9.0, atr=0.5)
+    assert shares_penny == 0
+
+    gov = PortfolioRiskGovernor()
+    res = gov.assess_candidate("PENNY", 9.999, 9.0, 10, custom_sector="CAPITAL_MARKETS_FINTECH")
+    assert res.is_approved is False
+    assert "RULE_2_PRICE_FLOOR_VIOLATION" in res.rejection_reason
+
+
+def test_codex_finding_7_buy_limit_ceiling_and_order_validation():
+    """
+    Finding 7: Buy limits cannot execute above their limit price.
+    - Limit order at 100.00 with slippage cannot fill at 100.08. Max fill is limit_price.
+    - Mismatching symbol or order side must fail closed.
+    """
+    engine = ExecutionSimulator(base_slippage_bps=7.5)
+    order = EntryOrder(symbol="INFY", side=OrderSide.BUY, order_type=OrderType.LIMIT, limit_price=100.0, stop_price=95.0, quantity=100)
+    bar = DailyBar(symbol="INFY", open=100.0, high=102.0, low=99.0, close=101.0, volume=50000)
+
+    report = engine.simulate_entry(order, bar)
+    assert report.state == ExecutionState.FILLED
+    assert report.actual_fill_price <= order.limit_price  # Limit price is a ceiling!
+
+    # Symbol mismatch
+    bar_mismatch = DailyBar(symbol="WRONG", open=100.0, high=102.0, low=99.0, close=101.0, volume=50000)
+    rep_mismatch = engine.simulate_entry(order, bar_mismatch)
+    assert rep_mismatch.state == ExecutionState.REJECTED
+
+
+def test_codex_finding_8_net_realized_pnl_includes_entry_and_exit_costs():
+    """
+    Finding 8: Reported net loss must include BOTH entry transaction friction and exit friction.
+    """
+    engine = ExecutionSimulator()
+    pos = SwingPosition(symbol="CDSL", shares=50, entry_price=1000.0, stop_price=950.0, sector="CAPITAL_MARKETS_FINTECH")
+    bar = DailyBar(symbol="CDSL", open=950.0, high=960.0, low=940.0, close=945.0, volume=50000)
+
+    report = engine.simulate_exit(pos, bar, trigger_reason="STOP_LOSS", entry_transaction_costs=60.0)
+    # Gross loss = 50 * (1000 - 950 - slippage)
+    # Net loss must include entry costs (60) + exit costs
+    assert report.net_realized_loss > report.gross_realized_loss + 59.0
+

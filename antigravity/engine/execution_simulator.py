@@ -15,23 +15,28 @@ Core Capabilities:
    - Goods & Services Tax (GST): 18% on (Brokerage + Exchange Charges + SEBI Fees).
 2. Realistic Slippage Modeling:
    - Base slippage: 7.5 bps per side on liquid F&O underlyings.
-   - Stress slippage: 25.0 bps on gap-openings and circuit stress.
+   - Gap stress slippage: 25.0 bps on gap-openings and circuit stress.
    - Adverse execution direction: Buy executed above benchmark; Sell executed below benchmark.
+   - Buy limit orders cannot execute above their declared limit price (limit is ceiling).
 3. Discrete Execution State Representation (AGENTS.md Rule 4):
    - Modeled states: QUEUED, FILLED, PARTIAL, LOCKED_NO_OFFER (UC), LOCKED_NO_BID (LC), REJECTED, EXPIRED.
 4. Circuit Lock Handling (AGENTS.md Rules 3, 4, 5):
    - Locked Upper Circuit on buy attempt -> LOCKED_NO_OFFER (fill probability 0%). Never chase locked UC!
    - Locked Lower Circuit on exit attempt -> LOCKED_NO_BID (fill probability 0%). Position remains open and carried forward!
 5. Gap Opening Mechanics:
-   - Gap-up open: execution at Open price + slippage.
+   - Gap-up open on entry: execution at Open price + slippage (bounded by limit for limit orders).
    - Gap-down open past stop-loss: execution at Open price - slippage, actual loss exceeds 1R planned budget.
 6. Liquidity & Market Participation Sizing Gate (Claude Rule 9):
-   - Maximum 15% participation of session volume. Excess order quantity results in PARTIAL fill.
+   - Maximum 15% participation of session volume applied to BOTH entries and exits.
+   - Zero-volume sessions result in 0 filled shares. Excess quantity results in PARTIAL fill.
+7. Complete Trade Economics:
+   - Realized net loss and R-multiple account for both entry and exit transaction friction.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from enum import Enum
 import math
 import numbers
@@ -192,6 +197,7 @@ class SwingPosition:
     sector: str
     entry_time: Optional[str] = None
     highest_price: Optional[float] = None
+    entry_transaction_costs: float = 0.0
 
     def __post_init__(self):
         if self.highest_price is None:
@@ -275,13 +281,55 @@ class ExecutionSimulator(ExecutionFrictionEngine):
     ) -> ExecutionReport:
         """
         Simulates entry order execution against session bar:
+        - Symbol and Side consistency validation.
         - Rule 2 Floor (< Rs 10.00 rejected immediately).
         - Inverted Stop check.
         - Rule 3 Locked UC check (fill probability 0%).
         - Gap-up open fills at Open price + slippage.
+        - Buy limit orders cannot execute above limit price (ceiling).
         - Rule 9: 15% volume participation cap.
         """
-        # Rule 2: Absolute Rs 10.00 price floor
+        # Validate symbol consistency (Codex Finding 7)
+        if order.symbol.strip().upper() != bar.symbol.strip().upper():
+            return ExecutionReport(
+                order_id=order.order_id,
+                symbol=order.symbol,
+                side=order.side,
+                state=ExecutionState.REJECTED,
+                requested_quantity=order.quantity,
+                filled_quantity=0,
+                unfilled_quantity=order.quantity,
+                actual_fill_price=0.0,
+                fill_probability=0.0,
+                slippage_bps=0.0,
+                slippage_amount=0.0,
+                turnover=0.0,
+                transaction_costs={},
+                total_cost=0.0,
+                rejection_reason=f"SYMBOL_MISMATCH: Order symbol '{order.symbol}' does not match bar symbol '{bar.symbol}'.",
+            )
+
+        # Validate order side (Codex Finding 7)
+        if order.side != OrderSide.BUY:
+            return ExecutionReport(
+                order_id=order.order_id,
+                symbol=order.symbol,
+                side=order.side,
+                state=ExecutionState.REJECTED,
+                requested_quantity=order.quantity,
+                filled_quantity=0,
+                unfilled_quantity=order.quantity,
+                actual_fill_price=0.0,
+                fill_probability=0.0,
+                slippage_bps=0.0,
+                slippage_amount=0.0,
+                turnover=0.0,
+                transaction_costs={},
+                total_cost=0.0,
+                rejection_reason="INVALID_ENTRY_SIDE: Entry orders must be BUY.",
+            )
+
+        # Rule 2: Absolute Rs 10.00 price floor (exact, no rounding)
         if bar.open < 10.0 or order.limit_price < 10.0:
             return ExecutionReport(
                 order_id=order.order_id,
@@ -376,6 +424,10 @@ class ExecutionSimulator(ExecutionFrictionEngine):
 
         # Apply slippage
         actual_fill_price = self.apply_slippage(base_price, OrderSide.BUY, is_gap=is_gap)
+        # Limit price is an inviolable ceiling for LIMIT orders (Codex Finding 7)
+        if order.order_type == OrderType.LIMIT and actual_fill_price > order.limit_price:
+            actual_fill_price = order.limit_price
+
         slippage_bps = self.gap_stress_slippage_bps if is_gap else self.base_slippage_bps
         slippage_amount = round(actual_fill_price - base_price, 2)
 
@@ -423,13 +475,84 @@ class ExecutionSimulator(ExecutionFrictionEngine):
         position: SwingPosition,
         bar: DailyBar,
         trigger_reason: str = "STOP_LOSS",
+        entry_transaction_costs: float = 0.0,
     ) -> ExecutionReport:
         """
-        Simulates exit order execution against session bar:
+        Simulates exit order execution against session bar (Codex Findings 1, 8):
+        - Validates symbol consistency.
+        - Verifies exit price touch (stop-loss touched only if bar.low <= stop_price or gap open).
+        - Enforces session volume availability and Rule 9 participation cap on exits.
         - Rule 4 & 5 Lower Circuit check (LOCKED_NO_BID -> position carried forward).
         - Gap-down past stop price fills at Open price - slippage, actual loss exceeds 1R.
         - Calculates itemized friction including flat Rs 15.93 DP charge.
+        - Calculates complete net PnL accounting for both entry and exit transaction friction.
         """
+        # Validate symbol consistency
+        if position.symbol.strip().upper() != bar.symbol.strip().upper():
+            return ExecutionReport(
+                order_id=f"EXIT_{uuid.uuid4().hex[:8].upper()}",
+                symbol=position.symbol,
+                side=OrderSide.SELL,
+                state=ExecutionState.REJECTED,
+                requested_quantity=position.shares,
+                filled_quantity=0,
+                unfilled_quantity=position.shares,
+                actual_fill_price=0.0,
+                fill_probability=0.0,
+                slippage_bps=0.0,
+                slippage_amount=0.0,
+                turnover=0.0,
+                transaction_costs={},
+                total_cost=0.0,
+                position_remains_open=True,
+                rejection_reason=f"SYMBOL_MISMATCH: Position symbol '{position.symbol}' does not match bar symbol '{bar.symbol}'.",
+            )
+
+        # Exit trigger touch verification (Codex Finding 1)
+        # For stop-loss: must check if stop price was actually breached
+        if trigger_reason == "STOP_LOSS":
+            if bar.low > position.stop_price and bar.open >= position.stop_price:
+                # Stop price was NEVER touched during the session!
+                return ExecutionReport(
+                    order_id=f"EXIT_{uuid.uuid4().hex[:8].upper()}",
+                    symbol=position.symbol,
+                    side=OrderSide.SELL,
+                    state=ExecutionState.QUEUED,
+                    requested_quantity=position.shares,
+                    filled_quantity=0,
+                    unfilled_quantity=position.shares,
+                    actual_fill_price=0.0,
+                    fill_probability=0.0,
+                    slippage_bps=0.0,
+                    slippage_amount=0.0,
+                    turnover=0.0,
+                    transaction_costs={},
+                    total_cost=0.0,
+                    position_remains_open=True,
+                    rejection_reason=f"STOP_NOT_TOUCHED: Session low ({bar.low}) stayed above stop price ({position.stop_price}).",
+                )
+
+        # Check zero-volume session (Codex Finding 1)
+        if bar.volume <= 0:
+            return ExecutionReport(
+                order_id=f"EXIT_{uuid.uuid4().hex[:8].upper()}",
+                symbol=position.symbol,
+                side=OrderSide.SELL,
+                state=ExecutionState.LOCKED_NO_BID,
+                requested_quantity=position.shares,
+                filled_quantity=0,
+                unfilled_quantity=position.shares,
+                actual_fill_price=0.0,
+                fill_probability=0.0,
+                slippage_bps=0.0,
+                slippage_amount=0.0,
+                turnover=0.0,
+                transaction_costs={},
+                total_cost=0.0,
+                position_remains_open=True,
+                rejection_reason="ZERO_SESSION_VOLUME: Session volume is zero. Liquidity unavailable. Position carried forward.",
+            )
+
         # Rule 4 & 5: Locked Lower Circuit check (No Bid)
         is_lc_locked = bar.is_lower_circuit_locked
         if not is_lc_locked and bar.lower_circuit is not None:
@@ -456,6 +579,39 @@ class ExecutionSimulator(ExecutionFrictionEngine):
                 rejection_reason="RULE_5_LOCKED_LOWER_CIRCUIT: Locked at Lower Circuit. Bid depth = 0. Position carried forward.",
             )
 
+        # Claude Rule 9: Volume participation cap on exit (Codex Finding 1)
+        max_fillable = int(math.floor(self.max_participation_rate * bar.volume))
+        if position.shares > max_fillable:
+            filled_qty = max_fillable
+            unfilled_qty = position.shares - filled_qty
+            state = ExecutionState.PARTIAL if filled_qty > 0 else ExecutionState.LOCKED_NO_BID
+            remains_open = True
+        else:
+            filled_qty = position.shares
+            unfilled_qty = 0
+            state = ExecutionState.FILLED
+            remains_open = False
+
+        if filled_qty == 0:
+            return ExecutionReport(
+                order_id=f"EXIT_{uuid.uuid4().hex[:8].upper()}",
+                symbol=position.symbol,
+                side=OrderSide.SELL,
+                state=ExecutionState.LOCKED_NO_BID,
+                requested_quantity=position.shares,
+                filled_quantity=0,
+                unfilled_quantity=position.shares,
+                actual_fill_price=0.0,
+                fill_probability=0.0,
+                slippage_bps=0.0,
+                slippage_amount=0.0,
+                turnover=0.0,
+                transaction_costs={},
+                total_cost=0.0,
+                position_remains_open=True,
+                rejection_reason="PARTICIPATION_LIMIT_ZERO_FILL: Session liquidity insufficient for executable participation.",
+            )
+
         # Price determination & Gap-down exit check
         is_gap = False
         if bar.open < position.stop_price:
@@ -471,38 +627,45 @@ class ExecutionSimulator(ExecutionFrictionEngine):
 
         # Calculate costs on sale (includes flat Rs 15.93 DP charges)
         costs = calculate_statutory_costs(
-            actual_fill_price, position.shares, side="SELL", is_delivery=True
+            actual_fill_price, filled_qty, side="SELL", is_delivery=True
         )
         turnover = costs["turnover"]
-        total_cost = costs["total_cost"]
+        exit_total_cost = costs["total_cost"]
 
-        # Calculate realized metrics
-        entry_turnover = round(position.shares * position.entry_price, 2)
+        # Calculate realized metrics including BOTH entry and exit friction (Codex Finding 8)
+        entry_turnover = round(filled_qty * position.entry_price, 2)
         gross_realized_pnl = round(turnover - entry_turnover, 2)
         gross_loss = abs(gross_realized_pnl) if gross_realized_pnl < 0 else 0.0
-        net_realized_pnl = round(gross_realized_pnl - total_cost, 2)
+
+        prop_entry_costs = round(
+            float(entry_transaction_costs) * (filled_qty / position.shares), 2
+        ) if position.shares > 0 else 0.0
+        combined_total_cost = round(exit_total_cost + prop_entry_costs, 2)
+
+        net_realized_pnl = round(gross_realized_pnl - combined_total_cost, 2)
         net_loss = abs(net_realized_pnl) if net_realized_pnl < 0 else 0.0
 
-        planned_1r = round(position.shares * (position.entry_price - position.stop_price), 2)
+        planned_1r = round(filled_qty * (position.entry_price - position.stop_price), 2)
         r_multiple = round(net_realized_pnl / planned_1r, 3) if planned_1r > 0 else 0.0
+        prob = 1.0 if state == ExecutionState.FILLED else (filled_qty / position.shares)
 
         return ExecutionReport(
             order_id=f"EXIT_{uuid.uuid4().hex[:8].upper()}",
             symbol=position.symbol,
             side=OrderSide.SELL,
-            state=ExecutionState.FILLED,
+            state=state,
             requested_quantity=position.shares,
-            filled_quantity=position.shares,
-            unfilled_quantity=0,
+            filled_quantity=filled_qty,
+            unfilled_quantity=unfilled_qty,
             actual_fill_price=actual_fill_price,
-            fill_probability=1.0,
+            fill_probability=prob,
             slippage_bps=slippage_bps,
             slippage_amount=slippage_amount,
             turnover=turnover,
             transaction_costs=costs,
-            total_cost=total_cost,
+            total_cost=combined_total_cost,
             is_gap_exit=is_gap,
-            position_remains_open=False,
+            position_remains_open=remains_open,
             gross_realized_loss=gross_loss,
             net_realized_loss=net_loss,
             realized_r_multiple=r_multiple,
