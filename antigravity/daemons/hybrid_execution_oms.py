@@ -41,6 +41,8 @@ from antigravity.models.execution_policy import (
 )
 from antigravity.models.session_manifest import IST
 from antigravity.models.track2_portfolio_risk_governor import PortfolioRiskGovernor
+from antigravity.models.track2_a1 import validate_policy, finite_positive, SLOT_CAP_RS, RISK_PER_TRADE_RS
+from antigravity.models.track2_a1_state import AdmissionLock
 from antigravity.models.two_tranche_exit_model import (
     TrancheAllocation,
     TrancheStatus,
@@ -76,7 +78,7 @@ class HybridExecutionOMS:
         output_dir: Path = SHARED_TRACK2_DIR,
         config_path: Optional[Path] = None,
     ):
-        self._lock = threading.RLock()
+        self._state_error = None
         self._dedup_cache: Dict[str, float] = {}  # key -> monotonic_ts
 
         self.output_dir = Path(output_dir)
@@ -102,18 +104,10 @@ class HybridExecutionOMS:
         self.intents: Dict[str, ExecutionIntent] = {}
         self.active_orders: List[Dict[str, Any]] = []
 
-        self.capacity_ledger = None
-        try:
-            from research.execution_realism.capacity import CapacityConfig, ReservationLedger
-            cap_cfg = CapacityConfig(
-                capital_rs=self.corpus_rs,
-                cash_buffer_rs=self.config.cash_buffer_rs,
-                slots=self.config.max_open_positions,
-                risk_per_trade_rs=self.config.risk_budget_rs,
-            )
-            self.capacity_ledger = ReservationLedger(output_dir / "capacity_ledger.db", cap_cfg)
-        except Exception:
-            pass
+        # One cross-process authority for terminal, Telegram and supervisor.
+        # Research's independent ledger is not silently opened and then ignored.
+        self._lock = AdmissionLock(self)
+        self.capacity_ledger = self._lock
         with self._lock:
             self._load_intents()
             self._load_active_orders()
@@ -121,6 +115,7 @@ class HybridExecutionOMS:
     def _load_active_orders(self) -> None:
         """Hydrates active open positions from paper_orders.jsonl on reboot (Codex Audit)."""
         if not self.orders_path.is_file():
+            self.active_orders = []
             return
         try:
             open_orders: Dict[str, Dict[str, Any]] = {}
@@ -132,18 +127,35 @@ class HybridExecutionOMS:
                     try:
                         rec = json.loads(line)
                     except Exception:
-                        continue
+                        raise ValueError("torn or invalid journal record")
                     oid = rec.get("order_id")
                     status = rec.get("status")
-                    if not oid:
-                        continue
-                    if status in ("OPEN", "RUNNING", "QUEUED", "PARTIAL"):
+                    if not oid or not rec.get("symbol") or not status:
+                        raise ValueError("journal record lacks identity/state")
+                    prior = open_orders.get(oid, {})
+                    rec = {**prior, **rec}
+                    if status in ("OPEN", "RUNNING", "QUEUED", "PARTIAL", "FILLED", "CANCEL_REQUESTED", "EXITING", "OPEN_FEED_UNAVAILABLE"):
+                        if not finite_positive(rec.get("entry_price")) or not isinstance(rec.get("shares"), int) or rec["shares"] <= 0:
+                            raise ValueError("invalid active exposure")
                         open_orders[oid] = rec
                     elif status in ("SQUARED_OFF", "CANCELLED", "CLOSED", "REJECTED", "STOPPED_OUT_FULL"):
+                        # Historical terminal rows without confirmation are not safe to erase.
+                        if status != "REJECTED" and not rec.get("terminal_evidence"):
+                            raise ValueError("terminal status lacks fill/cancel confirmation")
                         open_orders.pop(oid, None)
+                    else:
+                        raise ValueError(f"unknown journal state {status}")
             self.active_orders = list(open_orders.values())
+            # A process may die after the order append but before saving the intent.
+            # The journal still proves that intent was sent: never route it twice.
+            for rec in self.active_orders:
+                it = self.intents.get(rec.get("intent_id"))
+                if it and it.status in (IntentStatus.PENDING_APPROVAL, IntentStatus.PRE_ARMED, IntentStatus.APPROVED):
+                    it.status = IntentStatus.ROUTED
+                    it.order_id = rec["order_id"]
             logger.info(f"Hydrated {len(self.active_orders)} active open positions from {self.orders_path.name}")
         except Exception as exc:
+            self._state_error = f"RECONCILIATION_REQUIRED: {exc}"
             logger.warning(f"Failed to load active orders: {exc}")
 
     @classmethod
@@ -167,7 +179,7 @@ class HybridExecutionOMS:
                     enforce_rule1_lock=bool(data.get("enforce_rule1_lock", True)),
                 )
             except Exception as exc:
-                logger.warning(f"Error parsing {target_path.name}: {exc}. Using default CO_PILOT.")
+                raise ValueError(f"RECONCILIATION_REQUIRED: invalid config {target_path}: {exc}") from exc
         return PolicyConfig()
 
     def save_config(self) -> None:
@@ -200,33 +212,38 @@ class HybridExecutionOMS:
     def _load_intents(self) -> None:
         """Loads active intents from disk and hydrates deduplication cache for crash consistency (Codex Audit)."""
         if not self.intents_path.is_file():
+            self.intents = {}
             return
         try:
             data = json.loads(self.intents_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict) or not isinstance(data.get("intents"), list):
+                raise ValueError("invalid intents schema")
             now_mono = time.monotonic()
+            seen = set()
             for item in data.get("intents", []):
                 intent_id = item.get("intent_id")
+                if not intent_id or intent_id in seen:
+                    raise ValueError("missing or duplicate intent")
+                seen.add(intent_id)
                 if intent_id in self.intents:
                     existing = self.intents[intent_id]
-                    if item.get("status"):
-                        existing.status = IntentStatus(item["status"])
-                    if "expires_at" in item:
-                        existing.expires_at = item["expires_at"]
-                    existing.resolved_by = item.get("resolved_by", existing.resolved_by)
-                    existing.resolved_at = item.get("resolved_at", existing.resolved_at)
-                    existing.resolution_notes = item.get("resolution_notes", existing.resolution_notes)
+                    existing.__dict__.update(ExecutionIntent.from_dict(item).__dict__)
                 else:
                     self.intents[intent_id] = ExecutionIntent.from_dict(item)
 
                 # Hydrate deduplication cache to prevent re-routing after crash/restart
-                if intent_id:
+                if intent_id and item.get("status") in ("ROUTED", "FILLED", "CLOSED"):
                     self._dedup_cache[f"approve_{intent_id}_USER"] = now_mono
                     self._dedup_cache[f"approve_{intent_id}_AUTONOMOUS"] = now_mono
+            self.intents = {k: v for k, v in self.intents.items() if k in seen}
         except Exception as exc:
+            self._state_error = f"RECONCILIATION_REQUIRED: {exc}"
             logger.warning(f"Failed to load intents: {exc}")
 
     def _save_intents(self) -> None:
         """Atomically saves intents to shared/track2_liquid/execution_intents.json."""
+        if not self._lock.depth:
+            raise RuntimeError("State writes require the shared admission transaction")
         self.intents_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "execution_mode": self.config.mode.value,
@@ -235,13 +252,17 @@ class HybridExecutionOMS:
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "intents": [intent.to_dict() for intent in self.intents.values()],
         }
-        tmp = self.intents_path.with_suffix(".tmp")
+        tmp = self.intents_path.with_name(self.intents_path.name + f".{uuid.uuid4().hex}.tmp")
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
             tmp.replace(self.intents_path)
         except Exception as exc:
+            self._state_error = f"RECONCILIATION_REQUIRED: intent persistence failed: {exc}"
             logger.error(f"Failed to save intents: {exc}")
+            raise
 
     def _get_active_and_pending_exposures(
         self, exclude_intent_id: Optional[str] = None
@@ -255,8 +276,8 @@ class HybridExecutionOMS:
             {
                 "symbol": o.get("symbol"),
                 "sector": o.get("sector"),
-                "open_risk_rs": float(o.get("risk_rs", 0.0)),
-                "notional_rs": float(o.get("notional", 0.0)),
+                "open_risk_rs": self._order_exposure(o)[0],
+                "notional_rs": self._order_exposure(o)[1],
                 "shares": int(o.get("shares", 0)),
                 "entry_price": float(o.get("entry_price", 0.0)),
             }
@@ -272,19 +293,58 @@ class HybridExecutionOMS:
                 continue
             if intent.intent_id in active_order_intent_ids:
                 continue
-            if intent.status in (IntentStatus.PENDING_APPROVAL, IntentStatus.PRE_ARMED, IntentStatus.APPROVED):
-                if not intent.is_expired(now_utc):
-                    pending_pos.append({
-                        "symbol": intent.symbol,
-                        "sector": getattr(intent, "sector", None),
-                        "open_risk_rs": float(intent.risk_rs),
-                        "notional_rs": float(intent.notional_rs),
-                        "shares": int(intent.shares),
-                        "entry_price": float(intent.entry_price),
-                        "limit_price": float(intent.limit_price),
-                        "stop_price": float(intent.stop_loss),
-                    })
+            if intent.status in (IntentStatus.PENDING_APPROVAL, IntentStatus.PRE_ARMED, IntentStatus.APPROVED, IntentStatus.ROUTED, IntentStatus.FILLED, IntentStatus.CANCEL_REQUESTED, IntentStatus.EXITING):
+                # Expiry releases only after a durable EXPIRED transition, not a local clock observation.
+                pending_pos.append({
+                    "symbol": intent.symbol,
+                    "sector": getattr(intent, "sector", None),
+                    "open_risk_rs": float(intent.risk_rs),
+                    "notional_rs": float(intent.notional_rs),
+                    "shares": int(intent.shares),
+                    "entry_price": float(intent.entry_price),
+                    "limit_price": float(intent.limit_price),
+                    "stop_price": float(intent.stop_loss),
+                })
         return active_pos, pending_pos
+
+    @staticmethod
+    def _order_exposure(o):
+        limit = float(o.get("limit_price") or o["entry_price"])
+        qty = int(o["shares"])
+        filled = int(o.get("filled_shares", qty if o.get("status") in ("OPEN", "FILLED", "EXITING", "OPEN_FEED_UNAVAILABLE") else 0))
+        exited = int(o.get("exit_filled_shares", 0))
+        if not 0 <= exited <= filled <= qty:
+            raise ValueError("RECONCILIATION_REQUIRED: invalid fill counters")
+        remaining = 0 if o.get("cancel_confirmed") else qty - filled
+        average = float(o.get("average_fill_price") or o["entry_price"])
+        stop = o.get("stop_loss", o.get("initial_stop"))
+        notional = remaining * limit + (filled - exited) * average
+        risk = (remaining * max(0, limit - float(stop)) + (filled - exited) * max(0, average - float(stop))) if stop else float(o["risk_rs"])
+        if not math.isfinite(notional) or not math.isfinite(risk) or notional <= 0 or risk < 0:
+            raise ValueError("RECONCILIATION_REQUIRED: invalid exposure")
+        return round(risk, 2), round(notional, 2)
+
+    def _admission_error(self):
+        if self._state_error:
+            return self._state_error
+        try:
+            validate_policy(self.config, self.corpus_rs)
+        except ValueError as exc:
+            return str(exc)
+        return None
+
+    def _append_order(self, record):
+        if not self._lock.depth:
+            raise RuntimeError("State writes require the shared admission transaction")
+        try:
+            self.orders_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.orders_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(record, allow_nan=False) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+        except Exception as exc:
+            self._state_error = f"RECONCILIATION_REQUIRED: journal persistence failed: {exc}"
+            raise
 
     def submit_candidate(self, candidate: Dict[str, Any]) -> Tuple[Optional[ExecutionIntent], str]:
         """
@@ -294,6 +354,9 @@ class HybridExecutionOMS:
         """
         with self._lock:
             sym = str(candidate.get("symbol", "")).upper().strip()
+            failure = self._admission_error()
+            if failure:
+                return None, f"REJECTED: {failure}"
 
             # 1. Check if an active/pending intent already exists for this symbol
             for intent in self.intents.values():
@@ -323,6 +386,7 @@ class HybridExecutionOMS:
             assessment = self.governor.assess_candidate(
                 symbol=intent.symbol,
                 entry_price=intent.entry_price,
+                worst_entry_price=intent.limit_price,
                 stop_price=intent.stop_loss,
                 quantity=intent.shares,
                 active_positions=active_pos,
@@ -346,6 +410,8 @@ class HybridExecutionOMS:
             # 4. If status is APPROVED (Autonomous or Tier 1 Hybrid), route immediately
             if intent.status == IntentStatus.APPROVED:
                 order_res = self.route_order(intent)
+                if order_res.get("status") != "SUCCESS":
+                    return None, f"REJECTED: {order_res.get('message')}"
                 return intent, f"AUTONOMOUS_ROUTED: {order_res.get('message', 'Order placed')}"
 
             return intent, "PENDING_CO_PILOT_APPROVAL"
@@ -380,6 +446,9 @@ class HybridExecutionOMS:
         Thread-safe under self._lock with Compare-And-Swap (CAS) and 300s deduplication.
         """
         with self._lock:
+            failure = self._admission_error()
+            if failure:
+                return {"status": "ERROR", "message": failure}
             now_mono = time.monotonic()
             # Purge stale dedup cache entries > 300s
             self._dedup_cache = {k: ts for k, ts in self._dedup_cache.items() if (now_mono - ts) < 300.0}
@@ -413,6 +482,7 @@ class HybridExecutionOMS:
             assessment = self.governor.assess_candidate(
                 symbol=intent.symbol,
                 entry_price=intent.entry_price,
+                worst_entry_price=intent.limit_price,
                 stop_price=intent.stop_loss,
                 quantity=intent.shares,
                 active_positions=active_pos,
@@ -509,9 +579,29 @@ class HybridExecutionOMS:
         with self._lock:
             # Rule 1 Security Check
             self.config.validate_for_execution()
+            failure = self._admission_error()
+            if failure:
+                return {"status": "ERROR", "message": failure}
+            stored = self.intents.get(intent.intent_id)
+            if stored is None:
+                return {"status": "ERROR", "message": "UNRESERVED_INTENT"}
+            intent = stored
+            if datetime.now(timezone.utc) >= datetime.fromisoformat(intent.expires_at):
+                intent.status = IntentStatus.EXPIRED
+                self._save_intents()
+                return {"status": "ERROR", "message": "INTENT_EXPIRED"}
+            # Revalidate the serialized price/size and required volatility on every route.
+            candidate = dict(symbol=intent.symbol, entry_price=intent.entry_price, stop_loss=intent.stop_loss,
+                             shares=intent.shares, atr14=intent.atr14, atr_timestamp=intent.atr_timestamp,
+                             max_slippage_bps=intent.max_slippage_bps, sector=intent.sector, var_elm_rate=intent.var_elm_rate)
+            checked = ExecutionIntent.create_from_candidate(candidate)
+            if checked is None or checked.shares != intent.shares or checked.limit_price != intent.limit_price:
+                intent.status = IntentStatus.REJECTED
+                self._save_intents()
+                return {"status": "ERROR", "message": "INVALID_OR_STALE_RESERVED_INTENT"}
 
             # Idempotency Guard: prevent duplicate routing on same intent
-            if intent.status in (IntentStatus.ROUTED, IntentStatus.FILLED, IntentStatus.REJECTED, IntentStatus.CANCELLED):
+            if intent.status in (IntentStatus.ROUTED, IntentStatus.FILLED, IntentStatus.REJECTED, IntentStatus.CANCELLED, IntentStatus.CLOSED, IntentStatus.CANCEL_REQUESTED, IntentStatus.EXITING):
                 return {
                     "status": "ERROR",
                     "reason": "ALREADY_ROUTED",
@@ -536,7 +626,7 @@ class HybridExecutionOMS:
                 }
 
             # 1. Notional Ceiling Gate (Claude Red-Team F28)
-            if intent.notional_rs > 100000.0:
+            if intent.shares * intent.limit_price > SLOT_CAP_RS or intent.shares * (intent.limit_price - intent.stop_loss) > RISK_PER_TRADE_RS:
                 abort_reason = "NOTIONAL_CEILING_EXCEEDED"
                 abort_msg = (
                     f"ABORTED: Order notional ₹{intent.notional_rs:,.2f} exceeds "
@@ -631,12 +721,12 @@ class HybridExecutionOMS:
                 "total_friction_est_rs": 258.10,
                 "friction_bps_est": 43.0,
                 "dp_charges_count": 2,
+                "qualification": "NON_QUALIFYING_DIAGNOSTIC",
             }
 
             # Append to orders ledger
             self.orders_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.orders_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(order_record) + "\n")
+            self._append_order(order_record)
 
             intent.order_id = order_record["order_id"]
             self.active_orders.append(order_record)
@@ -664,120 +754,104 @@ class HybridExecutionOMS:
 
     def emergency_flatten_all(self, reason: str = "EMERGENCY_KILL_SWITCH") -> Dict[str, Any]:
         """Emergency kill-switch: cancels all pending/pre-armed intents and records explicit square-off exits for open orders."""
+        return self._request_flatten(reason)
+
+    def _request_flatten(self, reason):
+        """A request, never an invented fill; working remainder and inventory stay reserved."""
         with self._lock:
-            logger.warning(f"🚨 [KILL SWITCH TRIGGERED] Reason: {reason}")
-            now_str = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
-
-            # Cancel pending and pre-armed intents
-            cancelled_intents = 0
-            for intent in self.intents.values():
-                if intent.status in (IntentStatus.PENDING_APPROVAL, IntentStatus.APPROVED, IntentStatus.PRE_ARMED):
-                    intent.status = IntentStatus.CANCELLED
-                    intent.resolved_at = datetime.now(timezone.utc).isoformat()
-                    intent.resolved_by = "KILL_SWITCH"
-                    intent.resolution_notes = f"Flattened: {reason}"
-                    cancelled_intents += 1
-
+            if self._state_error:
+                return {"status": "ERROR", "message": self._state_error}
+            cancelled = 0
+            for it in self.intents.values():
+                if it.status in (IntentStatus.PENDING_APPROVAL, IntentStatus.PRE_ARMED, IntentStatus.APPROVED):
+                    it.status = IntentStatus.CANCELLED  # never sent, safe local withdrawal
+                    cancelled += 1
+            for o in self.active_orders:
+                filled = int(o.get("filled_shares", o["shares"] if o["status"] in ("OPEN", "FILLED", "EXITING", "OPEN_FEED_UNAVAILABLE") else 0))
+                updated = {**o, "filled_shares": filled, "status": "CANCEL_REQUESTED" if not o.get("cancel_confirmed") and filled < o["shares"] else "EXITING",
+                           "exit_requested": filled > 0, "action": "EMERGENCY_REQUEST", "reason": reason}
+                self._append_order(updated)
+                if o.get("intent_id") in self.intents:
+                    self.intents[o["intent_id"]].status = IntentStatus(updated["status"])
             self._save_intents()
+            self._load_active_orders()
+            return {"status": "KILL_SWITCH_REQUESTED", "cancelled_intents": cancelled, "squared_off_orders": 0,
+                    "pending_confirmations": len(self.active_orders), "reason": reason}
 
-            # Record explicit exit orders to paper_orders.jsonl
-            squared_off_orders = []
-            unsquared_held = []
-            if self.active_orders:
-                self.orders_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(self.orders_path, "a", encoding="utf-8") as f:
-                    for o in self.active_orders:
-                        o_status = str(o.get("status", "QUEUED")).upper()
-                        total_shares = int(o.get("shares", 0))
-                        if o_status in ("OPEN", "FILLED", "SQUARED_OFF"):
-                            filled_shares = int(o.get("filled_shares", total_shares))
-                        elif o_status == "PARTIAL":
-                            filled_shares = int(o.get("filled_shares", 0))
-                        else:
-                            filled_shares = int(o.get("filled_shares", 0))
-                        unfilled_shares = max(0, total_shares - filled_shares)
+    def _record_execution(self, order_id, quantity, price, evidence, action):
+        """Evidence-bearing paper events only. Event IDs are durable/idempotent.
 
-                        # 1. Cancel unfilled order or unfilled remainder of PARTIAL order (Codex R05)
-                        if unfilled_shares > 0 and o_status in ("QUEUED", "ROUTED", "PARTIAL"):
-                            action = "EMERGENCY_CANCEL" if filled_shares == 0 else "EMERGENCY_CANCEL_UNFILLED"
-                            cancel_rec = {
-                                "order_id": o.get("order_id"),
-                                "intent_id": o.get("intent_id"),
-                                "symbol": o.get("symbol"),
-                                "shares": unfilled_shares,
-                                "action": action,
-                                "exit_price": None,
-                                "status": "CANCELLED",
-                                "reason": reason,
-                                "timestamp": now_str,
-                            }
-                            f.write(json.dumps(cancel_rec) + "\n")
-                            squared_off_orders.append(cancel_rec)
+        Caller must be the reviewed paper fill adapter, not an HTTP user-entered
+        price. This API does not validate market data provenance by itself.
+        """
+        with self._lock:
+            if self._state_error:
+                return {"status": "ERROR", "message": self._state_error}
+            allowed = {"ENTRY": {"PAPER_TRADE_THROUGH", "PAPER_QUOTE_THROUGH", "PAPER_QUEUE_DEPLETION"},
+                       "EXIT": {"PAPER_TRADE_THROUGH", "PAPER_QUOTE_THROUGH", "PAPER_QUEUE_DEPLETION", "PAPER_AUCTION"},
+                       "CANCEL": {"PAPER_CANCEL_ACK"}}
+            if not isinstance(evidence, dict) or not evidence.get("event_id") or evidence.get("kind") not in allowed[action]:
+                return {"status": "ERROR", "message": "FILL_OR_ACK_EVIDENCE_REQUIRED"}
+            # Search all rows, including terminal ones, for replay/conflict.
+            rows = [json.loads(line) for line in self.orders_path.read_text(encoding="utf-8").splitlines() if line.strip() and not line.startswith("#")]
+            payload = {"order_id": order_id, "quantity": quantity, "price": price, "action": action, "evidence": evidence}
+            for row in rows:
+                if row.get("event_payload", {}).get("evidence", {}).get("event_id") == evidence["event_id"]:
+                    return {"status": "SUCCESS" if row["event_payload"] == payload else "ERROR", "message": "IDEMPOTENT_EVENT_OR_CONFLICT"}
+            order = next((o for o in self.active_orders if o["order_id"] == order_id), None)
+            if order is None:
+                return {"status": "ERROR", "message": "UNKNOWN_OR_TERMINAL_ORDER"}
+            rec = dict(order)
+            qty = int(rec["shares"])
+            filled = int(rec.get("filled_shares", qty if rec["status"] in ("OPEN", "FILLED", "EXITING", "OPEN_FEED_UNAVAILABLE") else 0))
+            exited = int(rec.get("exit_filled_shares", 0))
+            if action != "CANCEL" and (isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0 or not finite_positive(price)):
+                return {"status": "ERROR", "message": "INVALID_FILL"}
+            if action == "ENTRY":
+                if rec.get("cancel_confirmed") or filled + quantity > qty or price > rec["limit_price"]:
+                    return {"status": "ERROR", "message": "ENTRY_FILL_OUTSIDE_ORDER"}
+                rec["average_fill_price"] = (filled * float(rec.get("average_fill_price", rec["entry_price"])) + quantity * price) / (filled + quantity)
+                rec["filled_shares"] = filled + quantity
+                rec["status"] = "CANCEL_REQUESTED" if rec["status"] == "CANCEL_REQUESTED" else ("OPEN" if filled + quantity == qty else "PARTIAL")
+            elif action == "CANCEL":
+                if rec["status"] != "CANCEL_REQUESTED" or evidence.get("filled_qty_at_ack") != filled:
+                    return {"status": "ERROR", "message": "CANCEL_ACK_FILL_MISMATCH_OR_INVALID_STATE"}
+                rec["filled_shares"] = filled
+                rec["cancel_confirmed"] = True
+                rec["status"] = "EXITING" if filled > exited else "CANCELLED"
+            else:
+                if rec["status"] != "EXITING" or exited + quantity > filled:
+                    return {"status": "ERROR", "message": "EXIT_FILL_OUTSIDE_POSITION"}
+                rec["exit_filled_shares"] = exited + quantity
+                rec["realized_gross_pnl_rs"] = round(rec.get("realized_gross_pnl_rs", 0) + quantity * (price - rec.get("average_fill_price", rec["entry_price"])), 2)
+                if exited + quantity == filled:
+                    rec["status"] = "CLOSED"
+            rec["event_payload"] = payload
+            rec["terminal_evidence"] = evidence if rec["status"] in ("CLOSED", "CANCELLED") else None
+            self._append_order(rec)
+            it = self.intents.get(rec.get("intent_id"))
+            if it:
+                it.status = IntentStatus.CLOSED if rec["status"] == "CLOSED" else IntentStatus.CANCELLED if rec["status"] == "CANCELLED" else IntentStatus.EXITING if rec["status"] == "EXITING" else IntentStatus.CANCEL_REQUESTED if rec["status"] == "CANCEL_REQUESTED" else IntentStatus.FILLED if rec["status"] == "OPEN" else IntentStatus.ROUTED
+                self._save_intents()
+            self._load_active_orders()
+            return {"status": "SUCCESS", "order_id": order_id, "order_status": rec["status"]}
 
-                        # 2. Square off or preserve filled inventory (Claude A22 & Codex R05)
-                        if filled_shares > 0:
-                            market_exit = self._sample_live_ltp(o.get("symbol", ""))
-                            if market_exit is not None and market_exit > 0:
-                                entry_px = float(o.get("entry_price", 0.0))
-                                gross_pnl = round(filled_shares * (market_exit - entry_px), 2)
-                                friction = 0.0
-                                try:
-                                    from antigravity.models.track2_paper_execution import calculate_transaction_costs
-                                    cost = calculate_transaction_costs(market_exit, filled_shares, "SELL", is_intraday=True)
-                                    friction = cost.get("total_cost", 0.0)
-                                except Exception:
-                                    pass
-                                net_pnl = round(gross_pnl - friction, 2)
-                                exit_rec = {
-                                    "order_id": o.get("order_id"),
-                                    "intent_id": o.get("intent_id"),
-                                    "symbol": o.get("symbol"),
-                                    "shares": filled_shares,
-                                    "action": "EMERGENCY_EXIT",
-                                    "exit_price": market_exit,
-                                    "status": "SQUARED_OFF",
-                                    "gross_pnl_rs": gross_pnl,
-                                    "net_pnl_rs": net_pnl,
-                                    "reason": reason,
-                                    "timestamp": now_str,
-                                }
-                                f.write(json.dumps(exit_rec) + "\n")
-                                squared_off_orders.append(exit_rec)
-                            else:
-                                # Market feed unavailable: DO NOT fabricate entry_price as exit price!
-                                held_rec = {
-                                    "order_id": o.get("order_id"),
-                                    "intent_id": o.get("intent_id"),
-                                    "symbol": o.get("symbol"),
-                                    "shares": filled_shares,
-                                    "action": "EMERGENCY_UNSQUARED_HELD",
-                                    "exit_price": None,
-                                    "status": "OPEN_FEED_UNAVAILABLE",
-                                    "requires_manual_broker_intervention": True,
-                                    "reason": f"{reason}: Market feed unavailable to confirm squareoff price",
-                                    "timestamp": now_str,
-                                }
-                                f.write(json.dumps(held_rec) + "\n")
-                                unsquared_held.append({**o, "status": "OPEN_FEED_UNAVAILABLE", "shares": filled_shares, "filled_shares": filled_shares})
-                                squared_off_orders.append(held_rec)
+    def record_entry_fill(self, order_id, quantity, price, *, evidence):
+        return self._record_execution(order_id, quantity, price, evidence, "ENTRY")
 
-            squared_off = len(squared_off_orders)
-            self.active_orders = unsquared_held
+    def record_exit_fill(self, order_id, quantity, price, *, evidence):
+        return self._record_execution(order_id, quantity, price, evidence, "EXIT")
 
-            return {
-                "status": "KILL_SWITCH_EXECUTED",
-                "cancelled_intents": cancelled_intents,
-                "squared_off_orders": squared_off,
-                "timestamp": now_str,
-                "reason": reason,
-            }
+    def confirm_cancel(self, order_id, *, evidence):
+        return self._record_execution(order_id, 0, None, evidence, "CANCEL")
+
 
     def get_status_summary(self) -> Dict[str, Any]:
         """Returns clean operational summary for UI and Telegram."""
         with self._lock:
             self._load_intents()
             self._load_active_orders()
-            self.config = self.load_config()
+            # Do not silently replace a process's policy with a different global config.
             now_utc = datetime.now(timezone.utc)
             pending = [
                 i.to_dict()

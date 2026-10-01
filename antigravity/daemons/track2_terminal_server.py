@@ -452,7 +452,7 @@ class TerminalStateHandler:
 class TerminalHTTPRequestHandler(BaseHTTPRequestHandler):
     """HTTP Request Handler serving static HTML and REST JSON endpoints."""
 
-    state_handler = TerminalStateHandler(corpus_rs=250000.0)
+    state_handler = None  # importing a UI module must not open a live authority
 
     def do_GET(self) -> None:
         if self.path in ("/", "/index.html"):
@@ -611,169 +611,34 @@ class TerminalHTTPRequestHandler(BaseHTTPRequestHandler):
         })
 
     def _handle_squareoff(self) -> None:
-        active_brackets = self.state_handler._get_active_brackets()
-        count = len(active_brackets)
-        ts = get_current_ist_str()
-
-        # Execute emergency flatten across OMS first
-        self.state_handler.oms.emergency_flatten_all()
-        self.state_handler.manual_squared_off = True
-
-        event = {
-            "timestamp": ts,
-            "type": "EMERGENCY_SQUAREOFF",
-            "agent": "HUMAN_OPERATOR",
-            "message": f"EMERGENCY FLATTEN: Squared off {count} active positions immediately.",
-            "closed_orders": [b.get("order_id") for b in active_brackets],
-        }
-        try:
-            with open(EVENTS_LOG_PATH, "a", encoding="utf-8") as f:
-                f.write(json.dumps(event) + "\n")
-        except Exception:
-            pass
-
-        try:
-            with open(PAPER_ORDERS_PATH, "a", encoding="utf-8") as f:
-                for b in active_brackets:
-                    exit_record = {
-                        "order_id": b.get("order_id"),
-                        "symbol": b.get("symbol"),
-                        "action": "EMERGENCY_EXIT",
-                        "exit_price": b.get("ltp", b.get("entry_price")),
-                        "timestamp": ts,
-                        "status": "SQUARED_OFF",
-                        "reason": "MANUAL_EMERGENCY_FLATTEN",
-                    }
-                    f.write(json.dumps(exit_record) + "\n")
-        except Exception:
-            pass
-
-        self._serve_json({
-            "status": "TRIGGERED",
-            "message": f"Emergency manual squareoff executed for all active paper brackets ({count} closed).",
-            "squared_off_count": count,
-            "timestamp": ts,
-        })
+        result = self.state_handler.oms.emergency_flatten_all(reason="MANUAL_EMERGENCY_FLATTEN")
+        self._serve_json(result)
 
     def _handle_enter(self) -> None:
-        """Enforces hard API-level rejection for any invalid or unauthorized trade attempt."""
+        """Retired direct-entry path; use reviewed producer -> shared OMS."""
         try:
-            content_len = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_len).decode("utf-8")
-            data = json.loads(body) if body else {}
-        except Exception:
-            self._serve_json({"status": "REJECTED", "error": "Invalid JSON body"}, status_code=HTTPStatus.BAD_REQUEST)
-            return
-
-        # 0. Operational Gate Pause Check
-        if self.state_handler.is_paused:
-            self._serve_json(
-                {"status": "FORBIDDEN", "error": "FAIL-CLOSED: System is in PAUSED state. All new entries blocked."},
-                status_code=HTTPStatus.FORBIDDEN,
-            )
-            return
-
-        # 1. Macro Regime Check
-        state = self.state_handler.get_state()
-        regime = state["nifty"]["regime"]
-        if regime == "DISTRIBUTION_GATED":
-            self._serve_json(
-                {"status": "FORBIDDEN", "error": "FAIL-CLOSED: Macro regime is DISTRIBUTION_GATED. All entries blocked."},
-                status_code=HTTPStatus.FORBIDDEN,
-            )
-            return
-
-        # 2. Max Concurrent Position Slots (3 max)
-        active_count = state["risk"]["active_positions_count"]
-        if active_count >= state["risk"]["max_positions"]:
-            self._serve_json(
-                {"status": "FORBIDDEN", "error": f"FAIL-CLOSED: Maximum concurrent positions ({state['risk']['max_positions']}) reached."},
-                status_code=HTTPStatus.FORBIDDEN,
-            )
-            return
-
-        # 3. Portfolio Risk Governor Check
-        sym = str(data.get("symbol", "")).strip().upper()
-        try:
-            entry = float(data.get("entry_price", 0))
-            stop = float(data.get("stop_price", 0))
-            qty = int(data.get("quantity", 0))
+            data = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode("utf-8"))
         except (ValueError, TypeError):
-            self._serve_json(
-                {"status": "BAD_REQUEST", "error": "FAIL-CLOSED: Invalid price or quantity inputs."},
-                status_code=HTTPStatus.BAD_REQUEST,
-            )
+            self._serve_json({"status": "REJECTED", "error": "Invalid JSON"}, status_code=HTTPStatus.BAD_REQUEST)
             return
-
-        var_elm = data.get("var_elm_rate")
-        assessment = self.state_handler.governor.assess_candidate(
-            symbol=sym,
-            entry_price=entry,
-            stop_price=stop,
-            quantity=qty,
-            active_positions=[{"symbol": b["symbol"], "open_risk_rs": 1500.0, "notional_rs": 69000.0} for b in state["brackets"]],
-            var_elm_rate=var_elm,
-        )
-
-        if not assessment.is_approved:
-            self._serve_json(
-                {"status": "FORBIDDEN", "error": f"FAIL-CLOSED: {assessment.rejection_reason}"},
-                status_code=HTTPStatus.FORBIDDEN,
-            )
+        if self.state_handler.is_paused:
+            self._serve_json({"status": "FORBIDDEN", "error": "PAUSED"}, status_code=HTTPStatus.FORBIDDEN)
             return
-
-        depth = generate_depth_ladder(sym, entry)
-        queue_info = calculate_queue_rank(qty, entry, "BUY", depth)
-        sig_price = float(data.get("signal_price", entry))
-        shortfall = calculate_implementation_shortfall(sig_price, entry, entry, "BUY")
-        cost_breakdown = calculate_transaction_costs(entry, qty, "BUY", is_intraday=True)
-
-        order_rec = {
-            "order_id": f"BRK_{sym}_{int(datetime.now().timestamp())}",
-            "symbol": sym,
-            "shares": qty,
-            "entry_price": entry,
-            "current_stop": stop,
-            "initial_stop": stop,
-            "stop_loss": stop,
-            "risk_rs": round(abs(entry - stop) * qty, 2),
-            "planned_risk_rs": assessment.proposed_risk_rs,
-            "is_breakeven": False,
-            "ltp": entry,
-            "t1_shares": qty // 2,
-            "t1_target": round(entry + 1.5 * (entry - stop), 2),
-            "target_tranche1": round(entry + 1.5 * (entry - stop), 2),
-            "target_tranche2": round(entry + 3.0 * (entry - stop), 2),
-            "t1_status": "QUEUED",
-            "t2_shares": qty - (qty // 2),
-            "t2_status": "PENDING_T1",
-            "gross_pnl_rs": 0.0,
-            "net_pnl_rs": -cost_breakdown["total_cost"],
-            "charges_rs": cost_breakdown["total_cost"],
-            "signal_price": shortfall["signal_price"],
-            "limit_price": shortfall["limit_price"],
-            "fill_price": shortfall["fill_price"],
-            "slippage_bps": shortfall["slippage_bps"],
-            "delay_slippage_bps": shortfall["delay_impact_bps"],
-            "spread_cost_bps": shortfall["spread_cost_bps"],
-            "cost_breakdown": cost_breakdown,
-            "depth": depth,
-            "queue_rank": queue_info,
-            "status": "OPEN",
-            "timestamp": get_current_ist_str(),
-        }
-        try:
-            with open(PAPER_ORDERS_PATH, "a", encoding="utf-8") as f:
-                f.write(json.dumps(order_rec) + "\n")
-        except Exception:
-            pass
-
-        self._serve_json({
-            "status": "APPROVED",
-            "message": f"Paper bracket spawned for {sym}: {qty} shares @ ₹{entry:.2f}",
-            "assessment": assessment.to_dict(),
-            "bracket": order_rec,
-        })
+        # Preserve informative input-limit errors on the retired endpoint.
+        entry, stop, qty = data.get("entry_price"), data.get("stop_price"), data.get("quantity")
+        from antigravity.models.track2_a1 import finite_positive, SLOT_CAP_RS, RISK_PER_TRADE_RS
+        if all(finite_positive(v) for v in (entry, stop)) and isinstance(qty, int) and not isinstance(qty, bool) and qty > 0:
+            if qty * entry > SLOT_CAP_RS:
+                self._serve_json({"status": "FORBIDDEN", "error": "FAIL-CLOSED: SLOT_CAP_EXCEEDED"}, status_code=HTTPStatus.FORBIDDEN)
+                return
+            if qty * (entry - stop) > RISK_PER_TRADE_RS:
+                self._serve_json({"status": "FORBIDDEN", "error": "FAIL-CLOSED: SINGLE_TRADE_RISK_EXCEEDED"}, status_code=HTTPStatus.FORBIDDEN)
+                return
+        # Retired: this endpoint fabricated OPEN positions and had no trusted
+        # eligibility source. Real paper intents originate through the reviewed
+        # producer -> OMS; approval/rejection UI endpoints remain available.
+        self._serve_json({"status": "FORBIDDEN", "error": "FAIL-CLOSED: Direct entry retired; use reviewed producer -> shared OMS"},
+                         status_code=HTTPStatus.FORBIDDEN)
 
     def _read_json_payload(self) -> Dict[str, Any]:
         try:
@@ -830,6 +695,8 @@ class TerminalHTTPRequestHandler(BaseHTTPRequestHandler):
 
 
 def run_terminal_server(host: str = "127.0.0.1", port: int = 8766) -> ThreadingHTTPServer:
+    if TerminalHTTPRequestHandler.state_handler is None:
+        TerminalHTTPRequestHandler.state_handler = TerminalStateHandler()
     server_address = (host, port)
     httpd = ThreadingHTTPServer(server_address, TerminalHTTPRequestHandler)
     return httpd

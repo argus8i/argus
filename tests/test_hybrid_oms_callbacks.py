@@ -5,6 +5,7 @@ Part of Project Swing Trades (ARGUS 8i // BEACON Track 2).
 """
 
 import json
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 import pytest
 
@@ -70,6 +71,8 @@ def test_telegram_callback_approve_flow(mock_get, mock_post, tmp_path):
         "stop_loss": 207.5,
         "volume_multiplier": 3.8,
         "var_elm_rate": 0.20,
+        "atr14": 50.0,
+        "atr_timestamp": datetime.now(timezone.utc).isoformat(),
     }
     intent, _ = oms.submit_candidate(candidate)
     assert intent is not None

@@ -18,6 +18,7 @@ from enum import Enum
 from typing import Any, Dict, Optional
 
 from antigravity.models.session_manifest import IST
+from antigravity.models.track2_a1 import affordable, finite_positive, SLOT_CAP_RS, RISK_PER_TRADE_RS, MAX_SLOTS, CASH_BUFFER_RS, ATR_MAX_AGE_SECONDS
 
 
 class ExecutionMode(str, Enum):
@@ -43,6 +44,9 @@ class IntentStatus(str, Enum):
     ROUTED = "ROUTED"                      # Sent to execution gateway
     FILLED = "FILLED"                      # Confirmed fill
     CANCELLED = "CANCELLED"                # Order cancelled or killed
+    CANCEL_REQUESTED = "CANCEL_REQUESTED"
+    EXITING = "EXITING"
+    CLOSED = "CLOSED"
 
 
 class SecurityViolationError(Exception):
@@ -100,6 +104,9 @@ class ExecutionIntent:
     resolved_by: Optional[str] = None
     resolution_notes: Optional[str] = None
     order_id: Optional[str] = None
+    atr14: float = 0.0
+    atr_timestamp: Optional[str] = None
+    strategy: str = "UNSPECIFIED"
 
     @classmethod
     def create_from_candidate(
@@ -109,43 +116,68 @@ class ExecutionIntent:
         expiry_seconds: float = 30.0,
     ) -> Optional[ExecutionIntent]:
         """Constructs and validates an ExecutionIntent from a candidate signal dictionary."""
-        sym = str(candidate["symbol"]).upper().strip()
-        entry = round(float(candidate["entry_price"]), 2)
-        stop = round(float(candidate["stop_loss"]), 2)
+        sym = str(candidate.get("symbol", "")).upper().strip()
+        entry_raw = candidate.get("entry_price")
+        stop_raw = candidate.get("stop_cost_price", candidate.get("stop_loss"))
+        atr14 = candidate.get("atr14", candidate.get("atr"))
+        if not sym or not all(finite_positive(v) for v in (entry_raw, stop_raw, atr14)):
+            return None
+        try:
+            atr_at = datetime.fromisoformat(candidate["atr_timestamp"])
+            if atr_at.tzinfo is None or not 0 <= (datetime.now(timezone.utc) - atr_at).total_seconds() <= ATR_MAX_AGE_SECONDS:
+                return None
+        except (KeyError, ValueError, TypeError):
+            return None
+        entry = round(float(entry_raw), 2)
+        stop = round(float(stop_raw), 2)
         target1 = round(float(candidate.get("target_price", candidate.get("target_tranche1", 0.0))), 2)
 
-        risk_per_share = entry - stop
+        slippage_bps = candidate.get("max_slippage_bps", 15.0)
+        if not finite_positive(slippage_bps):
+            return None
+        tick = schedule_tick(entry)
+        entry = floor_to_tick(entry, tick)
+        stop = floor_to_tick(stop, tick)
+        factor = .10 if slippage_bps <= 15 else .15
+        limit_price = floor_to_tick(min(entry * (1 + slippage_bps / 10000), entry + factor * atr14), tick)
+        risk_per_share = limit_price - stop
         if risk_per_share <= 0:
-            raise ValueError(f"Invalid stop loss: entry ({entry}) <= stop ({stop})")
+            return None
 
         # Risk budgeting: ₹1,500 target risk per trade (1.0R)
-        risk_rs = float(candidate.get("actual_risk_rs", candidate.get("risk_rs", 1500.0)))
+        risk_rs = candidate.get("actual_risk_rs", candidate.get("risk_rs", RISK_PER_TRADE_RS))
         raw_shares = candidate.get("shares")
-        max_slot_notional = float(candidate.get("max_slot_notional_rs", 38000.0))
+        max_slot_notional = candidate.get("max_slot_notional_rs", SLOT_CAP_RS)
+        if not finite_positive(risk_rs) or not finite_positive(max_slot_notional):
+            return None
+        max_slot_notional = min(max_slot_notional, SLOT_CAP_RS)
+        max_qty = affordable(limit_price, stop, max_slot_notional, risk_rs)
 
         # Check if entry price alone exceeds slot notional cap (clean skip/reject without unhandled ValueError)
-        if entry > max_slot_notional:
+        if max_qty <= 0:
             return None
 
         if raw_shares is not None:
-            shares = int(raw_shares)
+            if isinstance(raw_shares, bool) or not isinstance(raw_shares, int):
+                return None
+            shares = raw_shares
             if shares <= 0:
                 return None
             # Enforce Rs 1,500 per-trade risk cap on caller-supplied shares
-            if round(shares * risk_per_share, 2) > min(1500.0, risk_rs):
+            if round(shares * risk_per_share, 2) > min(RISK_PER_TRADE_RS, risk_rs):
                 return None
-            if (shares * entry) > max_slot_notional:
-                capped = int(max_slot_notional / entry)
+            if (shares * limit_price) > max_slot_notional:
+                capped = max_qty
                 if capped <= 0:
                     return None
                 shares = capped
         else:
             # If floor(1500 / risk_per_share) == 0, SKIP the trade (return a reject), never force 1 share
-            shares = math.floor(min(1500.0, risk_rs) / risk_per_share)
+            shares = max_qty
             if shares <= 0:
                 return None
-            if (shares * entry) > max_slot_notional:
-                capped = int(max_slot_notional / entry)
+            if (shares * limit_price) > max_slot_notional:
+                capped = max_qty
                 if capped <= 0:
                     return None
                 shares = capped
@@ -155,7 +187,7 @@ class ExecutionIntent:
             return None
 
         actual_risk = round(shares * risk_per_share, 2)
-        notional = round(shares * entry, 2)
+        notional = round(shares * limit_price, 2)
 
         # Two-Tranche Allocation (50% Target 1, 50% Runner)
         tranche1_qty = max(1, shares // 2) if shares > 1 else 1
@@ -176,17 +208,6 @@ class ExecutionIntent:
         # If pre-armed or Tier 1 (machine speed), use strict +15 bps collar: min(Trigger * 1.0015, Trigger + 0.10 * ATR14).
         # If manual post-breakout co-pilot, use adaptive +25 bps collar: min(Trigger * 1.0025, Trigger + 0.15 * ATR14)
         # to prevent the "Winner's Curse" where +15 bps limits only fill on failing breakouts (Claude Audit).
-        atr14 = float(candidate.get("atr14", candidate.get("atr", 0.0)) or 0.0)
-        slippage_bps = float(candidate.get("max_slippage_bps", 15.0))
-        atr_factor = 0.10 if slippage_bps <= 15.0 else 0.15
-
-        pct_collar = round(entry * (1.0 + slippage_bps / 10000.0), 2)
-        if atr14 > 0:
-            atr_collar = round(entry + atr_factor * atr14, 2)
-            limit_price = min(pct_collar, atr_collar)
-        else:
-            limit_price = pct_collar
-
         # Align prices to exchange tick grid (NSE CM tick schedule: Claude Finding A26)
         tick = schedule_tick(entry)
         entry = floor_to_tick(entry, tick)
@@ -245,6 +266,9 @@ class ExecutionIntent:
             nifty_breadth_confirmed=breadth_ok,
             var_elm_rate=var_elm_rate,
             sector=sector,
+            atr14=atr14,
+            atr_timestamp=atr_at.isoformat(),
+            strategy=str(candidate.get("strategy", "UNSPECIFIED")),
             created_at=now_utc.isoformat(),
             expires_at=exp_utc.isoformat(),
             resolved_at=resolved_at,
@@ -339,9 +363,9 @@ class PolicyConfig:
     environment: ExecutionEnvironment = ExecutionEnvironment.PAPER_SIMULATION
     expiry_seconds: float = 30.0
     max_slippage_bps: float = 15.0
-    risk_budget_rs: float = 1500.0
-    max_open_positions: int = 3
-    cash_buffer_rs: float = 136000.0
+    risk_budget_rs: float = RISK_PER_TRADE_RS
+    max_open_positions: int = MAX_SLOTS
+    cash_buffer_rs: float = CASH_BUFFER_RS
     tier1_vol_mult_threshold: float = 4.0
     enforce_rule1_lock: bool = True
 

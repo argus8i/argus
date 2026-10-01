@@ -29,6 +29,12 @@ from antigravity.models.execution_policy import (
 from antigravity.daemons.hybrid_execution_oms import HybridExecutionOMS
 
 
+def _fresh(row):
+    """Explicit synthetic volatility evidence for these fixtures, never a production fallback."""
+    return {"atr14": 50.0, **row, "atr_timestamp": datetime.now(timezone.utc).isoformat()}
+
+
+
 @pytest.fixture(autouse=True)
 def seed_mock_depth_feed(tmp_path):
     """Provides simulated live depth quotes for tested candidates in tmp_path."""
@@ -57,16 +63,16 @@ def test_execution_intent_sizing_and_tranches():
         "atr14": 8.0,
     }
     # Expected shares = min(1500 / 7.50, int(38000 / 215)) = min(200, 176) = 176 shares (Adjusted A1 slot cap)
-    intent = ExecutionIntent.create_from_candidate(candidate, mode=ExecutionMode.CO_PILOT)
+    intent = ExecutionIntent.create_from_candidate(_fresh(candidate), mode=ExecutionMode.CO_PILOT)
 
     assert intent.symbol == "RVNL"
     assert intent.shares == 176
     assert intent.tranche1_shares == 88
     assert intent.tranche2_shares == 88
-    assert intent.risk_rs == 1320.0
-    assert intent.notional_rs == 37840.0
+    assert intent.risk_rs == 1376.32
+    assert intent.notional_rs == 37896.32
     assert intent.target_tranche1 == 226.25
-    assert intent.runner_tranche2 == 237.50  # +3.0R
+    assert intent.runner_tranche2 == 238.46  # +3.0R
     assert intent.status == IntentStatus.PENDING_APPROVAL
     assert intent.conviction_tier == 2
 
@@ -84,7 +90,7 @@ def test_hybrid_mode_tier1_auto_vs_tier2_copilot():
         "volume_multiplier": 4.5,
         "nifty_breadth_confirmed": True,
     }
-    tier1_intent = ExecutionIntent.create_from_candidate(tier1_candidate, mode=ExecutionMode.HYBRID)
+    tier1_intent = ExecutionIntent.create_from_candidate(_fresh(tier1_candidate), mode=ExecutionMode.HYBRID)
     assert tier1_intent.conviction_tier == 1
     assert tier1_intent.status == IntentStatus.APPROVED
     assert tier1_intent.resolved_by == "HYBRID_TIER1_AUTO"
@@ -97,7 +103,7 @@ def test_hybrid_mode_tier1_auto_vs_tier2_copilot():
         "volume_multiplier": 3.6,
         "nifty_breadth_confirmed": False,
     }
-    tier2_intent = ExecutionIntent.create_from_candidate(tier2_candidate, mode=ExecutionMode.HYBRID)
+    tier2_intent = ExecutionIntent.create_from_candidate(_fresh(tier2_candidate), mode=ExecutionMode.HYBRID)
     assert tier2_intent.conviction_tier == 2
     assert tier2_intent.status == IntentStatus.PENDING_APPROVAL
 
@@ -113,7 +119,7 @@ def test_30_second_expiry_sweeper(tmp_path):
         "volume_multiplier": 3.7,
         "var_elm_rate": 0.20,
     }
-    intent, msg = oms.submit_candidate(candidate)
+    intent, msg = oms.submit_candidate(_fresh(candidate))
     assert intent is not None
     assert intent.status == IntentStatus.PENDING_APPROVAL
     assert intent.is_expired() is False
@@ -128,8 +134,9 @@ def test_30_second_expiry_sweeper(tmp_path):
     assert intent.is_expired(simulated_future) is True
 
     # Manually backdate created_at and expires_at to test sweep_expired_intents
-    intent.expires_at = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
-    oms._save_intents()
+    with oms._lock:
+        intent.expires_at = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+        oms._save_intents()
 
     swept = oms.sweep_expired_intents()
     assert swept == 1
@@ -149,7 +156,7 @@ def test_copilot_approve_and_reject_flow(tmp_path):
         "volume_multiplier": 3.8,
         "var_elm_rate": 0.20,
     }
-    intent, _ = oms.submit_candidate(candidate)
+    intent, _ = oms.submit_candidate(_fresh(candidate))
     assert intent is not None
     assert intent.status == IntentStatus.PENDING_APPROVAL
 
@@ -171,7 +178,7 @@ def test_copilot_approve_and_reject_flow(tmp_path):
         "volume_multiplier": 3.5,
         "var_elm_rate": 0.20,
     }
-    intent2, _ = oms.submit_candidate(cand2)
+    intent2, _ = oms.submit_candidate(_fresh(cand2))
     assert intent2 is not None
     rej_res = oms.reject_intent(intent2.intent_id, reason="REJECTED_BY_TRADER")
     assert rej_res["status"] == "OK"
@@ -193,7 +200,7 @@ def test_adverse_selection_limit_collar_abort(tmp_path):
         "volume_multiplier": 3.5,
         "var_elm_rate": 0.20,
     }
-    intent, _ = oms.submit_candidate(candidate)
+    intent, _ = oms.submit_candidate(_fresh(candidate))
     assert intent is not None
     # Limit collar is 200.0 * 1.0015 = 200.30
     assert intent.limit_price == 200.30
@@ -224,7 +231,7 @@ def test_false_breakout_retracement_abort(tmp_path):
         "volume_multiplier": 3.5,
         "var_elm_rate": 0.20,
     }
-    intent, _ = oms.submit_candidate(candidate)
+    intent, _ = oms.submit_candidate(_fresh(candidate))
     assert intent is not None
 
     # Simulate price retracing to 49.60 (below 50.0 trigger) during trader delay
@@ -253,7 +260,7 @@ def test_concurrent_multi_thread_approval_safety(tmp_path):
         "volume_multiplier": 3.5,
         "var_elm_rate": 0.20,
     }
-    intent, _ = oms.submit_candidate(candidate)
+    intent, _ = oms.submit_candidate(_fresh(candidate))
     assert intent is not None
 
     (tmp_path / "live_depth_track2.json").write_text(json.dumps({
@@ -296,7 +303,7 @@ def test_deduplication_cache_rejects_duplicate_request(tmp_path):
         "volume_multiplier": 3.5,
         "var_elm_rate": 0.20,
     }
-    intent, _ = oms.submit_candidate(candidate)
+    intent, _ = oms.submit_candidate(_fresh(candidate))
     assert intent is not None
 
     # First request
@@ -330,7 +337,7 @@ def test_rule1_security_gate_blocks_live_capital(tmp_path):
     }
     # Submission should fail-closed because routing cannot proceed
     with pytest.raises(SecurityViolationError, match="RULE 1 VIOLATION"):
-        oms.submit_candidate(candidate)
+        oms.submit_candidate(_fresh(candidate))
 
 
 def test_emergency_kill_switch(tmp_path):
@@ -342,12 +349,12 @@ def test_emergency_kill_switch(tmp_path):
         "volume_multiplier": 3.5,
         "var_elm_rate": 0.20,
     }
-    intent, _ = oms.submit_candidate(candidate)
+    intent, _ = oms.submit_candidate(_fresh(candidate))
     assert intent is not None
     assert intent.status == IntentStatus.PENDING_APPROVAL
 
     kill_res = oms.emergency_flatten_all(reason="MANUAL_KILL_COMMAND")
-    assert kill_res["status"] == "KILL_SWITCH_EXECUTED"
+    assert kill_res["status"] == "KILL_SWITCH_REQUESTED"
     assert kill_res["cancelled_intents"] == 1
     assert intent.status == IntentStatus.CANCELLED
     assert len(oms.active_orders) == 0
@@ -369,7 +376,7 @@ def test_pre_armed_conditional_intent_and_dedup_hydration(tmp_path):
         "volume_multiplier": 3.2,
         "var_elm_rate": 0.20,
     }
-    intent, msg = oms.submit_candidate(cand)
+    intent, msg = oms.submit_candidate(_fresh(cand))
     assert intent is not None
     assert intent.status == IntentStatus.PENDING_APPROVAL
 
@@ -404,7 +411,7 @@ def test_risk_per_share_exceeds_budget_skips_trade():
         "risk_rs": 1500.0,
         "max_slot_notional_rs": 38000.0,
     }
-    intent = ExecutionIntent.create_from_candidate(candidate)
+    intent = ExecutionIntent.create_from_candidate(_fresh(candidate))
     assert intent is None, "Candidate with risk_per_share > 1500 must be skipped, not forced to 1 share"
 
 
@@ -421,7 +428,7 @@ def test_caller_supplied_shares_exceeding_risk_rejected():
         "risk_rs": 1500.0,
         "max_slot_notional_rs": 38000.0,
     }
-    intent = ExecutionIntent.create_from_candidate(candidate)
+    intent = ExecutionIntent.create_from_candidate(_fresh(candidate))
     assert intent is None, "Caller-supplied shares exceeding Rs 1,500 risk must be rejected"
 
 
@@ -437,7 +444,7 @@ def test_entry_price_above_slot_cap_skips_cleanly():
         "risk_rs": 1500.0,
         "max_slot_notional_rs": 38000.0,
     }
-    intent = ExecutionIntent.create_from_candidate(candidate)
+    intent = ExecutionIntent.create_from_candidate(_fresh(candidate))
     assert intent is None, "Entry price above slot cap must return None cleanly without raising ValueError"
 
 
@@ -454,7 +461,7 @@ def test_hybrid_execution_oms_handles_expensive_stock_without_crashing(tmp_path)
         "volume_multiplier": 3.5,
         "max_slot_notional_rs": 38000.0,
     }
-    intent, msg = oms.submit_candidate(expensive_candidate)
+    intent, msg = oms.submit_candidate(_fresh(expensive_candidate))
     assert intent is None, "Expensive candidate must not produce an active intent"
     assert "REJECTED" in msg
     assert "price exceeds slot notional" in msg or "sizing rejected" in msg
@@ -466,7 +473,7 @@ def test_hybrid_execution_oms_handles_expensive_stock_without_crashing(tmp_path)
         "volume_multiplier": 3.5,
         "var_elm_rate": 0.20,
     }
-    intent2, msg2 = oms.submit_candidate(normal_candidate)
+    intent2, msg2 = oms.submit_candidate(_fresh(normal_candidate))
     assert intent2 is not None
     assert intent2.symbol == "CDSL"
 

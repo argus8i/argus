@@ -25,6 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 import math
 import numbers
+from antigravity.models.track2_a1 import SLOT_CAP_RS, AGGREGATE_EXPOSURE_CAP_RS, AGGREGATE_RISK_CAP_RS, RISK_PER_TRADE_RS, MAX_SLOTS
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 
@@ -96,14 +97,14 @@ class PortfolioRiskGovernor:
 
     def __init__(
         self,
-        max_single_trade_risk_rs: float = 1500.0,
-        max_aggregate_risk_rs: float = 6000.0,
+        max_single_trade_risk_rs: float = RISK_PER_TRADE_RS,
+        max_aggregate_risk_rs: float = AGGREGATE_RISK_CAP_RS,
         max_positions_per_sector: int = 2,
-        total_capital_allocation_rs: float = 100000.0,
+        total_capital_allocation_rs: float = AGGREGATE_EXPOSURE_CAP_RS,
         sector_mapping: Optional[Mapping[str, str]] = None,
         max_concurrent_positions: Optional[int] = None,
-        enforce_var_elm_gate: bool = False,
-        max_single_slot_notional_rs: Optional[float] = None,
+        enforce_var_elm_gate: bool = True,
+        max_single_slot_notional_rs: Optional[float] = SLOT_CAP_RS,
     ):
         for val in [max_single_trade_risk_rs, max_aggregate_risk_rs, total_capital_allocation_rs]:
             if (
@@ -122,17 +123,29 @@ class PortfolioRiskGovernor:
             raise ValueError("FAIL-CLOSED: Max positions per sector must be positive integer.")
 
         self.max_single_trade_risk_rs = round(float(max_single_trade_risk_rs), 2)
+        if max_single_slot_notional_rs is not None and (isinstance(max_single_slot_notional_rs, bool) or not isinstance(max_single_slot_notional_rs, numbers.Real) or not math.isfinite(max_single_slot_notional_rs) or max_single_slot_notional_rs <= 0):
+            raise ValueError("A1_CONFIG_MISMATCH: slot cap must be finite and positive")
+        if max_concurrent_positions is not None and (isinstance(max_concurrent_positions, bool) or not isinstance(max_concurrent_positions, numbers.Integral) or max_concurrent_positions <= 0):
+            raise ValueError("A1_CONFIG_MISMATCH: slots must be positive integer")
         self.max_aggregate_risk_rs = round(float(max_aggregate_risk_rs), 2)
         self.max_positions_per_sector = int(max_positions_per_sector)
         self.total_capital_allocation_rs = round(float(total_capital_allocation_rs), 2)
         self.sector_mapping = dict(sector_mapping or DEFAULT_SECTOR_MAP)
         self.max_concurrent_positions = int(max_concurrent_positions) if max_concurrent_positions is not None else 3
-        self.enforce_var_elm_gate = bool(enforce_var_elm_gate)
+        self.enforce_var_elm_gate = True
         self.max_single_slot_notional_rs = (
             round(float(max_single_slot_notional_rs), 2)
             if max_single_slot_notional_rs is not None
-            else None
+            else SLOT_CAP_RS
         )
+        # Lower ceilings are allowed for diagnostic sub-books; widening is not.
+        self.max_single_trade_risk_rs = min(self.max_single_trade_risk_rs, RISK_PER_TRADE_RS)
+        self.max_aggregate_risk_rs = min(self.max_aggregate_risk_rs, AGGREGATE_RISK_CAP_RS)
+        self.total_capital_allocation_rs = min(self.total_capital_allocation_rs, AGGREGATE_EXPOSURE_CAP_RS)
+        self.max_single_slot_notional_rs = min(self.max_single_slot_notional_rs, SLOT_CAP_RS)
+        self.max_concurrent_positions = min(self.max_concurrent_positions, MAX_SLOTS)
+        if self.max_single_slot_notional_rs <= 0 or self.max_concurrent_positions <= 0:
+            raise ValueError("A1_CONFIG_MISMATCH: invalid cap")
 
     @classmethod
     def calibrate_for_corpus(
@@ -191,6 +204,7 @@ class PortfolioRiskGovernor:
         pending_orders: Optional[Sequence[Mapping[str, Any]]] = None,
         custom_sector: Optional[str] = None,
         var_elm_rate: Any = None,
+        worst_entry_price: Optional[float] = None,
     ) -> RiskAssessmentResult:
         """
         Assesses whether proposed candidate trade passes all portfolio risk gates:
@@ -205,6 +219,8 @@ class PortfolioRiskGovernor:
             return self._rejected(sym, "INVALID_SYMBOL", "Symbol is empty or invalid.")
 
         # Input validity checks
+        if worst_entry_price is not None:
+            entry_price = worst_entry_price
         for val in [entry_price, stop_price]:
             if (
                 isinstance(val, bool)
@@ -274,7 +290,7 @@ class PortfolioRiskGovernor:
                 ):
                     item_risk = round(i_qty * (i_entry - i_stop), 2)
                 else:
-                    item_risk = 0.0
+                    return self._rejected(sym, "CORRUPTED_PORTFOLIO_EXPOSURE", "Existing risk cannot be derived")
             if (
                 isinstance(item_risk, bool)
                 or not isinstance(item_risk, (int, float))
@@ -289,8 +305,6 @@ class PortfolioRiskGovernor:
                     proposed_risk=proposed_risk,
                 )
 
-            current_open_risk += float(item_risk)
-
             item_notional = item.get("notional_rs")
             if item_notional is None:
                 i_price = item.get("limit_price") or item.get("entry_price") or item.get("ltp")
@@ -298,7 +312,7 @@ class PortfolioRiskGovernor:
                 if isinstance(i_price, (int, float)) and isinstance(i_qty, int) and i_price > 0 and i_qty > 0:
                     item_notional = round(i_price * i_qty, 2)
                 else:
-                    item_notional = 0.0
+                    return self._rejected(sym, "CORRUPTED_PORTFOLIO_EXPOSURE", "Existing notional cannot be derived")
 
             # Prioritize worst-case valuation for pending orders with limit_price
             i_limit = item.get("limit_price")
@@ -326,6 +340,7 @@ class PortfolioRiskGovernor:
                 )
 
             current_total_notional += float(item_notional)
+            current_open_risk += float(item_risk)
 
         current_open_risk = round(current_open_risk, 2)
         current_total_notional = round(current_total_notional, 2)

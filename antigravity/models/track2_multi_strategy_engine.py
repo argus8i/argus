@@ -16,7 +16,8 @@ Architecture:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, replace
+from antigravity.models.track2_a1 import affordable, finite_positive, SLOT_CAP_RS, AGGREGATE_EXPOSURE_CAP_RS, RISK_PER_TRADE_RS, MAX_SLOTS
 from enum import Enum
 import math
 import numbers
@@ -76,11 +77,15 @@ class MultiStrategyEngine:
         max_single_slot_notional_rs: float = 38000.0,
         total_capital_allocation_rs: float = 114000.0,
     ):
-        self.risk_budget_rs = risk_budget_rs
-        self.max_portfolio_slots = max_portfolio_slots
+        if not all(finite_positive(v) for v in (risk_budget_rs, max_single_slot_notional_rs, total_capital_allocation_rs)):
+            raise ValueError("A1_CONFIG_MISMATCH: invalid risk/capital")
+        if any(isinstance(v, bool) or not isinstance(v, int) or v <= 0 for v in (max_portfolio_slots, max_per_sector)):
+            raise ValueError("A1_CONFIG_MISMATCH: invalid slots/sector limit")
+        self.risk_budget_rs = min(risk_budget_rs, RISK_PER_TRADE_RS)
+        self.max_portfolio_slots = min(max_portfolio_slots, MAX_SLOTS)
         self.max_per_sector = max_per_sector
-        self.max_single_slot_notional_rs = max_single_slot_notional_rs
-        self.total_capital_allocation_rs = total_capital_allocation_rs
+        self.max_single_slot_notional_rs = min(max_single_slot_notional_rs, SLOT_CAP_RS)
+        self.total_capital_allocation_rs = min(total_capital_allocation_rs, AGGREGATE_EXPOSURE_CAP_RS)
 
         # Instantiate sub-strategies with explicit slot notional cap
         self.orb_engine = MultiTimeframeAlphaEngine()
@@ -446,6 +451,7 @@ class MultiStrategyEngine:
         existing_sector_counts: Optional[Mapping[str, int]] = None,
         available_slots: Optional[int] = None,
         allow_shadow: bool = False,
+        existing_exposures: Optional[Sequence[Mapping[str, Any]]] = None,
     ) -> List[UnifiedTradeSignal]:
         """
         Ranks all incoming signals across all strategies by conviction score,
@@ -464,7 +470,22 @@ class MultiStrategyEngine:
         selected: List[UnifiedTradeSignal] = []
         sector_counts: Dict[str, int] = dict(existing_sector_counts or {})
         seen_symbols = set()
+        # Ranking is advisory, NEVER a reservation. OMS commits the selected
+        # candidate against fresh shared state under its cross-process authority.
         total_allocated = 0.0
+        for row in existing_exposures or []:
+            notional = row.get("notional_rs")
+            if not finite_positive(notional):
+                return []
+            total_allocated += notional
+            slots -= 1
+            seen_symbols.add(row.get("symbol"))
+            sec = row.get("sector")
+            if not sec:
+                return []
+            sector_counts[sec] = sector_counts.get(sec, 0) + 1
+        if slots <= 0:
+            return []
 
         for sig in sorted_signals:
             if len(selected) >= slots:
@@ -478,26 +499,16 @@ class MultiStrategyEngine:
                 continue
 
             # Cap individual signal to single-slot notional cap
-            allocated_sig = sig
-            if sig.notional_value_rs > self.max_single_slot_notional_rs and sig.entry_price > 0:
-                capped_shares = max(1, int(self.max_single_slot_notional_rs / sig.entry_price))
-                allocated_sig = UnifiedTradeSignal(
-                    symbol=sig.symbol,
-                    strategy_type=sig.strategy_type,
-                    conviction_score=sig.conviction_score,
-                    entry_price=sig.entry_price,
-                    stop_price=sig.stop_price,
-                    target_tranche1=sig.target_tranche1,
-                    target_tranche2=sig.target_tranche2,
-                    shares=capped_shares,
-                    notional_value_rs=round(capped_shares * sig.entry_price, 2),
-                    actual_risk_rs=round(capped_shares * abs(sig.entry_price - sig.stop_price), 2),
-                    risk_pct=sig.risk_pct,
-                    volume_multiple=sig.volume_multiple,
-                    sector=sig.sector,
-                    details=sig.details,
-                    is_shadow=sig.is_shadow,
-                )
+            worst_entry = sig.details.get("limit_price", sig.entry_price)
+            if not all(finite_positive(v) for v in (worst_entry, sig.stop_price)) or worst_entry <= sig.stop_price:
+                continue
+            if isinstance(sig.shares, bool) or not isinstance(sig.shares, int) or sig.shares <= 0:
+                continue
+            qty = min(sig.shares, affordable(worst_entry, sig.stop_price, self.max_single_slot_notional_rs, self.risk_budget_rs))
+            if qty <= 0:
+                continue
+            allocated_sig = replace(sig, shares=qty, notional_value_rs=round(qty * worst_entry, 2),
+                                    actual_risk_rs=round(qty * (worst_entry - sig.stop_price), 2))
 
             if total_allocated + allocated_sig.notional_value_rs > self.total_capital_allocation_rs:
                 continue

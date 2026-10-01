@@ -130,11 +130,10 @@ def test_terminal_server_http_endpoints():
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req) as resp:
-            assert resp.status == 200
-            res = json.loads(resp.read().decode("utf-8"))
-            assert res["status"] == "APPROVED"
-            assert "RVNL" in res["message"]
+        with pytest.raises(urllib.error.HTTPError) as denied:
+            urllib.request.urlopen(req)
+        assert denied.value.code == 403
+        assert "Direct entry retired" in json.loads(denied.value.read().decode())["error"]
 
         # 5. Test POST /api/action/enter - Rejected (Risk Exceeded)
         excess_payload = json.dumps({
@@ -202,8 +201,8 @@ def test_terminal_server_http_endpoints():
         with urllib.request.urlopen(req_flatten) as resp:
             assert resp.status == 200
             flatten_res = json.loads(resp.read().decode("utf-8"))
-            assert flatten_res["status"] == "TRIGGERED"
-            assert flatten_res["squared_off_count"] >= 0
+            assert flatten_res["status"] == "KILL_SWITCH_REQUESTED"
+            assert flatten_res["squared_off_orders"] == 0
 
     finally:
         server.shutdown()

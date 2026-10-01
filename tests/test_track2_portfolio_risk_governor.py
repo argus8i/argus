@@ -28,14 +28,15 @@ def test_governor_valid_candidate_passes(governor):
         symbol="CDSL",
         entry_price=1000.0,
         stop_price=980.0,
-        quantity=50,
+        quantity=35,
         active_positions=[],
+        var_elm_rate=.2,
     )
     assert res.is_approved is True
     assert res.rejection_reason is None
-    assert res.proposed_risk_rs == 1000.0
+    assert res.proposed_risk_rs == 700.0
     assert res.current_open_risk_rs == 0.0
-    assert res.new_total_risk_rs == 1000.0
+    assert res.new_total_risk_rs == 700.0
     assert res.sector_position_count == 1
 
 
@@ -64,13 +65,14 @@ def test_governor_aggregate_portfolio_risk_cap(governor):
         symbol="CDSL",
         entry_price=1000.0,
         stop_price=970.0,
-        quantity=40,  # 30 * 40 = 1200 Rs
+        quantity=35,  # stays within A1 slot while exercising aggregate risk
         active_positions=active,
+        var_elm_rate=.2,
     )
     assert res.is_approved is False
     assert "AGGREGATE_PORTFOLIO_RISK_EXCEEDED" in res.rejection_reason
     assert res.current_open_risk_rs == 5000.0
-    assert res.new_total_risk_rs == 6200.0
+    assert res.new_total_risk_rs == 6050.0
 
 
 def test_governor_sector_concentration_limit(governor):
@@ -86,6 +88,7 @@ def test_governor_sector_concentration_limit(governor):
         stop_price=1180.0,
         quantity=25,  # 20 * 25 = 500 Rs
         active_positions=active,
+        var_elm_rate=.2,
     )
     assert res.is_approved is False
     assert "SECTOR_CONCENTRATION_EXCEEDED" in res.rejection_reason
@@ -104,6 +107,7 @@ def test_governor_total_capital_ceiling(governor):
         stop_price=48.0,
         quantity=400,  # Notional = 20,000 Rs, Risk = 800 Rs
         active_positions=active,
+        var_elm_rate=.2,
     )
     assert res.is_approved is False
     assert "TOTAL_CAPITAL_EXCEEDED" in res.rejection_reason
@@ -119,6 +123,7 @@ def test_governor_duplicate_symbol_rejection(governor):
         stop_price=980.0,
         quantity=30,
         active_positions=active,
+        var_elm_rate=.2,
     )
     assert res.is_approved is False
     assert "DUPLICATE_SYMBOL_POSITION" in res.rejection_reason
@@ -150,13 +155,13 @@ def test_governor_calibrate_for_corpus_2_5_lakhs():
     )
     assert gov_25.max_single_trade_risk_rs == 1500.0
     assert gov_25.max_aggregate_risk_rs == 4500.0
-    assert gov_25.total_capital_allocation_rs == 200000.0
+    assert gov_25.total_capital_allocation_rs == 114000.0
     assert gov_25.max_positions_per_sector == 2
 
     # Active 2 positions with Rs 3000 risk
     active = [
-        {"symbol": "CDSL", "sector": "CAPITAL_MARKETS_FINTECH", "open_risk_rs": 1500.0, "notional_rs": 50000.0},
-        {"symbol": "SUZLON", "sector": "GREEN_ENERGY_POWER", "open_risk_rs": 1500.0, "notional_rs": 50000.0},
+        {"symbol": "CDSL", "sector": "CAPITAL_MARKETS_FINTECH", "open_risk_rs": 1500.0, "notional_rs": 38000.0},
+        {"symbol": "SUZLON", "sector": "GREEN_ENERGY_POWER", "open_risk_rs": 1500.0, "notional_rs": 38000.0},
     ]
 
     # 3rd position with Rs 1500 risk passes exactly (Total risk = Rs 4500, Notional = Rs 150000 <= Rs 200000)
@@ -170,14 +175,14 @@ def test_governor_calibrate_for_corpus_2_5_lakhs():
     )
     assert res.is_approved is True
     assert res.new_total_risk_rs == 4500.0
-    assert res.new_total_notional_rs == 130000.0
+    assert res.new_total_notional_rs == 106000.0
 
     # 4th position would exceed aggregate risk cap of Rs 4500
     res_4th = gov_25.assess_candidate(
         symbol="BDL",
         entry_price=1000.0,
         stop_price=980.0,
-        quantity=50,  # Risk = 1000 Rs -> Total = 5500 > 4500
+        quantity=35,  # within slot cap; total risk 5200 exceeds 4500
         active_positions=active + [{"symbol": "RVNL", "open_risk_rs": 1500.0, "notional_rs": 30000.0}],
         var_elm_rate=0.20,
     )
