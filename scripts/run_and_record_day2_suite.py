@@ -63,14 +63,14 @@ def main():
     full_log = header + combined_output + footer
 
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(LOG_PATH, "w", encoding="utf-8") as f:
+    with open(LOG_PATH, "w", encoding="utf-8", newline="\n") as f:
         f.write(full_log)
 
     import hashlib
     file_bytes = LOG_PATH.read_bytes()
     sha256_hash = hashlib.sha256(file_bytes).hexdigest().upper()
     sha_path = LOG_PATH.with_suffix(".log.sha256")
-    sha_path.write_text(f"{sha256_hash}  {LOG_PATH.name}\n", encoding="utf-8")
+    sha_path.write_text(f"{sha256_hash}  {LOG_PATH.name} (normalized LF)\n", encoding="utf-8", newline="\n")
 
     print(f"Execution complete in {elapsed:.2f}s. Exit code: {proc.returncode}")
     print(f"Log written to {LOG_PATH}")

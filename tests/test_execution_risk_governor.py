@@ -629,6 +629,7 @@ def test_governor_gap_down_loss_reconciliation():
         exit_price=920.0,
         shares=30,
         transaction_costs=45.0,
+        exit_event_id="EVT_GAP_DOWN_001",
     )
     assert "CDSL" not in gov.active_positions
     assert gov.available_slots == 3
@@ -670,7 +671,7 @@ def test_full_position_lifecycle_state_machine():
     assert gov.available_slots == 2  # slot still occupied!
 
     # Step 5: Unlocked fill on next session
-    gov.reconcile_exit("TATACHEM", exit_price=980.0, shares=35, transaction_costs=48.0)
+    gov.reconcile_exit("TATACHEM", exit_price=980.0, shares=35, transaction_costs=48.0, exit_event_id="EVT_LC_UNLOCKED_001")
     assert "TATACHEM" not in gov.active_positions
     assert "TATACHEM" not in gov.unresolved_exits
     assert gov.available_slots == 3  # slot completely freed
@@ -723,19 +724,19 @@ def test_codex_finding_2_partial_exit_and_duplicate_credit():
     assert gov.available_slots == 2
 
     # Partial exit: sell 10 shares
-    gov.reconcile_exit(symbol="CDSL", exit_price=1050.0, shares=10, transaction_costs=15.0)
+    gov.reconcile_exit(symbol="CDSL", exit_price=1050.0, shares=10, transaction_costs=15.0, exit_event_id="EVT_PARTIAL_EXIT_1")
     assert "CDSL" in gov.active_positions
     assert gov.active_positions["CDSL"]["shares"] == 90
     assert gov.available_slots == 2  # slot still occupied!
 
     # Selling 90 remaining shares completes exit
-    gov.reconcile_exit(symbol="CDSL", exit_price=1050.0, shares=90, transaction_costs=15.0)
+    gov.reconcile_exit(symbol="CDSL", exit_price=1050.0, shares=90, transaction_costs=15.0, exit_event_id="EVT_PARTIAL_EXIT_2")
     assert "CDSL" not in gov.active_positions
     assert gov.available_slots == 3  # slot now freed
 
     # Duplicate exit attempt rejected fail-closed
     with pytest.raises(KeyError, match="No active position found"):
-        gov.reconcile_exit(symbol="CDSL", exit_price=1050.0, shares=10)
+        gov.reconcile_exit(symbol="CDSL", exit_price=1050.0, shares=10, exit_event_id="EVT_CLOSED_POSITION")
 
 
 def test_codex_finding_3_actual_fill_reassessment():
@@ -955,8 +956,114 @@ def test_codex_round2_exit_reconciliation_no_double_entry_deduction():
 
     # Exit sold at 1,000. Exit transaction costs are 47.02.
     # Entry costs were 60.0.
-    gov.reconcile_exit("CDSL", exit_price=1000.0, shares=50, exit_transaction_costs=47.02)
+    gov.reconcile_exit("CDSL", exit_price=1000.0, shares=50, exit_transaction_costs=47.02, exit_event_id="EVT_NO_DOUBLE_DEDUCTION")
     # Cash credited must be: 50 * 1000 - 47.02 = 49,952.98
     assert gov.cash_rs == cash_after_buy + 49952.98
+
+
+# ============================================================================
+# PART 6: CODEX ROUND 3 ACCEPTANCE REGRESSION TESTS
+# ============================================================================
+
+def test_codex_round3_partial_fills_cumulative_risk_and_entry_basis():
+    """
+    Round 3 Finding 1: Partial fills bypass cumulative risk and corrupt entry basis.
+    - Initial fill of 50 shares @ 300, stop 285 (risk = 750, notional = 15,000, fee = 10).
+    - Second fill of 50 shares @ 310, stop 285 (risk = 1250, notional = 15,500, fee = 20).
+    - Cumulative risk is 750 + 1250 = 2,000 > 1,500 risk budget!
+    - Must raise EXPOSURE_OR_RISK_BREACH fail-closed.
+    - When second fill is within budget (50 @ 300, risk = 750):
+      Combined notional = 30,000, risk = 1,500, weighted avg entry price = 300.0,
+      total entry costs recorded = 10 + 20 = 30.
+    """
+    gov = PortfolioRiskGovernor()
+    gov.reserve_slot("SUZLON", quantity=100, entry_price=300.0, stop_price=285.0, sector="GREEN_ENERGY_POWER")
+
+    # First partial fill: 50 shares @ 300, fee 10
+    gov.confirm_fill_from_reservation("SUZLON", actual_fill_price=300.0, filled_quantity=50, transaction_costs=10.0)
+    assert gov.active_positions["SUZLON"]["shares"] == 50
+    assert gov.active_positions["SUZLON"]["entry_costs"] == 10.0
+
+    # Second partial fill at 310: 50 shares @ 310, fee 20 -> cumulative risk 2,000 breaches 1,500 budget!
+    with pytest.raises(ValueError, match="EXPOSURE_OR_RISK_BREACH"):
+        gov.confirm_fill_from_reservation("SUZLON", actual_fill_price=310.0, filled_quantity=50, transaction_costs=20.0)
+
+    # Valid second fill at 300: 50 shares @ 300, fee 20 -> cumulative risk 1,500 <= 1,500
+    gov.confirm_fill_from_reservation("SUZLON", actual_fill_price=300.0, filled_quantity=50, transaction_costs=20.0)
+    pos = gov.active_positions["SUZLON"]
+    assert pos["shares"] == 100
+    assert pos["notional_rs"] == 30000.0
+    assert pos["open_risk_rs"] == 1500.0
+    assert pos["entry_costs"] == 30.0  # Fees aggregated!
+
+
+def test_codex_round3_exit_idempotency_mandatory_and_atomic():
+    """
+    Round 3 Finding 2: Exit idempotency remains optional and non-atomic.
+    - Reconcile exit requires exit_event_id fail-closed.
+    - An invalid exit attempt (e.g. 11 shares against 10 open shares) must NOT consume the event ID.
+    - Corrected retry with the same event ID must succeed.
+    - Replaying after successful exit must raise DUPLICATE_EXIT_EVENT.
+    """
+    gov = PortfolioRiskGovernor()
+    gov.confirm_fill("CDSL", 10, 1000.0, 950.0, "CAPITAL_MARKETS_FINTECH")
+
+    # Missing event ID fails closed
+    with pytest.raises(ValueError, match="FAIL-CLOSED: exit_event_id is required"):
+        gov.reconcile_exit("CDSL", exit_price=1050.0, shares=5)
+
+    # Invalid exit: attempt to sell 11 shares (only 10 open) with event ID "EVT_ATOMIC"
+    with pytest.raises(ValueError, match="Cannot sell 11 shares"):
+        gov.reconcile_exit("CDSL", exit_price=1050.0, shares=11, exit_event_id="EVT_ATOMIC")
+
+    # Event ID "EVT_ATOMIC" must NOT have been consumed!
+    assert "EVT_ATOMIC" not in gov.processed_exit_events
+
+    # Corrected retry with 5 shares using the same event ID "EVT_ATOMIC" succeeds!
+    gov.reconcile_exit("CDSL", exit_price=1050.0, shares=5, exit_event_id="EVT_ATOMIC")
+    assert "EVT_ATOMIC" in gov.processed_exit_events
+    assert gov.active_positions["CDSL"]["shares"] == 5
+
+    # Replay of exact same event ID raises duplicate error
+    with pytest.raises(ValueError, match="DUPLICATE_EXIT_EVENT"):
+        gov.reconcile_exit("CDSL", exit_price=1050.0, shares=5, exit_event_id="EVT_ATOMIC")
+
+
+def test_codex_round3_partial_exit_prorates_entry_costs():
+    """
+    Round 3 Finding 3: Partial exits do not prorate remaining entry costs.
+    Position of 100 shares with Rs 100 entry costs.
+    Selling 40 shares must leave 60 shares with Rs 60 remaining entry costs basis.
+    """
+    gov = PortfolioRiskGovernor()
+    gov.confirm_fill("CDSL", 100, 1000.0, 950.0, "CAPITAL_MARKETS_FINTECH", transaction_costs=100.0)
+    assert gov.active_positions["CDSL"]["entry_costs"] == 100.0
+
+    # Partial exit of 40 shares
+    gov.reconcile_exit("CDSL", exit_price=1050.0, shares=40, exit_event_id="EVT_P40")
+    pos = gov.active_positions["CDSL"]
+    assert pos["shares"] == 60
+    assert pos["entry_costs"] == 60.0  # Prorated from 100!
+
+    # Second partial exit of 30 shares
+    gov.reconcile_exit("CDSL", exit_price=1060.0, shares=30, exit_event_id="EVT_P30")
+    pos = gov.active_positions["CDSL"]
+    assert pos["shares"] == 30
+    assert pos["entry_costs"] == 30.0  # Prorated from 60!
+
+
+def test_codex_round3_target_validation_finite_positive():
+    """
+    Round 3 Finding 4: Target validation remains incomplete.
+    Target of -1.0, 0.0, NaN, inf, or boolean must fail closed.
+    """
+    engine = ExecutionSimulator()
+    pos = SwingPosition(symbol="CDSL", shares=50, entry_price=1000.0, stop_price=950.0, sector="CAPITAL_MARKETS_FINTECH")
+    bar = DailyBar(symbol="CDSL", open=1000.0, high=1050.0, low=990.0, close=1020.0, volume=50000)
+
+    for invalid_target in [-1.0, 0.0, float("nan"), float("inf"), float("-inf"), False, True]:
+        with pytest.raises(ValueError, match="FAIL-CLOSED"):
+            engine.simulate_exit(pos, bar, trigger_reason="TAKE_PROFIT", target_price=invalid_target)
+
 
 

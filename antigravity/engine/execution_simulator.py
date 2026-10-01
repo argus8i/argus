@@ -537,9 +537,16 @@ class ExecutionSimulator(ExecutionFrictionEngine):
                     rejection_reason=f"STOP_NOT_TOUCHED: Session low ({bar.low}) stayed above stop price ({position.stop_price}).",
                 )
         elif trigger_reason in ("TAKE_PROFIT", "TARGET"):
-            if target_price is None:
-                raise ValueError("FAIL-CLOSED: target_price must be provided when trigger_reason is TAKE_PROFIT or TARGET.")
-            if bar.high < target_price and bar.open <= target_price:
+            if (
+                target_price is None
+                or isinstance(target_price, bool)
+                or not isinstance(target_price, numbers.Real)
+                or not math.isfinite(float(target_price))
+                or float(target_price) <= 0
+            ):
+                raise ValueError("FAIL-CLOSED: target_price must be a finite positive number when trigger_reason is TAKE_PROFIT or TARGET.")
+            target_val = float(target_price)
+            if bar.high < target_val and bar.open <= target_val:
                 # Target price was NEVER reached during the session!
                 return ExecutionReport(
                     order_id=f"EXIT_{uuid.uuid4().hex[:8].upper()}",

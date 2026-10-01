@@ -537,12 +537,16 @@ class PortfolioRiskGovernor:
         notional = round(shares * entry_price, 2)
         risk = round(shares * (entry_price - stop_price), 2)
         if sym in self.active_positions:
-            # Add to existing position if partial fill aggregation
+            # Add to existing position if partial fill aggregation (Codex Round 3 Finding 1)
             existing = self.active_positions[sym]
             new_shares = existing["shares"] + int(shares)
+            new_notional = round(existing["notional_rs"] + notional, 2)
+            weighted_entry_price = round(new_notional / new_shares, 4)
             existing["shares"] = new_shares
-            existing["notional_rs"] = round(new_shares * existing["entry_price"], 2)
-            existing["open_risk_rs"] = round(new_shares * (existing["entry_price"] - existing["stop_price"]), 2)
+            existing["entry_price"] = weighted_entry_price
+            existing["notional_rs"] = new_notional
+            existing["open_risk_rs"] = round(new_shares * (weighted_entry_price - existing["stop_price"]), 2)
+            existing["entry_costs"] = round(existing.get("entry_costs", 0.0) + float(transaction_costs), 2)
         else:
             self.active_positions[sym] = {
                 "symbol": sym,
@@ -564,9 +568,9 @@ class PortfolioRiskGovernor:
         transaction_costs: float = 0.0,
     ) -> None:
         """
-        Converts a pending reservation to an active position (Codex Findings 3 & 4):
+        Converts a pending reservation to an active position (Codex Findings 3 & 4, Round 3):
         - Fails closed on NaN, inf, boolean, or non-positive values.
-        - Re-assesses actual fill exposure and risk before converting.
+        - Re-assesses cumulative fill exposure and risk before converting.
         - Verifies that actual outlay does not breach the inviolable Rs 136,000 cash buffer.
         - Preserves residual reservation quantities on partial fills.
         """
@@ -613,11 +617,32 @@ class PortfolioRiskGovernor:
         actual_notional = round(shares * fill_price, 2)
         actual_risk = round(shares * (fill_price - stop_p), 2)
 
-        # Ceiling checks (Rs 38,000 slot cap, Rs 1,500 risk budget)
-        if actual_notional > self.slot_cap_rs + 1e-4 or actual_risk > self.risk_per_trade_rs + 1e-4:
+        # Cumulative position ceiling checks (Codex Round 3 Finding 1)
+        existing_pos = self.active_positions.get(sym)
+        if existing_pos:
+            comb_shares = existing_pos["shares"] + shares
+            comb_notional = round(existing_pos["notional_rs"] + actual_notional, 2)
+            comb_risk = round(existing_pos["open_risk_rs"] + actual_risk, 2)
+        else:
+            comb_shares = shares
+            comb_notional = actual_notional
+            comb_risk = actual_risk
+
+        if comb_notional > self.slot_cap_rs + 1e-4 or comb_risk > self.risk_per_trade_rs + 1e-4:
             raise ValueError(
-                f"EXPOSURE_OR_RISK_BREACH: Actual fill notional Rs {actual_notional:.2f} (cap: {self.slot_cap_rs:.2f}) "
-                f"or risk Rs {actual_risk:.2f} (budget: {self.risk_per_trade_rs:.2f}) breaches limits."
+                f"EXPOSURE_OR_RISK_BREACH: Cumulative position notional Rs {comb_notional:.2f} (cap: {self.slot_cap_rs:.2f}) "
+                f"or risk Rs {comb_risk:.2f} (budget: {self.risk_per_trade_rs:.2f}) breaches limits."
+            )
+
+        # Aggregate portfolio ceiling checks
+        other_exposure = sum(p["notional_rs"] for s, p in self.active_positions.items() if s != sym)
+        other_risk = sum(p["open_risk_rs"] for s, p in self.active_positions.items() if s != sym)
+        agg_exposure = round(other_exposure + comb_notional, 2)
+        agg_risk = round(other_risk + comb_risk, 2)
+        if agg_exposure > self.aggregate_exposure_cap_rs + 1e-4 or agg_risk > self.aggregate_risk_cap_rs + 1e-4:
+            raise ValueError(
+                f"AGGREGATE_EXPOSURE_OR_RISK_BREACH: Aggregate exposure Rs {agg_exposure:.2f} (cap: {self.aggregate_exposure_cap_rs:.2f}) "
+                f"or risk Rs {agg_risk:.2f} (cap: {self.aggregate_risk_cap_rs:.2f}) breaches limits."
             )
 
         # Enforce Cash Buffer at Actual Fill Time (Codex Round 2 Finding 4)
@@ -661,19 +686,25 @@ class PortfolioRiskGovernor:
         exit_event_id: Optional[str] = None,
     ) -> None:
         """
-        Reconciles exit order execution with ledger accounting (Codex Findings 2, 8):
-        - Enforces event idempotency via exit_event_id to prevent duplicate credits.
-        - Validates existence of active position (fails closed on closed positions).
-        - Validates shares quantity (cannot sell <= 0 or > open shares).
+        Reconciles exit order execution with ledger accounting (Codex Round 3 Findings 2 & 3):
+        - Enforces MANDATORY event idempotency via exit_event_id to prevent duplicate credits.
+        - Validates existence of active position and share quantities BEFORE recording event ID (atomic).
+        - Prorates remaining entry-cost basis on partial exits.
         - Deducts sold shares and updates remaining notional, risk, and occupied slot.
         - Removes position and clears unresolved marker only when completely closed.
         - Deducts ONLY exit transaction friction from sale proceeds (no double deduction of entry costs).
         """
-        # Event idempotency check (Codex Round 2 Finding 2)
-        if exit_event_id is not None:
-            if exit_event_id in self.processed_exit_events:
-                raise ValueError(f"DUPLICATE_EXIT_EVENT: Exit event '{exit_event_id}' has already been processed.")
-            self.processed_exit_events.add(exit_event_id)
+        # Event idempotency: exit_event_id is strictly MANDATORY (Codex Round 3 Finding 2)
+        if (
+            exit_event_id is None
+            or not isinstance(exit_event_id, str)
+            or not exit_event_id.strip()
+        ):
+            raise ValueError("FAIL-CLOSED: exit_event_id is required for exit reconciliation.")
+
+        evt_id = exit_event_id.strip()
+        if evt_id in self.processed_exit_events:
+            raise ValueError(f"DUPLICATE_EXIT_EVENT: Exit event '{evt_id}' has already been processed.")
 
         sym = str(symbol).strip().upper()
         if sym not in self.active_positions:
@@ -693,12 +724,35 @@ class PortfolioRiskGovernor:
         if shares_to_sell > open_shares:
             raise ValueError(f"Cannot sell {shares_to_sell} shares: only {open_shares} shares currently open.")
 
+        if (
+            isinstance(exit_price, bool)
+            or not isinstance(exit_price, numbers.Real)
+            or not math.isfinite(float(exit_price))
+            or float(exit_price) <= 0
+        ):
+            raise ValueError("FAIL-CLOSED: Exit price must be a finite positive number.")
+
+        actual_exit_costs = exit_transaction_costs if exit_transaction_costs is not None else transaction_costs
+        if (
+            isinstance(actual_exit_costs, bool)
+            or not isinstance(actual_exit_costs, numbers.Real)
+            or not math.isfinite(float(actual_exit_costs))
+            or float(actual_exit_costs) < 0
+        ):
+            raise ValueError("FAIL-CLOSED: Exit transaction costs must be a finite non-negative number.")
+
+        # ATOMIC: Record event ID ONLY after all validations pass (Codex Round 3 Finding 2)
+        self.processed_exit_events.add(evt_id)
+
         remaining_shares = open_shares - shares_to_sell
         if remaining_shares > 0:
-            # Partial exit: update residual holdings, open risk, and notional
+            # Partial exit: update residual holdings, open risk, notional, and prorate entry costs (Codex Round 3 Finding 3)
             pos["shares"] = remaining_shares
             pos["notional_rs"] = round(remaining_shares * pos["entry_price"], 2)
             pos["open_risk_rs"] = round(remaining_shares * (pos["entry_price"] - pos["stop_price"]), 2)
+            if "entry_costs" in pos and open_shares > 0:
+                prop_entry = round(pos["entry_costs"] * (shares_to_sell / open_shares), 2)
+                pos["entry_costs"] = round(max(0.0, pos["entry_costs"] - prop_entry), 2)
         else:
             # Complete exit: remove position from active ledger
             self.active_positions.pop(sym)
@@ -706,8 +760,7 @@ class PortfolioRiskGovernor:
                 self.unresolved_exits.remove(sym)
 
         # Deduct ONLY exit costs from turnover to avoid double-deducting entry friction (Codex Finding 8)
-        actual_exit_costs = exit_transaction_costs if exit_transaction_costs is not None else transaction_costs
-        proceeds = round((shares_to_sell * exit_price) - actual_exit_costs, 2)
+        proceeds = round((shares_to_sell * float(exit_price)) - float(actual_exit_costs), 2)
         self.cash_rs = round(self.cash_rs + proceeds, 2)
 
     def rank_and_allocate_signals(
