@@ -720,8 +720,8 @@ class DurableAdmissionStore:
         except Exception:
             return False
 
-    def mark_message_dead(self, message_id: str, error: Optional[str] = None) -> bool:
-        """Persists DEAD terminal state with completion timestamp in admission store."""
+    def mark_message_dead(self, message_id: str, error: Optional[str] = None, response_json: Optional[str] = None) -> bool:
+        """Persists DEAD terminal state with completion timestamp and optional response_json in admission store."""
         try:
             with sqlite3.connect(self.db_path, timeout=10.0) as conn:
                 conn.row_factory = sqlite3.Row
@@ -733,10 +733,10 @@ class DurableAdmissionStore:
                         """
                         INSERT INTO message_admissions (
                             message_id, correlation_id, payload_hash, sender, recipient, subject,
-                            admitted_at, original_timestamp_ist, state, completed_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DEAD', ?)
+                            admitted_at, original_timestamp_ist, state, completed_at, response_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DEAD', ?, ?)
                         """,
-                        (message_id, f"corr_{message_id}", "", "", "", "", time.time(), get_current_ist(), time.time())
+                        (message_id, f"corr_{message_id}", "", "", "", "", time.time(), get_current_ist(), time.time(), response_json)
                     )
                     conn.commit()
                     return True
@@ -745,8 +745,12 @@ class DurableAdmissionStore:
                     return False
                 else:
                     cur_up = conn.execute(
-                        "UPDATE message_admissions SET state = 'DEAD', completed_at = ? WHERE message_id = ? AND state != 'COMPLETED'",
-                        (time.time(), message_id)
+                        """
+                        UPDATE message_admissions
+                        SET state = 'DEAD', completed_at = ?, response_json = COALESCE(?, response_json)
+                        WHERE message_id = ? AND state != 'COMPLETED'
+                        """,
+                        (time.time(), response_json, message_id)
                     )
                     conn.commit()
                     return cur_up.rowcount > 0
@@ -804,7 +808,26 @@ class DurableAdmissionStore:
                         conn.rollback()
                         return False
                 if nonce:
-                    conn.execute("UPDATE seen_nonces SET state = 'RECOVERED_RETRY_PENDING' WHERE nonce = ? AND state NOT IN ('COMPLETED', 'FAILED')", (nonce,))
+                    cur_n = conn.execute("SELECT state FROM seen_nonces WHERE nonce = ?", (nonce,))
+                    nrow = cur_n.fetchone()
+                    if nrow is not None:
+                        if nrow["state"] in ("COMPLETED", "FAILED", "RECOVERED_RETRY_CONSUMED"):
+                            # Incompatible nonce state: cannot authorize recovery! Roll back entire paired transition.
+                            conn.rollback()
+                            return False
+                        cur_n_up = conn.execute(
+                            "UPDATE seen_nonces SET state = 'RECOVERED_RETRY_PENDING' WHERE nonce = ? AND state NOT IN ('COMPLETED', 'FAILED', 'RECOVERED_RETRY_CONSUMED')",
+                            (nonce,)
+                        )
+                        if cur_n_up.rowcount == 0:
+                            conn.rollback()
+                            return False
+                    else:
+                        # Legitimate missing-nonce compatibility (e.g. pre-upgrade claim): insert nonce row as RECOVERED_RETRY_PENDING
+                        conn.execute(
+                            "INSERT INTO seen_nonces (nonce, sender, timestamp_ist, recorded_at, message_id, state) VALUES (?, ?, ?, ?, ?, 'RECOVERED_RETRY_PENDING')",
+                            (nonce, sender or "", timestamp_ist or get_current_ist(), time.time(), message_id)
+                        )
                 conn.commit()
                 return True
         except Exception as e:
@@ -1455,6 +1478,57 @@ class InboxWorker:
                                     pass
                                 continue
                             elif cur_st == "DEAD":
+                                outbox_file = os.path.join(OUTBOX_DIR, get_safe_filename(corr_id, "_resp.json"))
+                                if not os.path.exists(outbox_file):
+                                    saved_resp = store.get_message_response(msg_id)
+                                    if saved_resp:
+                                        try:
+                                            resp_data = json.loads(saved_resp)
+                                            write_json_atomic(outbox_file, resp_data)
+                                            logger.info("Reconciled missing outbox response for DEAD message %s from durable store", msg_id)
+                                        except Exception as pub_err:
+                                            logger.error("Failed to reconcile outbox response for DEAD message %s: %s; preserving claim", msg_id, pub_err)
+                                            continue
+                                    else:
+                                        # Reconstruct fallback failure response if key available
+                                        antigravity_key = get_agent_secret_key("ANTIGRAVITY")
+                                        if antigravity_key:
+                                            err_resp = {
+                                                "message_id": f"resp_{uuid.uuid4().hex[:12]}",
+                                                "correlation_id": corr_id,
+                                                "responder": "ANTIGRAVITY",
+                                                "route_agent": data.get("recipient"),
+                                                "status": "FAILED",
+                                                "created_at_ist": get_current_ist(),
+                                                "completed_at_ist": get_current_ist(),
+                                                "output_payload": None,
+                                                "artifact_hashes": {},
+                                                "nonce": uuid.uuid4().hex,
+                                                "error": data.get("error") or "Message marked DEAD without saved response",
+                                            }
+                                            err_resp["auth_signature"] = compute_envelope_hmac(err_resp, antigravity_key)
+                                            try:
+                                                write_json_atomic(outbox_file, err_resp)
+                                                store.mark_message_dead(msg_id, error=err_resp["error"], response_json=json.dumps(err_resp))
+                                            except Exception as rec_err:
+                                                logger.error("Failed to write reconstructed outbox response for DEAD message %s: %s; preserving claim", msg_id, rec_err)
+                                                continue
+                                        else:
+                                            logger.error("No ANTIGRAVITY key to reconcile DEAD message %s; preserving claim", msg_id)
+                                            continue
+
+                                safe_dead = get_safe_filename(msg_id, ".dead.json")
+                                dead_path = os.path.join(DEAD_LETTER_DIR, safe_dead)
+                                if not os.path.exists(dead_path):
+                                    data["status"] = "FAILED"
+                                    if "error" not in data:
+                                        data["error"] = "Message marked DEAD"
+                                    try:
+                                        write_json_atomic(dead_path, data)
+                                    except Exception as dl_err:
+                                        logger.error("Failed to write dead letter file for %s: %s; preserving claim", msg_id, dl_err)
+                                        continue
+
                                 try:
                                     os.remove(claimed_path)
                                 except OSError:
@@ -1470,39 +1544,55 @@ class InboxWorker:
                                 if self.orphan_recovery_policy == "RETRY_REQUIRED"
                                 else f"MAX_ATTEMPTS_EXCEEDED: Claim timed out {attempts} times."
                             )
+                            # 1. Pre-construct failure response envelope
+                            antigravity_key = get_agent_secret_key("ANTIGRAVITY")
+                            err_resp = None
+                            resp_json_str = None
+                            if antigravity_key:
+                                err_resp = {
+                                    "message_id": f"resp_{uuid.uuid4().hex[:12]}",
+                                    "correlation_id": corr_id,
+                                    "responder": "ANTIGRAVITY",
+                                    "route_agent": data.get("recipient"),
+                                    "status": "FAILED",
+                                    "created_at_ist": get_current_ist(),
+                                    "completed_at_ist": get_current_ist(),
+                                    "output_payload": None,
+                                    "artifact_hashes": {},
+                                    "nonce": uuid.uuid4().hex,
+                                    "error": err_desc,
+                                }
+                                err_resp["auth_signature"] = compute_envelope_hmac(err_resp, antigravity_key)
+                                resp_json_str = json.dumps(err_resp)
+
+                            # 2. Persist DEAD state with durable response_json
                             dead_persisted = True
                             if store and msg_id:
-                                dead_persisted = store.mark_message_dead(msg_id, error=err_desc)
+                                dead_persisted = store.mark_message_dead(msg_id, error=err_desc, response_json=resp_json_str)
                             if not dead_persisted:
                                 logger.error("Failed to mark message %s dead during orphan exhaustion; preserving claim envelope", msg_id)
                                 continue
 
-                            # Explicit RETRY_REQUIRED or dead-letter when max attempts reached
+                            # 3. Explicit RETRY_REQUIRED or dead-letter when max attempts reached
                             safe_dead = get_safe_filename(msg_id, ".dead.json")
                             dead_path = os.path.join(DEAD_LETTER_DIR, safe_dead)
                             data["status"] = "FAILED"
                             data["error"] = err_desc
-                            write_json_atomic(dead_path, data)
+                            try:
+                                write_json_atomic(dead_path, data)
+                            except Exception as dl_err:
+                                logger.error("Failed to write dead letter file for %s during exhaustion: %s; preserving claim", msg_id, dl_err)
+                                continue
 
+                            # 4. Reconcile outbox response before unlinking claim
                             outbox_file = os.path.join(OUTBOX_DIR, get_safe_filename(corr_id, "_resp.json"))
-                            if not os.path.exists(outbox_file):
-                                antigravity_key = get_agent_secret_key("ANTIGRAVITY")
-                                if antigravity_key:
-                                    err_resp = {
-                                        "message_id": f"resp_{uuid.uuid4().hex[:12]}",
-                                        "correlation_id": corr_id,
-                                        "responder": "ANTIGRAVITY",
-                                        "route_agent": data.get("recipient"),
-                                        "status": "FAILED",
-                                        "created_at_ist": get_current_ist(),
-                                        "completed_at_ist": get_current_ist(),
-                                        "output_payload": None,
-                                        "artifact_hashes": {},
-                                        "nonce": uuid.uuid4().hex,
-                                        "error": data["error"]
-                                    }
-                                    err_resp["auth_signature"] = compute_envelope_hmac(err_resp, antigravity_key)
+                            if not os.path.exists(outbox_file) and err_resp is not None:
+                                try:
                                     write_json_atomic(outbox_file, err_resp)
+                                except Exception as pub_err:
+                                    logger.error("Failed to write outbox response for exhausted claim %s: %s; preserving claim", msg_id, pub_err)
+                                    continue
+
                             try:
                                 os.remove(claimed_path)
                             except OSError:
@@ -1522,15 +1612,7 @@ class InboxWorker:
                                     timestamp_ist=data.get("created_at_ist"),
                                 )
                                 if not authorized:
-                                    cur_st_check = store.get_message_state(msg_id)
-                                    if cur_st_check in ("COMPLETED", "DEAD"):
-                                        try:
-                                            os.remove(claimed_path)
-                                        except OSError:
-                                            pass
-                                    else:
-                                        # Persistence failure: preserve envelope! Do NOT delete claimed_path! (Finding 2)
-                                        logger.error("Failed to authorize recovery for %s due to persistence error; preserving envelope", msg_id)
+                                    logger.error("Failed to authorize recovery for %s (paired transition failed or incompatible nonce); preserving envelope", msg_id)
                                     continue
                             if nonce:
                                 replay_store = get_default_admission_store()
@@ -1726,13 +1808,13 @@ class InboxWorker:
         except TimeoutError:
             return None
 
-    def route_to_dead_letter(self, claimed_path: str, msg: Dict[str, Any], error_msg: str) -> bool:
+    def route_to_dead_letter(self, claimed_path: str, msg: Dict[str, Any], error_msg: str, response_json: Optional[str] = None) -> bool:
         """Moves a rejected or failed message to dead_letter with full diagnostics using sanitized path."""
         msg_id = msg.get("message_id")
         store = getattr(self, "db", None) or get_default_admission_store()
         persisted = True
         if store and msg_id:
-            persisted = store.mark_message_dead(msg_id, error=error_msg)
+            persisted = store.mark_message_dead(msg_id, error=error_msg, response_json=response_json)
             if not persisted:
                 logger.error("Failed to persist DEAD state for message %s in durable store; preserving envelope", msg_id)
                 return False
@@ -1742,7 +1824,11 @@ class InboxWorker:
         msg["status"] = "FAILED"
         msg["error"] = error_msg
         msg["failed_at_ist"] = get_current_ist()
-        write_json_atomic(dead_path, msg)
+        try:
+            write_json_atomic(dead_path, msg)
+        except Exception as dl_err:
+            logger.error("Failed to write dead letter file for %s: %s; preserving claimed envelope", msg_id, dl_err)
+            return False
 
         try:
             os.remove(claimed_path)
@@ -1976,23 +2062,28 @@ class InboxWorker:
         # 1. Schema, Identifier, and Authentication Validation (already admitted; check HMAC & schema)
         is_valid, schema_err = validate_message_schema(msg, record_nonce=False, check_freshness=False)
         if not is_valid:
-            persisted_dead = self.route_to_dead_letter(claimed_path, msg, schema_err or "SCHEMA_VALIDATION_FAILED")
+            err_resp = {
+                "message_id": f"resp_{uuid.uuid4().hex[:12]}",
+                "correlation_id": corr_id,
+                "responder": "ANTIGRAVITY",
+                "route_agent": route_agent,
+                "status": "FAILED",
+                "created_at_ist": get_current_ist(),
+                "completed_at_ist": get_current_ist(),
+                "output_payload": None,
+                "artifact_hashes": {},
+                "nonce": uuid.uuid4().hex,
+                "error": schema_err
+            }
+            err_resp["auth_signature"] = compute_envelope_hmac(err_resp, antigravity_key)
+            resp_json_str = json.dumps(err_resp)
+
+            persisted_dead = self.route_to_dead_letter(claimed_path, msg, schema_err or "SCHEMA_VALIDATION_FAILED", response_json=resp_json_str)
             if persisted_dead:
-                err_resp = {
-                    "message_id": f"resp_{uuid.uuid4().hex[:12]}",
-                    "correlation_id": corr_id,
-                    "responder": "ANTIGRAVITY",
-                    "route_agent": route_agent,
-                    "status": "FAILED",
-                    "created_at_ist": get_current_ist(),
-                    "completed_at_ist": get_current_ist(),
-                    "output_payload": None,
-                    "artifact_hashes": {},
-                    "nonce": uuid.uuid4().hex,
-                    "error": schema_err
-                }
-                err_resp["auth_signature"] = compute_envelope_hmac(err_resp, antigravity_key)
-                write_json_atomic(outbox_file, err_resp)
+                try:
+                    write_json_atomic(outbox_file, err_resp)
+                except Exception as out_err:
+                    logger.error("Failed to write outbox response for invalid schema message %s: %s; claim is in dead letter", msg.get("message_id"), out_err)
             else:
                 logger.error("Failed to persist DEAD state for invalid schema message %s; preserving envelope and suppressing outbox reply", msg.get("message_id"))
             return
@@ -2084,23 +2175,28 @@ class InboxWorker:
         else:
             if nonce and store:
                 store.mark_nonce_failed(nonce, msg_id)
-            persisted_dead = self.route_to_dead_letter(claimed_path, msg, error_msg or f"TASK_{status}")
+            resp_envelope = {
+                "message_id": f"resp_{uuid.uuid4().hex[:12]}",
+                "correlation_id": corr_id,
+                "responder": "ANTIGRAVITY",
+                "route_agent": route_agent,
+                "status": status,
+                "created_at_ist": get_current_ist(),
+                "completed_at_ist": get_current_ist(),
+                "output_payload": payload,
+                "artifact_hashes": artifact_hashes,
+                "nonce": uuid.uuid4().hex,
+                "error": error_msg
+            }
+            resp_envelope["auth_signature"] = compute_envelope_hmac(resp_envelope, antigravity_key)
+            resp_json_str = json.dumps(resp_envelope)
+
+            persisted_dead = self.route_to_dead_letter(claimed_path, msg, error_msg or f"TASK_{status}", response_json=resp_json_str)
             if persisted_dead:
-                resp_envelope = {
-                    "message_id": f"resp_{uuid.uuid4().hex[:12]}",
-                    "correlation_id": corr_id,
-                    "responder": "ANTIGRAVITY",
-                    "route_agent": route_agent,
-                    "status": status,
-                    "created_at_ist": get_current_ist(),
-                    "completed_at_ist": get_current_ist(),
-                    "output_payload": payload,
-                    "artifact_hashes": artifact_hashes,
-                    "nonce": uuid.uuid4().hex,
-                    "error": error_msg
-                }
-                resp_envelope["auth_signature"] = compute_envelope_hmac(resp_envelope, antigravity_key)
-                write_json_atomic(outbox_file, resp_envelope)
+                try:
+                    write_json_atomic(outbox_file, resp_envelope)
+                except Exception as out_err:
+                    logger.error("Failed to write outbox response for failed task %s: %s; claim is in dead letter", msg_id, out_err)
             else:
                 logger.error("Failed to persist DEAD state for message %s in task failure; leaving claimed envelope intact and suppressing outbox reply", msg_id)
 

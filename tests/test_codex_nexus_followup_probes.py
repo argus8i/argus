@@ -1423,5 +1423,165 @@ def test_caller_recovery_bypass_and_attempt_count_without_durable_authorization(
             assert "REPLAY_ATTACK" in err2
 
 
+# ==============================================================================
+# PROBE 20: Exhaustion Failure Response & DEAD Reconciliation Across Passes (Finding 1)
+# ==============================================================================
+def test_exhaustion_failure_response_and_dead_reconciliation_across_passes():
+    """
+    Finding P1:
+    1. Pass 1: When orphan claim exhausts max attempts, DEAD state is committed with durable response_json.
+       If outbox response publication fails, the claimed envelope is PRESERVED on disk.
+    2. Pass 2: Next recovery pass finds message in DEAD state with missing outbox response.
+       It must reconstruct the response from durable store (get_message_response) and dead-letter file,
+       and only unlink the claim after both artifacts exist.
+    """
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        inbox_dir = os.path.join(tmpdir, "inbox")
+        outbox_dir = os.path.join(tmpdir, "outbox")
+        dead_dir = os.path.join(tmpdir, "dead_letter")
+        archive_dir = os.path.join(tmpdir, "archive")
+        os.makedirs(inbox_dir, exist_ok=True)
+        os.makedirs(outbox_dir, exist_ok=True)
+        os.makedirs(dead_dir, exist_ok=True)
+        os.makedirs(archive_dir, exist_ok=True)
+
+        db_path = os.path.join(tmpdir, "admissions.db")
+        store = DurableAdmissionStore(db_path)
+        secret_key = b"secret_key_32_bytes_long_123456"
+
+        msg_id = "MSG-EXHAUST-RECONCILE"
+        corr_id = "CORR-EXHAUST"
+        claimed_path = os.path.join(inbox_dir, f"{msg_id}.claimed")
+        outbox_path = os.path.join(outbox_dir, f"{corr_id}_resp.json")
+        dead_path = os.path.join(dead_dir, f"{msg_id}.dead.json")
+
+        store.admit_submission(msg_id, corr_id, "hash", "CODEX", "ANTIGRAVITY", "sub", get_current_ist())
+
+        msg_data = {
+            "message_id": msg_id,
+            "correlation_id": corr_id,
+            "sender": "CODEX",
+            "recipient": "ANTIGRAVITY",
+            "subject": "sub",
+            "body": {"task": "test"},
+            "status": "CLAIMED",
+            "worker_pid": 999999,
+            "attempt_count": 0,
+            "created_at_ist": get_current_ist(),
+            "nonce": "NONCE-EXHAUST",
+        }
+        with open(claimed_path, "w", encoding="utf-8") as f:
+            json.dump(msg_data, f)
+        os.utime(claimed_path, (time.time() - 200, time.time() - 200))
+
+        with patch("antigravity.daemons.inbox_worker.INBOX_DIR", inbox_dir), \
+             patch("antigravity.daemons.inbox_worker.OUTBOX_DIR", outbox_dir), \
+             patch("antigravity.daemons.inbox_worker.DEAD_LETTER_DIR", dead_dir), \
+             patch("antigravity.daemons.inbox_worker.ARCHIVE_DIR", archive_dir), \
+             patch("antigravity.daemons.inbox_worker.get_agent_secret_key", return_value=secret_key):
+
+            worker = InboxWorker()
+            worker.db = store
+            worker.orphan_recovery_policy = "RETRY_REQUIRED"
+
+            # In Pass 1: Simulate write failure when publishing outbox response
+            original_write_json = write_json_atomic
+            def write_fail_on_outbox(path, data, **kwargs):
+                if str(path).endswith("_resp.json"):
+                    raise OSError("Simulated disk error writing outbox response")
+                return original_write_json(path, data, **kwargs)
+
+            with patch("antigravity.daemons.inbox_worker.write_json_atomic", side_effect=write_fail_on_outbox):
+                worker.recover_orphaned_claims()
+
+            # Pass 1 Verification:
+            # - Store is marked DEAD
+            assert store.get_message_state(msg_id) == "DEAD"
+            # - Durable response is saved in SQLite
+            saved_resp = store.get_message_response(msg_id)
+            assert saved_resp is not None, "Durable failure response was not saved in store!"
+            resp_parsed = json.loads(saved_resp)
+            assert resp_parsed["status"] == "FAILED"
+            assert "RETRY_REQUIRED" in resp_parsed["error"]
+            # - Outbox response is absent (simulated write failure)
+            assert not os.path.exists(outbox_path)
+            # - Claim envelope MUST BE PRESERVED on disk!
+            assert os.path.exists(claimed_path), "Claim envelope was prematurely deleted on publication failure!"
+
+            # Pass 2: Run recover_orphaned_claims normally (no simulated disk error)
+            worker.recover_orphaned_claims()
+
+            # Pass 2 Verification:
+            # - Missing outbox response was reconciled from durable store!
+            assert os.path.exists(outbox_path), "Outbox response was not reconciled on second pass!"
+            with open(outbox_path, "r", encoding="utf-8") as f:
+                outbox_data = json.load(f)
+            assert outbox_data["status"] == "FAILED"
+            assert outbox_data["correlation_id"] == corr_id
+            # - Dead letter file exists
+            assert os.path.exists(dead_path)
+            # - Claim envelope is now cleanly unlinked
+            assert not os.path.exists(claimed_path), "Claim envelope was not unlinked after successful reconciliation!"
 
 
+# ==============================================================================
+# PROBE 21: mark_message_recovering Paired Transition Rollback on Incompatible Nonce (Finding 2)
+# ==============================================================================
+def test_mark_message_recovering_paired_rollback_on_incompatible_nonce():
+    """
+    Finding P1: When mark_message_recovering encounters an incompatible nonce state
+    (FAILED, COMPLETED, RECOVERED_RETRY_CONSUMED), the admission change MUST BE ROLLED BACK
+    and not committed, returning False. Legitimate missing nonce is inserted cleanly.
+    """
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        db_path = os.path.join(tmpdir, "admissions.db")
+        store = DurableAdmissionStore(db_path)
+
+        # 1. Admission QUEUED, Nonce FAILED -> Rollback admission, return False
+        msg_id1 = "MSG-PAIR-REV-FAIL"
+        nonce1 = "NONCE-PAIR-REV-FAIL"
+        store.admit_submission(msg_id1, "CORR-1", "hash", "CODEX", "ANTIGRAVITY", "sub", get_current_ist())
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO seen_nonces (nonce, sender, timestamp_ist, recorded_at, message_id, state) VALUES (?, ?, ?, ?, ?, 'FAILED')",
+                (nonce1, "CODEX", get_current_ist(), time.time(), msg_id1)
+            )
+
+        res1 = store.mark_message_recovering(msg_id1, nonce=nonce1)
+        assert res1 is False, "mark_message_recovering succeeded despite FAILED nonce!"
+        with sqlite3.connect(db_path) as conn:
+            row_adm1 = conn.execute("SELECT state, attempt_count FROM message_admissions WHERE message_id = ?", (msg_id1,)).fetchone()
+            assert row_adm1[0] == "QUEUED", f"Admission was not rolled back! State is {row_adm1[0]}"
+            assert row_adm1[1] == 0, f"Attempt count was incremented! Count is {row_adm1[1]}"
+            row_nonce1 = conn.execute("SELECT state FROM seen_nonces WHERE nonce = ?", (nonce1,)).fetchone()
+            assert row_nonce1[0] == "FAILED"
+
+        # 2. Admission QUEUED, Nonce COMPLETED -> Rollback admission, return False
+        msg_id2 = "MSG-PAIR-REV-COMP"
+        nonce2 = "NONCE-PAIR-REV-COMP"
+        store.admit_submission(msg_id2, "CORR-2", "hash", "CODEX", "ANTIGRAVITY", "sub", get_current_ist())
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO seen_nonces (nonce, sender, timestamp_ist, recorded_at, message_id, state) VALUES (?, ?, ?, ?, ?, 'COMPLETED')",
+                (nonce2, "CODEX", get_current_ist(), time.time(), msg_id2)
+            )
+
+        res2 = store.mark_message_recovering(msg_id2, nonce=nonce2)
+        assert res2 is False, "mark_message_recovering succeeded despite COMPLETED nonce!"
+        with sqlite3.connect(db_path) as conn:
+            row_adm2 = conn.execute("SELECT state FROM message_admissions WHERE message_id = ?", (msg_id2,)).fetchone()
+            assert row_adm2[0] == "QUEUED", f"Admission was not rolled back! State is {row_adm2[0]}"
+
+        # 3. Legitimate missing nonce (e.g. pre-upgrade claim) -> Inserts nonce as RECOVERED_RETRY_PENDING, returns True
+        msg_id3 = "MSG-PRE-UPGRADE-LEGIT"
+        nonce3 = "NONCE-PRE-UPGRADE-LEGIT"
+        store.admit_submission(msg_id3, "CORR-3", "hash", "CODEX", "ANTIGRAVITY", "sub", get_current_ist())
+
+        res3 = store.mark_message_recovering(msg_id3, nonce=nonce3)
+        assert res3 is True, "mark_message_recovering failed for legitimate missing nonce!"
+        with sqlite3.connect(db_path) as conn:
+            row_adm3 = conn.execute("SELECT state FROM message_admissions WHERE message_id = ?", (msg_id3,)).fetchone()
+            assert row_adm3[0] == "RECOVERING"
+            row_nonce3 = conn.execute("SELECT state FROM seen_nonces WHERE nonce = ?", (nonce3,)).fetchone()
+            assert row_nonce3 is not None
+            assert row_nonce3[0] == "RECOVERED_RETRY_PENDING"
