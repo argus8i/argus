@@ -60,6 +60,7 @@ class ExpiryReliefStrategy(BaseSwingStrategy):
         return self.STRATEGY_ID
 
     def _validate_config(self) -> None:
+        super()._validate_config()
         self.min_price = float(self.config.get("eligibility", {}).get("min_price", 10.00))
         self.min_dtv_rs = float(self.config.get("eligibility", {}).get("min_dtv_rs", 300_000_000.0))
         self.min_cycle_decline_pct = float(self.config.get("setup_rules", {}).get("expiry_cycle_min_decline_pct", 8.0))

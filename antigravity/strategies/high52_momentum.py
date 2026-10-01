@@ -60,6 +60,7 @@ class High52MomentumStrategy(BaseSwingStrategy):
         return self.STRATEGY_ID
 
     def _validate_config(self) -> None:
+        super()._validate_config()
         self.min_price = float(self.config.get("eligibility", {}).get("min_price", 10.00))
         self.min_dtv_rs = float(self.config.get("eligibility", {}).get("min_dtv_rs", 300_000_000.0))
         self.lookback_52w = int(self.config.get("setup_rules", {}).get("lookback_days_52w", 252))

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 import hashlib
 import math
 import numbers
@@ -35,17 +35,29 @@ _ISO_DATE_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 def _deep_freeze(obj: Any) -> Any:
     """
     Recursively freezes mappings, sequences, and sets into deeply immutable types.
-    Mapping -> types.MappingProxyType
-    list/tuple -> tuple
-    set -> frozenset
+    Ensures leaves are strictly immutable:
+    - Mapping -> types.MappingProxyType
+    - list/tuple -> tuple
+    - set/frozenset -> frozenset
+    - bytearray -> bytes (isolated immutable copy)
+    - int, float, str, bool, bytes, None, date, datetime -> preserved as-is
+    - Any other type -> raises TypeError to prevent aliased mutable leakage.
     """
     if isinstance(obj, Mapping):
         return types.MappingProxyType({k: _deep_freeze(v) for k, v in obj.items()})
+    elif isinstance(obj, bytearray):
+        return bytes(obj)
     elif isinstance(obj, (list, tuple)):
         return tuple(_deep_freeze(v) for v in obj)
     elif isinstance(obj, (set, frozenset)):
         return frozenset(_deep_freeze(v) for v in obj)
-    return obj
+    elif isinstance(obj, (int, float, str, bool, bytes, date, datetime)) or obj is None:
+        return obj
+    else:
+        raise TypeError(
+            f"Unsupported mutable or unverified leaf type in trace: {type(obj).__name__}. "
+            "Traces must consist strictly of immutable scalar primitives, dates, bytes, and frozen containers."
+        )
 
 
 def _deep_unfreeze(obj: Any) -> Any:
@@ -243,7 +255,7 @@ class BaseSwingStrategy(ABC):
         self.allow_unreviewed_overrides = allow_unreviewed_overrides
         self.config: Dict[str, Any] = {}
         if spec_path is not None:
-            self.config = self.load_spec(spec_path, verify_manifest=not allow_unreviewed_overrides)
+            self.config = self.load_spec(spec_path)
         elif config is not None:
             if not allow_unreviewed_overrides:
                 raise ValueError(
@@ -367,38 +379,38 @@ class BaseSwingStrategy(ABC):
 
     def load_spec(self, spec_path: Union[str, Path], verify_manifest: bool = True) -> Dict[str, Any]:
         """
-        Loads and parses a YAML strategy specification, verifying its SHA-256 against SPEC_MANIFEST.sha256.
+        Loads and parses a YAML strategy specification, strictly verifying its SHA-256 against SPEC_MANIFEST.sha256.
+        Cryptographic manifest verification is mandatory and cannot be bypassed.
         """
         p = Path(spec_path).resolve()
         if not p.is_file():
             raise FileNotFoundError(f"Strategy specification file not found: {p}")
 
-        if verify_manifest:
-            manifest_p = p.parent / "SPEC_MANIFEST.sha256"
-            if not manifest_p.is_file():
-                raise FileNotFoundError(
-                    f"Cryptographic manifest SPEC_MANIFEST.sha256 not found in {p.parent}. "
-                    "Fail-closed invariant requires locked manifest verification for all specifications (Rule 8 v2)."
-                )
-            manifest_text = manifest_p.read_text(encoding="utf-8")
-            raw_bytes = p.read_bytes().replace(b"\r\n", b"\n")
-            calc_sha = hashlib.sha256(raw_bytes).hexdigest()
-            matched = False
-            for line in manifest_text.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                parts = line.split()
-                if len(parts) >= 2 and parts[1] == p.name:
-                    expected_sha = parts[0].lower()
-                    if calc_sha.lower() != expected_sha:
-                        raise ValueError(
-                            f"Specification {p.name} hash {calc_sha} does not match locked manifest {expected_sha}"
-                        )
-                    matched = True
-                    break
-            if not matched:
-                raise ValueError(f"Specification {p.name} not found in manifest {manifest_p.name}")
+        manifest_p = p.parent / "SPEC_MANIFEST.sha256"
+        if not manifest_p.is_file():
+            raise FileNotFoundError(
+                f"Cryptographic manifest SPEC_MANIFEST.sha256 not found in {p.parent}. "
+                "Fail-closed invariant requires locked manifest verification for all specifications (Rule 8 v2)."
+            )
+        manifest_text = manifest_p.read_text(encoding="utf-8")
+        raw_bytes = p.read_bytes().replace(b"\r\n", b"\n")
+        calc_sha = hashlib.sha256(raw_bytes).hexdigest()
+        matched = False
+        for line in manifest_text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split()
+            if len(parts) >= 2 and parts[1] == p.name:
+                expected_sha = parts[0].lower()
+                if calc_sha.lower() != expected_sha:
+                    raise ValueError(
+                        f"Specification {p.name} hash {calc_sha} does not match locked manifest {expected_sha}"
+                    )
+                matched = True
+                break
+        if not matched:
+            raise ValueError(f"Specification {p.name} not found in manifest {manifest_p.name}")
 
         with open(p, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
@@ -407,8 +419,30 @@ class BaseSwingStrategy(ABC):
         return data
 
     def _validate_config(self) -> None:
-        """Validates base parameters. Subclasses can extend."""
-        pass
+        """Validates base parameters, schema, track, and strategy identity binding."""
+        if not self.config:
+            return
+
+        # 1. Strategy Identity Validation (Codex Round 3 Gap 3)
+        declared_strat = self.config.get("strategy_name") or self.config.get("strategy_id")
+        if declared_strat and declared_strat != self.strategy_id:
+            raise ValueError(
+                f"Specification declared strategy_name '{declared_strat}' does not match "
+                f"strategy '{self.strategy_id}'"
+            )
+
+        # 2. Track Isolation (Rule 11)
+        declared_track = self.config.get("track")
+        if declared_track and declared_track not in ("TRACK_2", "TRACK_2_LIQUID"):
+            raise ValueError(
+                f"Strategy specification belongs to unapproved track '{declared_track}', "
+                "expected TRACK_2 / TRACK_2_LIQUID (Rule 11 invariant)"
+            )
+
+        # 3. Required sections schema validation
+        for section in ["eligibility", "setup_rules", "entry_rules", "risk_and_exits"]:
+            if section in self.config and not isinstance(self.config[section], Mapping):
+                raise ValueError(f"Specification section '{section}' must be a mapping")
 
     # =========================================================================
     # Pure Mathematical Indicator Utilities (Robust & Fail-Closed)

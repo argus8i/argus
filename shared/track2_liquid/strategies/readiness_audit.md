@@ -63,8 +63,22 @@ Per Codex Finding 1, raw MTO `.DAT` file count breakdown across historical archi
 
 ---
 
-## 3. Operational Directives & Guardrails
+## 3. Operational Directives & Coverage Guardrails
 
-1. **Sleeve B (52-Week High Momentum) & Sleeve C (Post-Expiry Relief):** 100% continuous data readiness verified across 2021–2026 on disk. Full rolling walk-forward backtesting can proceed without data constraints.
-2. **Sleeve A (Delivery Accumulation):** Formally flagged as data-constrained for 2021–2025. Backtest evaluation is strictly scoped to sessions with verified MTO data joins; live paper trading runs on daily collected MTOs.
-3. **Sleeve D (PEAD):** Strictly deferred to research sandbox due to absent historical consensus earnings estimates (CODEX-PEAD-E536AEC).
+1. **Point-in-Time F&O Universe Boundary:**
+   - Point-in-time F&O underlying reference membership (`reference/fno_point_in_time_2022_2026.parquet`) begins on **2022-01-03**. Track 2 eligibility contracts strictly require PIT F&O membership verification (`is_fno_underlying == True`); therefore, canonical backtesting begins no earlier than 2022-01-03.
+
+2. **Sleeve B (52-Week High Momentum):**
+   - While CM Bhavcopy is available from 2021-10-01, the locked specification requires a full **252 trading sessions** of historical lookback plus active F&O eligibility from 2022-01-03.
+   - Consequently, **Sleeve B requires a 252-session warm-up window**, and canonical signal generation begins in **January 2023** (2023-01-09) across verified F&O underlyings. Unrestricted backtesting before January 2023 without 252-bar lookback is prohibited.
+
+3. **Sleeve C (Post-Expiry Relief):**
+   - Scoped strictly to monthly expiry sessions within the verified F&O reference window (**2022-01-03 to 2026-09-25**). Requires explicit `cycle_start_price` and matching `nearest_fut_expiry`.
+
+4. **Sleeve A (Delivery Accumulation):**
+   - Formally flagged as data-constrained for 2021–2025 due to MTO archive scarcity (only 5 MTO archives in 2021–2026).
+   - Backtest evaluation is strictly scoped to sessions with verified MTO delivery joins (2005–2006 baseline and live paper sessions ingested daily via `auto_daily_collector.py`).
+
+5. **Sleeve D (PEAD Drift):**
+   - Strictly deferred to research sandbox due to lack of historical point-in-time consensus earnings estimates (per CODEX-PEAD-E536AEC).
+

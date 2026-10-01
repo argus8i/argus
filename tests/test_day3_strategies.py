@@ -992,3 +992,59 @@ def test_codex_sleeves_a_and_c_bar_validation():
     }
     assert len(strat_c.generate_signals("2026-09-24", data_undated, context={"is_expiry_session": True, "next_session": "2026-09-25"})) == 0
 
+
+def test_codex_round3_canonical_manifest_cannot_be_bypassed(tmp_path):
+    orphan_yaml = tmp_path / "orphan_spec.yaml"
+    orphan_yaml.write_text("strategy_id: HIGH52_MOMENTUM\n", encoding="utf-8")
+    strat = High52MomentumStrategy()
+    # Cannot bypass manifest verification via load_spec verify_manifest=False or allow_unreviewed_overrides=True
+    with pytest.raises(FileNotFoundError, match="SPEC_MANIFEST.sha256 not found"):
+        strat.load_spec(orphan_yaml, verify_manifest=False)
+    with pytest.raises(FileNotFoundError, match="SPEC_MANIFEST.sha256 not found"):
+        High52MomentumStrategy(spec_path=orphan_yaml, allow_unreviewed_overrides=True)
+
+
+def test_codex_round3_trace_rejects_or_isolates_mutable_leaf():
+    # A: bytearray leaf must be isolated / converted to immutable bytes
+    raw_ba = bytearray(b"original")
+    event = SignalEvent(
+        strategy_id="HIGH52_MOMENTUM",
+        symbol="SBIN",
+        session_date="2026-10-01",
+        entry_session="2026-10-02",
+        reference_price=800.0,
+        stop_loss_price=780.0,
+        target_price=840.0,
+        priority_score=1.0,
+        trace={"payload": raw_ba},
+    )
+    raw_ba[0] = ord("z")
+    assert event.trace["payload"] == b"original"  # Immutable bytes, unchanged by external mutation
+    with pytest.raises(TypeError):
+        event.trace["payload"][0] = ord("x")
+
+    # B: Arbitrary custom mutable object must be rejected
+    class CustomMutable:
+        pass
+
+    with pytest.raises(TypeError, match="Unsupported mutable or unverified leaf type"):
+        SignalEvent(
+            strategy_id="HIGH52_MOMENTUM",
+            symbol="SBIN",
+            session_date="2026-10-01",
+            entry_session="2026-10-02",
+            reference_price=800.0,
+            stop_loss_price=780.0,
+            target_price=840.0,
+            priority_score=1.0,
+            trace={"obj": CustomMutable()},
+        )
+
+
+def test_codex_round3_cross_sleeve_spec_rejection():
+    # Loading delivery_accumulation spec into High52MomentumStrategy must fail-closed
+    delivery_spec = Path("shared/track2_liquid/strategies/specs/delivery_accumulation_v1.yaml")
+    with pytest.raises(ValueError, match="does not match strategy"):
+        High52MomentumStrategy(spec_path=delivery_spec)
+
+
