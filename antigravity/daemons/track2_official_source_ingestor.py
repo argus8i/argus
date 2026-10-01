@@ -25,6 +25,7 @@ import re
 import sys
 import tempfile
 import urllib.parse
+import time as time_mod
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
@@ -38,6 +39,7 @@ if REPO_ROOT not in sys.path:
 IST = timezone(timedelta(hours=5, minutes=30), name="IST")
 DECISION_CUTOFF_TIME = time(9, 0)
 PARSER_VERSION = "2.0.0"
+MIN_INTERVAL_SECONDS = 4.0
 
 OFFICIAL_NSE_HOSTS = {
     "www.nseindia.com",
@@ -306,10 +308,16 @@ class Track2OfficialSourceIngestor:
         surveillance_dir: str = DEFAULT_SURVEILLANCE_DIR,
         fetcher: Optional[Callable[[str], Tuple[int, bytes, Dict[str, str]]]] = None,
         now_fn: Optional[Callable[[], datetime]] = None,
+        pacing_seconds: float = MIN_INTERVAL_SECONDS,
+        sleep_fn: Optional[Callable[[float], None]] = None,
     ):
         self.surveillance_dir = Path(surveillance_dir).resolve()
         self.fetcher = fetcher or self._default_network_fetcher
         self.now_fn = now_fn or (lambda: datetime.now(IST))
+        if pacing_seconds < MIN_INTERVAL_SECONDS:
+            raise ValueError(f"pacing_seconds ({pacing_seconds}) must be >= {MIN_INTERVAL_SECONDS}")
+        self.pacing_seconds = pacing_seconds
+        self.sleep_fn = sleep_fn or time_mod.sleep
 
     @staticmethod
     def _validate_url(url: str, expected_url: str) -> Optional[str]:
@@ -438,7 +446,9 @@ class Track2OfficialSourceIngestor:
         }
 
         # Step 1: Fetch and atomically persist all 3 raw sources
-        for key in ("asm", "gsm", "fno"):
+        for idx, key in enumerate(("asm", "gsm", "fno")):
+            if idx > 0 and self.pacing_seconds > 0:
+                self.sleep_fn(self.pacing_seconds)
             target_url = EXPECTED_ENDPOINTS[key]
             err = self._validate_url(target_url, EXPECTED_ENDPOINTS[key])
             if err:

@@ -595,3 +595,38 @@ def test_static_no_order_path_guard():
             val_lower = node.value.lower()
             for token in forbidden_tokens:
                 assert token not in val_lower, f"Forbidden credential token: {token} in {node.value}"
+
+
+def test_ingestor_enforces_pacing_interval(temp_surv_dir):
+    """Verify that Track2OfficialSourceIngestor enforces MIN_INTERVAL_SECONDS >= 4.0 and paces requests."""
+    from antigravity.daemons.track2_official_source_ingestor import MIN_INTERVAL_SECONDS
+
+    assert MIN_INTERVAL_SECONDS >= 4.0
+
+    # Sub-4s pacing is strictly rejected fail-closed
+    with pytest.raises(ValueError, match="pacing_seconds.*must be >= 4.0"):
+        Track2OfficialSourceIngestor(
+            surveillance_dir=str(temp_surv_dir),
+            pacing_seconds=3.5,
+        )
+
+    # Ingestion invokes sleep between the 3 endpoint fetches with interval >= 4.0s
+    slept_intervals = []
+
+    def mock_sleep(seconds):
+        slept_intervals.append(seconds)
+
+    fixed_now = datetime(2026, 9, 21, 8, 30, tzinfo=IST)
+    ingestor = Track2OfficialSourceIngestor(
+        surveillance_dir=str(temp_surv_dir),
+        fetcher=make_mock_fetcher(),
+        now_fn=lambda: fixed_now,
+        pacing_seconds=4.0,
+        sleep_fn=mock_sleep,
+    )
+    res = ingestor.ingest_session("2026-09-21")
+    assert res["verified"] is True
+    # 3 endpoints: ASM -> sleep -> GSM -> sleep -> FNO => 2 sleeps of 4.0s
+    assert len(slept_intervals) == 2
+    assert all(s >= 4.0 for s in slept_intervals)
+

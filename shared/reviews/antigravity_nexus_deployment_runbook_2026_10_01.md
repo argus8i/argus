@@ -1,6 +1,6 @@
 # ARGUS Nexus Bus & Supervisor Deployment Runbook
 **Date:** 2026-10-01  
-**Reviewed Commit:** `09ee37d` (Branch: `fix/nexus-and-bridge-repair`)  
+**Reviewed Commit:** `67c2d12` (Branch: `fix/nexus-and-bridge-repair`)  
 **Target:** Live Production Task Scheduler & Message Bus (`c:\Users\yashw\swing trades`)  
 
 ---
@@ -8,9 +8,9 @@
 > [!CAUTION]
 > **MANDATORY DEPLOYMENT GATE:**
 > **DO NOT DEPLOY** until both of the following gates are satisfied:
-> 1. Codex independently records `APPROVED` in `shared/trust/reviews.jsonl`.
-> 2. Yashu gives explicit written authorization to deploy ("Yashu says go").
-> Real service tasks, PIDs, and live message state must remain untouched until authorized.
+> 1. Codex independently recorded `APPROVED` on commit `67c2d12` in `shared/trust/reviews.jsonl` (Review ID: `CODEX-NEXUS-67C2D12`).
+> 2. Yashu gives explicit written authorization to deploy ("Yashu says go on 67c2d12").
+> Real service tasks, PIDs, and live message state must remain untouched until authorized. Do not deploy anything until Yashu says go on `67c2d12`.
 
 ---
 
