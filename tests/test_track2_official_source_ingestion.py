@@ -469,6 +469,43 @@ def test_evidence_window_rejects_far_future_session(temp_surv_dir):
     assert result["reason"] == "EVIDENCE_WINDOW_TOO_EARLY_FOR_SESSION"
 
 
+def test_evidence_window_allows_holiday_gap(temp_surv_dir):
+    # Thursday 2026-10-01 19:00 IST -> next session is Monday 2026-10-05 (Gandhi Jayanti on Oct 2)
+    fixed_now = datetime(2026, 10, 1, 19, 0, tzinfo=IST)
+    result = Track2OfficialSourceIngestor(
+        surveillance_dir=str(temp_surv_dir), fetcher=make_mock_fetcher(), now_fn=lambda: fixed_now
+    ).ingest_session("2026-10-05")
+    assert result["verified"] is True
+
+
+def test_evidence_window_allows_ordinary_weekend_gap(temp_surv_dir):
+    # Friday 2026-09-18 19:00 IST -> next session is Monday 2026-09-21
+    fixed_now = datetime(2026, 9, 18, 19, 0, tzinfo=IST)
+    result = Track2OfficialSourceIngestor(
+        surveillance_dir=str(temp_surv_dir), fetcher=make_mock_fetcher(), now_fn=lambda: fixed_now
+    ).ingest_session("2026-09-21")
+    assert result["verified"] is True
+
+
+def test_evidence_window_allows_same_session_preopen_refresh(temp_surv_dir):
+    # Monday 2026-10-05 08:30 IST -> session is Monday 2026-10-05
+    fixed_now = datetime(2026, 10, 5, 8, 30, tzinfo=IST)
+    result = Track2OfficialSourceIngestor(
+        surveillance_dir=str(temp_surv_dir), fetcher=make_mock_fetcher(), now_fn=lambda: fixed_now
+    ).ingest_session("2026-10-05")
+    assert result["verified"] is True
+
+
+def test_evidence_window_rejects_past_session(temp_surv_dir):
+    # Monday 2026-10-05 08:30 IST -> session is 2026-10-01 (past session)
+    fixed_now = datetime(2026, 10, 5, 8, 30, tzinfo=IST)
+    result = Track2OfficialSourceIngestor(
+        surveillance_dir=str(temp_surv_dir), fetcher=make_mock_fetcher(), now_fn=lambda: fixed_now
+    ).ingest_session("2026-10-01")
+    assert result["verified"] is False
+
+
+
 def test_poller_rejects_stale_per_source_timestamp(temp_surv_dir):
     fixed_now = datetime(2026, 9, 21, 8, 30, tzinfo=IST)
     ingested = Track2OfficialSourceIngestor(

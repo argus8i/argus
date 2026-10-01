@@ -397,7 +397,11 @@ class Track2OfficialSourceIngestor:
 
         if pub_day > now.date() or session_day < pub_day:
             return {"verified": False, "reason": "FUTURE_OR_INVERTED_PUBLICATION_EFFECTIVE_DATE"}
-        if (session_day - now.date()).days > MAX_EVIDENCE_AGE_DAYS:
+        if session_day < now.date():
+            return {"verified": False, "reason": "SESSION_DATE_IN_PAST"}
+        from scripts.daily_pipeline import calculate_next_session_date
+        next_session = calculate_next_session_date(now.date())
+        if session_day > next_session:
             return {"verified": False, "reason": "EVIDENCE_WINDOW_TOO_EARLY_FOR_SESSION"}
 
         # Decision cutoff at 09:00 IST on session day
