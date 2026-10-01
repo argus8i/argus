@@ -1788,6 +1788,13 @@ def test_schema_or_task_failure_outbox_failure_reconciled_on_second_pass():
             assert resp_data["status"] == "FAILED"
             assert resp_data["error"] == "APPLICATION_TASK_ERROR"
             assert resp_data["correlation_id"] == corr_id
+            # Assert exact equality with durable response in SQLite
+            durable_raw = store.get_message_response(msg_id)
+            assert durable_raw is not None
+            assert resp_data == json.loads(durable_raw), "Reconciled outbox does not match durable SQLite response!"
+            # Assert recovered HMAC signature is cryptographically valid
+            sig = resp_data.get("auth_signature")
+            assert sig == compute_envelope_hmac(resp_data, secret_key), "Recovered outbox HMAC is invalid!"
             # - Claim envelope is now cleanly unlinked
             assert not os.path.exists(claimed_path), "Claim envelope was not unlinked after recovery pass reconciled outbox!"
 
@@ -1840,6 +1847,13 @@ def test_schema_or_task_failure_outbox_failure_reconciled_on_second_pass():
                 sch_resp = json.load(f)
             assert sch_resp["status"] == "FAILED"
             assert "SCHEMA" in sch_resp["error"]
+            # Assert exact equality with durable response in SQLite
+            durable_sch = store.get_message_response(msg_id_sch)
+            assert durable_sch is not None
+            assert sch_resp == json.loads(durable_sch), "Reconciled schema outbox does not match durable SQLite response!"
+            # Assert recovered HMAC signature is cryptographically valid
+            sig_sch = sch_resp.get("auth_signature")
+            assert sig_sch == compute_envelope_hmac(sch_resp, secret_key), "Recovered schema outbox HMAC is invalid!"
             assert not os.path.exists(claimed_sch), "Claim envelope not unlinked after schema outbox reconciliation!"
 
         # ----------------------------------------------------------------------
@@ -1901,6 +1915,13 @@ def test_schema_or_task_failure_outbox_failure_reconciled_on_second_pass():
                 cpf_resp = json.load(f)
             assert cpf_resp["status"] == "FAILED"
             assert cpf_resp["error"] == "COMPLETION_PERSISTENCE_FAILED"
+            # Assert exact equality with durable response in SQLite
+            durable_cpf = store.get_message_response(msg_id_cpf)
+            assert durable_cpf is not None
+            assert cpf_resp == json.loads(durable_cpf), "Reconciled completion outbox does not match durable SQLite response!"
+            # Assert recovered HMAC signature is cryptographically valid
+            sig_cpf = cpf_resp.get("auth_signature")
+            assert sig_cpf == compute_envelope_hmac(cpf_resp, secret_key), "Recovered completion outbox HMAC is invalid!"
             assert not os.path.exists(claimed_cpf), "Claim envelope not unlinked after completion outbox reconciliation!"
 
         # ----------------------------------------------------------------------
@@ -1943,6 +1964,10 @@ def test_schema_or_task_failure_outbox_failure_reconciled_on_second_pass():
                 reconciled_indep = json.load(f)
             assert reconciled_indep["status"] == "FAILED"
             assert reconciled_indep["error"] == "INDEPENDENT_DEAD_RECONCILED"
+            # Assert exact equality with durable response in SQLite
+            durable_indep = store.get_message_response(msg_id_indep)
+            assert durable_indep is not None
+            assert reconciled_indep == json.loads(durable_indep), "Reconciled independent outbox does not match durable SQLite response!"
 
 
 # ==============================================================================
@@ -2014,5 +2039,76 @@ def test_dead_letter_sweep_filelock_prevents_overwriting_concurrent_publisher():
                 final_outbox = json.load(f)
             assert final_outbox["message_id"] == "winning_reply", f"Winning reply was overwritten! Got: {final_outbox}"
             assert final_outbox["status"] == "COMPLETED"
+
+
+# ==============================================================================
+# PROBE 25: Claim Validation Failure FileLock Prevents Overwriting Winning Response
+# ==============================================================================
+def test_claim_validation_failure_filelock_prevents_overwriting_winning_response():
+    """
+    Finding P1 (Codex 2026-10-01):
+    In claim_message, when inbound message validation fails, outbox failure response
+    publication must acquire the correlation FileLock and recheck existence before writing,
+    preventing any race condition where a failed claim response overwrites a winning
+    COMPLETED response concurrently installed by a live worker.
+    """
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        inbox_dir = os.path.join(tmpdir, "inbox")
+        outbox_dir = os.path.join(tmpdir, "outbox")
+        dead_dir = os.path.join(tmpdir, "dead_letter")
+        os.makedirs(inbox_dir, exist_ok=True)
+        os.makedirs(outbox_dir, exist_ok=True)
+        os.makedirs(dead_dir, exist_ok=True)
+
+        db_path = os.path.join(tmpdir, "admissions.db")
+        store = DurableAdmissionStore(db_path)
+        secret_key = b"secret_key_32_bytes_long_123456"
+
+        corr_id = "CORR-CLAIM-WINNER"
+        msg_id = "MSG-BAD-CLAIM"
+        inbox_file = os.path.join(inbox_dir, f"{msg_id}.json")
+        outbox_file = os.path.join(outbox_dir, f"{corr_id}_resp.json")
+
+        store.admit_submission(msg_id, corr_id, "hash", "CODEX", "ANTIGRAVITY", "sub", get_current_ist())
+
+        # Invalid envelope (missing fields, invalid schema)
+        bad_msg = {
+            "message_id": msg_id,
+            "correlation_id": corr_id,
+            "status": "CREATED",
+            # missing recipient, sender, body, nonce, signature
+        }
+        with open(inbox_file, "w", encoding="utf-8") as f:
+            json.dump(bad_msg, f)
+
+        real_file_lock_enter = FileLock.__enter__
+        winning_reply = {"message_id": "winner_reply_001", "correlation_id": corr_id, "status": "COMPLETED"}
+
+        def hooked_lock_enter(lock_self):
+            res = real_file_lock_enter(lock_self)
+            # If this is the outbox lock for our correlation ID and file does not exist yet,
+            # simulate concurrent publisher installing winning_reply right after lock is acquired!
+            if lock_self.lock_path.startswith(outbox_file) and not os.path.exists(outbox_file):
+                write_json_atomic(outbox_file, winning_reply)
+            return res
+
+        with patch("antigravity.daemons.inbox_worker.INBOX_DIR", inbox_dir), \
+             patch("antigravity.daemons.inbox_worker.OUTBOX_DIR", outbox_dir), \
+             patch("antigravity.daemons.inbox_worker.DEAD_LETTER_DIR", dead_dir), \
+             patch("antigravity.daemons.inbox_worker.get_agent_secret_key", return_value=secret_key), \
+             patch.object(FileLock, "__enter__", side_effect=hooked_lock_enter, autospec=True):
+
+            worker = InboxWorker()
+            worker.db = store
+            res = worker.claim_message(f"{msg_id}.json")
+            assert res is None  # Validation failed
+
+            # Verification: winning_reply must NOT have been overwritten by FAILED claim response!
+            assert os.path.exists(outbox_file)
+            with open(outbox_file, "r", encoding="utf-8") as f:
+                final_out = json.load(f)
+            assert final_out["message_id"] == "winner_reply_001", f"Winning reply was overwritten by claim validation failure! Got: {final_out}"
+            assert final_out["status"] == "COMPLETED"
+
 
 

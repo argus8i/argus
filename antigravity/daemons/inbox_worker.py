@@ -1740,29 +1740,39 @@ class InboxWorker:
                         data["error"] = auth_err or "CLAIM_VALIDATION_FAILED"
                         data["failed_at_ist"] = get_current_ist()
                         write_json_atomic(dead_path, data)
-                        if store:
-                            store.mark_message_dead(data.get("message_id", json_filename.replace(".json", "")), error=data["error"])
                         corr_id = data.get("correlation_id")
+                        err_resp = None
                         if corr_id:
+                            antigravity_key = get_agent_secret_key("ANTIGRAVITY")
+                            if antigravity_key:
+                                err_resp = {
+                                    "message_id": f"resp_{uuid.uuid4().hex[:12]}",
+                                    "correlation_id": corr_id,
+                                    "responder": "ANTIGRAVITY",
+                                    "route_agent": data.get("recipient"),
+                                    "status": "FAILED",
+                                    "created_at_ist": get_current_ist(),
+                                    "completed_at_ist": get_current_ist(),
+                                    "output_payload": None,
+                                    "artifact_hashes": {},
+                                    "nonce": uuid.uuid4().hex,
+                                    "error": data["error"]
+                                }
+                                err_resp["auth_signature"] = compute_envelope_hmac(err_resp, antigravity_key)
+
+                        resp_json_str = json.dumps(err_resp) if err_resp else None
+                        if store:
+                            store.mark_message_dead(data.get("message_id", json_filename.replace(".json", "")), error=data["error"], response_json=resp_json_str)
+
+                        if corr_id and err_resp:
                             outbox_file = os.path.join(OUTBOX_DIR, get_safe_filename(corr_id, "_resp.json"))
                             if not os.path.exists(outbox_file):
-                                antigravity_key = get_agent_secret_key("ANTIGRAVITY")
-                                if antigravity_key:
-                                    err_resp = {
-                                        "message_id": f"resp_{uuid.uuid4().hex[:12]}",
-                                        "correlation_id": corr_id,
-                                        "responder": "ANTIGRAVITY",
-                                        "route_agent": data.get("recipient"),
-                                        "status": "FAILED",
-                                        "created_at_ist": get_current_ist(),
-                                        "completed_at_ist": get_current_ist(),
-                                        "output_payload": None,
-                                        "artifact_hashes": {},
-                                        "nonce": uuid.uuid4().hex,
-                                        "error": data["error"]
-                                    }
-                                    err_resp["auth_signature"] = compute_envelope_hmac(err_resp, antigravity_key)
-                                    write_json_atomic(outbox_file, err_resp)
+                                try:
+                                    with FileLock(outbox_file, timeout_sec=5.0, stale_sec=3600.0):
+                                        if not os.path.exists(outbox_file):
+                                            write_json_atomic(outbox_file, err_resp)
+                                except TimeoutError:
+                                    pass
                         try:
                             os.remove(claimed_path)
                         except OSError:
