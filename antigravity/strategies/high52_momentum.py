@@ -15,6 +15,8 @@ Invariants:
 - AGENTS.md Rule 2 Price Floor (Rs 10.00).
 - AGENTS.md Rule 11 Track 2 Isolation (F&O underlyings, DTV >= 30 Cr, not in ASM/GSM).
 - Pre-registered specification: shared/track2_liquid/strategies/specs/high52_momentum_v1.yaml
+- Fail-closed lookback: requires full 252 sessions of history (never truncated).
+- Conservative Adverse Selection: Opening stop breaches and ambiguous intrabar touches prioritize STOP_LOSS.
 """
 
 from __future__ import annotations
@@ -36,9 +38,10 @@ class High52MomentumStrategy(BaseSwingStrategy):
     def __init__(
         self,
         spec_path: Optional[Union[str, Path]] = None,
-        config: Optional[Dict[str, Any]] = None
+        config: Optional[Dict[str, Any]] = None,
+        allow_unreviewed_overrides: bool = False
     ) -> None:
-        super().__init__(spec_path=spec_path, config=config)
+        super().__init__(spec_path=spec_path, config=config, allow_unreviewed_overrides=allow_unreviewed_overrides)
 
     @property
     def strategy_id(self) -> str:
@@ -62,23 +65,51 @@ class High52MomentumStrategy(BaseSwingStrategy):
     ) -> List[SignalEvent]:
         """
         Scans market data for 52-week high breakout swing momentum candidates on `session_date`.
+        Strictly point-in-time and fail-closed against unvalidated metadata or timing.
         """
+        # Timing Context Check: Explicit valid next trading session is mandatory (Rule 4 / T_PLUS_1)
+        if not context or not isinstance(context, Mapping):
+            return []
+        next_session = context.get("next_session")
+        if not next_session or not isinstance(next_session, str) or next_session <= session_date:
+            return []
+
         signals: List[SignalEvent] = []
-        next_session = context.get("next_session", session_date) if context else session_date
 
         for symbol, data in market_data.items():
-            # 1. Eligibility Check (Fail-Closed)
-            metadata = data.get("metadata", {})
-            if not metadata.get("is_fno_underlying", False):
+            # 1. Strict Typed Metadata Eligibility Check (Codex Finding 2)
+            metadata = data.get("metadata")
+            if not isinstance(metadata, Mapping):
                 continue
-            if metadata.get("is_surveillance", True):
+            if metadata.get("is_fno_underlying") is not True:
                 continue
-            if metadata.get("series", "EQ") != "EQ":
+            if metadata.get("is_surveillance") is not False:
+                continue
+            if metadata.get("series") != "EQ":
                 continue
 
             bars = data.get("bars", [])
-            # Require at least 50 bars for indicator calculation (and up to 252 for full 52w high)
-            if len(bars) < 50:
+            # Invariant (Codex Finding 5): Require full 52-week lookback (252 bars); never truncate or substitute
+            if len(bars) < self.lookback_52w:
+                continue
+
+            # Chronological bar validation (reject future bars, reject unordered bars)
+            valid_bars = True
+            for i, b in enumerate(bars):
+                b_date = str(b.get("session_date") or b.get("day", ""))
+                if b_date and b_date > session_date:
+                    valid_bars = False
+                    break
+                if i > 0 and b_date:
+                    prev_date = str(bars[i - 1].get("session_date") or bars[i - 1].get("day", ""))
+                    if prev_date and b_date < prev_date:
+                        valid_bars = False
+                        break
+            if not valid_bars:
+                continue
+
+            last_bar_date = str(bars[-1].get("session_date") or bars[-1].get("day", ""))
+            if last_bar_date and last_bar_date != session_date:
                 continue
 
             closes = [float(b["close"]) for b in bars]
@@ -107,9 +138,8 @@ class High52MomentumStrategy(BaseSwingStrategy):
                 continue
 
             # 2. Setup Rules:
-            # Lookback for 52-week high (use min(len(highs), lookback_52w))
-            lookback_len = min(len(highs), self.lookback_52w)
-            high_52w = max(highs[-lookback_len:])
+            # Full 52-week high lookback across exactly 252 bars
+            high_52w = max(highs[-self.lookback_52w:])
             if high_52w <= 0.0:
                 continue
 
@@ -130,8 +160,6 @@ class High52MomentumStrategy(BaseSwingStrategy):
 
             # 3. Entry Trigger:
             # Daily close breaking above 20-day consolidation high
-            if len(highs) < self.consolidation_days + 1:
-                continue
             prior_20d_high = max(highs[-self.consolidation_days - 1 : -1])
             if curr_close <= prior_20d_high:
                 continue
@@ -183,7 +211,7 @@ class High52MomentumStrategy(BaseSwingStrategy):
         session_date: str
     ) -> List[ExitSignalEvent]:
         """
-        Evaluates active 52-week high momentum positions for profit targets, trailing stops, and time limits.
+        Evaluates active 52-week high momentum positions using conservative adverse-selection execution precedence.
         """
         exits: List[ExitSignalEvent] = []
 
@@ -196,6 +224,7 @@ class High52MomentumStrategy(BaseSwingStrategy):
             if not bar:
                 continue
 
+            open_p = float(bar.get("open", bar.get("close", 0.0)))
             high = float(bar["high"])
             low = float(bar["low"])
             close = float(bar["close"])
@@ -205,7 +234,71 @@ class High52MomentumStrategy(BaseSwingStrategy):
             target_price = float(pos["target_price"])
             holding_sessions = int(pos.get("holding_sessions", 1))
 
-            # 1. Target Hit
+            # Precedence 1: Opening Gap-Down below Stop Loss (Codex Finding 3)
+            if open_p <= stop_price:
+                exits.append(
+                    ExitSignalEvent(
+                        strategy_id=self.STRATEGY_ID,
+                        symbol=symbol,
+                        session_date=session_date,
+                        position_id=pos_id,
+                        reason="STOP_LOSS",
+                        exit_price=open_p,
+                        shares_to_exit=shares,
+                        trace={"stop_price": stop_price, "bar_open": open_p, "gap_down": True},
+                    )
+                )
+                continue
+
+            # Precedence 2: Opening Gap-Up above Target
+            if open_p >= target_price:
+                exits.append(
+                    ExitSignalEvent(
+                        strategy_id=self.STRATEGY_ID,
+                        symbol=symbol,
+                        session_date=session_date,
+                        position_id=pos_id,
+                        reason="TARGET_HIT",
+                        exit_price=open_p,
+                        shares_to_exit=shares,
+                        trace={"target_price": target_price, "bar_open": open_p, "gap_up": True},
+                    )
+                )
+                continue
+
+            # Precedence 3: Ambiguous Intrabar Range (Both stop and target touched) -> ADVERSE SELECTION: Stop Loss first
+            if low <= stop_price and high >= target_price:
+                exits.append(
+                    ExitSignalEvent(
+                        strategy_id=self.STRATEGY_ID,
+                        symbol=symbol,
+                        session_date=session_date,
+                        position_id=pos_id,
+                        reason="STOP_LOSS",
+                        exit_price=stop_price,
+                        shares_to_exit=shares,
+                        trace={"stop_price": stop_price, "target_price": target_price, "adverse_selection": True},
+                    )
+                )
+                continue
+
+            # Precedence 4: Normal Stop Loss Hit
+            if low <= stop_price:
+                exits.append(
+                    ExitSignalEvent(
+                        strategy_id=self.STRATEGY_ID,
+                        symbol=symbol,
+                        session_date=session_date,
+                        position_id=pos_id,
+                        reason="STOP_LOSS",
+                        exit_price=stop_price,
+                        shares_to_exit=shares,
+                        trace={"stop_price": stop_price, "bar_low": low},
+                    )
+                )
+                continue
+
+            # Precedence 5: Normal Target Hit
             if high >= target_price:
                 exits.append(
                     ExitSignalEvent(
@@ -221,23 +314,7 @@ class High52MomentumStrategy(BaseSwingStrategy):
                 )
                 continue
 
-            # 2. Stop Loss Hit
-            if low <= stop_price:
-                exits.append(
-                    ExitSignalEvent(
-                        strategy_id=self.STRATEGY_ID,
-                        symbol=symbol,
-                        session_date=session_date,
-                        position_id=pos_id,
-                        reason="STOP_LOSS",
-                        exit_price=min(stop_price, bar.get("open", stop_price)),
-                        shares_to_exit=shares,
-                        trace={"stop_price": stop_price, "bar_low": low},
-                    )
-                )
-                continue
-
-            # 3. Time Stop (10 sessions)
+            # Precedence 6: Time Stop (10 sessions)
             if holding_sessions >= self.max_holding_sessions:
                 exits.append(
                     ExitSignalEvent(
@@ -253,7 +330,7 @@ class High52MomentumStrategy(BaseSwingStrategy):
                 )
                 continue
 
-            # 4. Trailing Exit (Close < 20-day EMA after session 3)
+            # Precedence 7: Trailing Exit (Close < 20-day EMA after session 3)
             ema20 = bar.get("ema20")
             if holding_sessions >= 3 and ema20 is not None and close < float(ema20):
                 exits.append(

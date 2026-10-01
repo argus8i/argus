@@ -13,6 +13,7 @@ Invariants:
 - AGENTS.md Rule 2 Price Floor (Rs 10.00).
 - AGENTS.md Rule 11 Track 2 Isolation (F&O underlyings, DTV >= 30 Cr, not in ASM/GSM).
 - Pre-registered specification: shared/track2_liquid/strategies/specs/delivery_accumulation_v1.yaml
+- Conservative Adverse Selection: Opening stop breaches and ambiguous intrabar touches prioritize STOP_LOSS.
 """
 
 from __future__ import annotations
@@ -34,16 +35,16 @@ class DeliveryAccumulationStrategy(BaseSwingStrategy):
     def __init__(
         self,
         spec_path: Optional[Union[str, Path]] = None,
-        config: Optional[Dict[str, Any]] = None
+        config: Optional[Dict[str, Any]] = None,
+        allow_unreviewed_overrides: bool = False
     ) -> None:
-        super().__init__(spec_path=spec_path, config=config)
+        super().__init__(spec_path=spec_path, config=config, allow_unreviewed_overrides=allow_unreviewed_overrides)
 
     @property
     def strategy_id(self) -> str:
         return self.STRATEGY_ID
 
     def _validate_config(self) -> None:
-        # Default fallbacks matching pre-registered spec
         self.min_price = float(self.config.get("eligibility", {}).get("min_price", 10.00))
         self.min_dtv_rs = float(self.config.get("eligibility", {}).get("min_dtv_rs", 300_000_000.0))
         self.lookback_days = int(self.config.get("setup_rules", {}).get("lookback_days", 20))
@@ -63,23 +64,51 @@ class DeliveryAccumulationStrategy(BaseSwingStrategy):
     ) -> List[SignalEvent]:
         """
         Scans market data for institutional delivery accumulation breakout setups on `session_date`.
+        Strictly point-in-time and fail-closed against unvalidated metadata or timing.
         """
+        # Timing Context Check: Explicit valid next trading session is mandatory (Rule 4 / T_PLUS_1)
+        if not context or not isinstance(context, Mapping):
+            return []
+        next_session = context.get("next_session")
+        if not next_session or not isinstance(next_session, str) or next_session <= session_date:
+            return []
+
         signals: List[SignalEvent] = []
-        next_session = context.get("next_session", session_date) if context else session_date
 
         for symbol, data in market_data.items():
-            # 1. Eligibility Check (Fail-Closed)
-            metadata = data.get("metadata", {})
-            if not metadata.get("is_fno_underlying", False):
+            # 1. Strict Typed Metadata Eligibility Check (Codex Finding 2)
+            metadata = data.get("metadata")
+            if not isinstance(metadata, Mapping):
                 continue
-            if metadata.get("is_surveillance", True):
+            if metadata.get("is_fno_underlying") is not True:
                 continue
-            if metadata.get("series", "EQ") != "EQ":
+            if metadata.get("is_surveillance") is not False:
+                continue
+            if metadata.get("series") != "EQ":
                 continue
 
             bars = data.get("bars", [])
             # Need at least lookback_days + 1 bars
             if len(bars) < self.lookback_days + 1:
+                continue
+
+            # Chronological bar validation (reject future bars, reject unordered bars)
+            valid_bars = True
+            for i, b in enumerate(bars):
+                b_date = str(b.get("session_date") or b.get("day", ""))
+                if b_date and b_date > session_date:
+                    valid_bars = False
+                    break
+                if i > 0 and b_date:
+                    prev_date = str(bars[i - 1].get("session_date") or bars[i - 1].get("day", ""))
+                    if prev_date and b_date < prev_date:
+                        valid_bars = False
+                        break
+            if not valid_bars:
+                continue
+
+            last_bar_date = str(bars[-1].get("session_date") or bars[-1].get("day", ""))
+            if last_bar_date and last_bar_date != session_date:
                 continue
 
             # Extract bar series
@@ -122,7 +151,7 @@ class DeliveryAccumulationStrategy(BaseSwingStrategy):
                 continue
 
             # Condition B: 5-Day Price Range Compression <= 0.75x ATR(20)
-            # Compression is measured over the 5 sessions prior to breakout
+            # Compression measured over the 5 sessions prior to the breakout
             comp_highs = highs[-self.compression_days - 1 : -1]
             comp_lows = lows[-self.compression_days - 1 : -1]
             range_5d = max(comp_highs) - min(comp_lows)
@@ -188,7 +217,7 @@ class DeliveryAccumulationStrategy(BaseSwingStrategy):
         session_date: str
     ) -> List[ExitSignalEvent]:
         """
-        Evaluates active swing positions for take-profit, stop-loss, trailing stop, and time stops.
+        Evaluates active swing positions using conservative adverse-selection execution precedence.
         """
         exits: List[ExitSignalEvent] = []
 
@@ -201,17 +230,81 @@ class DeliveryAccumulationStrategy(BaseSwingStrategy):
             if not bar:
                 continue
 
+            open_p = float(bar.get("open", bar.get("close", 0.0)))
             high = float(bar["high"])
             low = float(bar["low"])
             close = float(bar["close"])
             shares = int(pos["shares"])
             pos_id = str(pos["position_id"])
-            entry_price = float(pos["entry_price"])
             stop_price = float(pos["stop_price"])
             target_price = float(pos["target_price"])
             holding_sessions = int(pos.get("holding_sessions", 1))
 
-            # 1. Target Hit
+            # Precedence 1: Opening Gap-Down below Stop Loss (Codex Finding 3)
+            if open_p <= stop_price:
+                exits.append(
+                    ExitSignalEvent(
+                        strategy_id=self.STRATEGY_ID,
+                        symbol=symbol,
+                        session_date=session_date,
+                        position_id=pos_id,
+                        reason="STOP_LOSS",
+                        exit_price=open_p,
+                        shares_to_exit=shares,
+                        trace={"stop_price": stop_price, "bar_open": open_p, "gap_down": True},
+                    )
+                )
+                continue
+
+            # Precedence 2: Opening Gap-Up above Target
+            if open_p >= target_price:
+                exits.append(
+                    ExitSignalEvent(
+                        strategy_id=self.STRATEGY_ID,
+                        symbol=symbol,
+                        session_date=session_date,
+                        position_id=pos_id,
+                        reason="TARGET_HIT",
+                        exit_price=open_p,
+                        shares_to_exit=shares,
+                        trace={"target_price": target_price, "bar_open": open_p, "gap_up": True},
+                    )
+                )
+                continue
+
+            # Precedence 3: Ambiguous Intrabar Range (Both stop and target touched) -> ADVERSE SELECTION: Stop Loss first
+            if low <= stop_price and high >= target_price:
+                exits.append(
+                    ExitSignalEvent(
+                        strategy_id=self.STRATEGY_ID,
+                        symbol=symbol,
+                        session_date=session_date,
+                        position_id=pos_id,
+                        reason="STOP_LOSS",
+                        exit_price=stop_price,
+                        shares_to_exit=shares,
+                        trace={"stop_price": stop_price, "target_price": target_price, "adverse_selection": True},
+                    )
+                )
+                continue
+
+            # Precedence 4: Normal Stop Loss Hit
+            if low <= stop_price:
+                exits.append(
+                    ExitSignalEvent(
+                        strategy_id=self.STRATEGY_ID,
+                        symbol=symbol,
+                        session_date=session_date,
+                        position_id=pos_id,
+                        reason="STOP_LOSS",
+                        exit_price=stop_price,
+                        shares_to_exit=shares,
+                        trace={"stop_price": stop_price, "bar_low": low},
+                    )
+                )
+                continue
+
+            # Precedence 5: Normal Target Hit
             if high >= target_price:
                 exits.append(
                     ExitSignalEvent(
@@ -227,23 +320,7 @@ class DeliveryAccumulationStrategy(BaseSwingStrategy):
                 )
                 continue
 
-            # 2. Stop Loss Hit
-            if low <= stop_price:
-                exits.append(
-                    ExitSignalEvent(
-                        strategy_id=self.STRATEGY_ID,
-                        symbol=symbol,
-                        session_date=session_date,
-                        position_id=pos_id,
-                        reason="STOP_LOSS",
-                        exit_price=min(stop_price, bar.get("open", stop_price)),
-                        shares_to_exit=shares,
-                        trace={"stop_price": stop_price, "bar_low": low},
-                    )
-                )
-                continue
-
-            # 3. Time-Based Stop
+            # Precedence 6: Time-Based Stop (Session 7)
             if holding_sessions >= self.max_holding_sessions:
                 exits.append(
                     ExitSignalEvent(
@@ -259,7 +336,7 @@ class DeliveryAccumulationStrategy(BaseSwingStrategy):
                 )
                 continue
 
-            # 4. Trailing Exit (Close < 5-day EMA after session 3)
+            # Precedence 7: Trailing Exit (Close < 5-day EMA after session 3)
             ema5 = bar.get("ema5")
             if holding_sessions >= 3 and ema5 is not None and close < float(ema5):
                 exits.append(

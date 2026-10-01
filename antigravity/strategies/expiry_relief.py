@@ -15,6 +15,8 @@ Invariants:
 - AGENTS.md Rule 2 Price Floor (Rs 10.00).
 - AGENTS.md Rule 11 Track 2 Isolation (F&O underlyings, DTV >= 30 Cr, not in ASM/GSM).
 - Pre-registered specification: shared/track2_liquid/strategies/specs/expiry_relief_v1.yaml
+- Fail-closed timing: strictly requires per-symbol verified expiry date and explicit cycle_start_price.
+- Conservative Adverse Selection: Opening stop breaches and ambiguous intrabar touches prioritize STOP_LOSS.
 """
 
 from __future__ import annotations
@@ -36,9 +38,10 @@ class ExpiryReliefStrategy(BaseSwingStrategy):
     def __init__(
         self,
         spec_path: Optional[Union[str, Path]] = None,
-        config: Optional[Dict[str, Any]] = None
+        config: Optional[Dict[str, Any]] = None,
+        allow_unreviewed_overrides: bool = False
     ) -> None:
-        super().__init__(spec_path=spec_path, config=config)
+        super().__init__(spec_path=spec_path, config=config, allow_unreviewed_overrides=allow_unreviewed_overrides)
 
     @property
     def strategy_id(self) -> str:
@@ -63,35 +66,67 @@ class ExpiryReliefStrategy(BaseSwingStrategy):
         """
         Scans market data for post-expiry relief candidates on `session_date`.
         Signals fire on monthly expiry day close for execution on post-expiry session 1.
+        Strictly requires explicit cycle_start_price and per-symbol verified expiry matching session_date.
         """
-        # Timing Check: session must be flagged as expiry day or post-expiry session
-        is_expiry_day = False
-        if context and context.get("is_expiry_session", False):
-            is_expiry_day = True
-        elif context and context.get("expiry_date") == session_date:
-            is_expiry_day = True
+        # Timing Context Check: Explicit valid next trading session is mandatory (Rule 4 / T_PLUS_1)
+        if not context or not isinstance(context, Mapping):
+            return []
+        next_session = context.get("next_session")
+        if not next_session or not isinstance(next_session, str) or next_session <= session_date:
+            return []
 
         signals: List[SignalEvent] = []
-        next_session = context.get("next_session", session_date) if context else session_date
 
         for symbol, data in market_data.items():
-            # 1. Eligibility Check (Fail-Closed)
-            metadata = data.get("metadata", {})
-            if not metadata.get("is_fno_underlying", False):
+            # 1. Strict Typed Metadata Eligibility Check (Codex Finding 2)
+            metadata = data.get("metadata")
+            if not isinstance(metadata, Mapping):
                 continue
-            if metadata.get("is_surveillance", True):
+            if metadata.get("is_fno_underlying") is not True:
                 continue
-            if metadata.get("series", "EQ") != "EQ":
+            if metadata.get("is_surveillance") is not False:
+                continue
+            if metadata.get("series") != "EQ":
                 continue
 
-            # Per-symbol PIT expiry check if not set in general context
-            sym_is_expiry = is_expiry_day or (metadata.get("nearest_fut_expiry") == session_date)
-            if not sym_is_expiry:
+            # Per-symbol PIT expiry check (Codex Finding 5: never allow loose global override)
+            nearest_expiry = metadata.get("nearest_fut_expiry")
+            if nearest_expiry != session_date:
+                continue
+
+            # Invariant: Explicit cycle_start_price required (never substitute unverified default closes)
+            cycle_start_price = metadata.get("cycle_start_price")
+            if (
+                cycle_start_price is None
+                or not isinstance(cycle_start_price, (int, float))
+                or isinstance(cycle_start_price, bool)
+                or not math.isfinite(cycle_start_price)
+                or cycle_start_price <= 0.0
+            ):
                 continue
 
             bars = data.get("bars", [])
-            # Require at least 25 bars (for RSI 14 + cycle lookback ~20 days)
+            # Require at least 25 bars (for RSI 14 + indicators)
             if len(bars) < 25:
+                continue
+
+            # Chronological bar validation (reject future bars, reject unordered bars)
+            valid_bars = True
+            for i, b in enumerate(bars):
+                b_date = str(b.get("session_date") or b.get("day", ""))
+                if b_date and b_date > session_date:
+                    valid_bars = False
+                    break
+                if i > 0 and b_date:
+                    prev_date = str(bars[i - 1].get("session_date") or bars[i - 1].get("day", ""))
+                    if prev_date and b_date < prev_date:
+                        valid_bars = False
+                        break
+            if not valid_bars:
+                continue
+
+            last_bar_date = str(bars[-1].get("session_date") or bars[-1].get("day", ""))
+            if last_bar_date and last_bar_date != session_date:
                 continue
 
             closes = [float(b["close"]) for b in bars]
@@ -126,10 +161,6 @@ class ExpiryReliefStrategy(BaseSwingStrategy):
                 continue
 
             # Condition B: Monthly Expiry Cycle Decline >= 8.0%
-            # If cycle_start_price is given in metadata/context, use it; otherwise use 20 bars ago
-            cycle_start_price = float(metadata.get("cycle_start_price", closes[-21]))
-            if cycle_start_price <= 0:
-                continue
             cycle_return = (curr_close - cycle_start_price) / cycle_start_price
             cycle_decline_pct = abs(cycle_return) * 100.0
 
@@ -191,7 +222,7 @@ class ExpiryReliefStrategy(BaseSwingStrategy):
         session_date: str
     ) -> List[ExitSignalEvent]:
         """
-        Evaluates active post-expiry relief positions for profit targets, stop loss, and 5-day time limits.
+        Evaluates active post-expiry relief positions using conservative adverse-selection execution precedence.
         """
         exits: List[ExitSignalEvent] = []
 
@@ -204,6 +235,7 @@ class ExpiryReliefStrategy(BaseSwingStrategy):
             if not bar:
                 continue
 
+            open_p = float(bar.get("open", bar.get("close", 0.0)))
             high = float(bar["high"])
             low = float(bar["low"])
             close = float(bar["close"])
@@ -213,7 +245,71 @@ class ExpiryReliefStrategy(BaseSwingStrategy):
             target_price = float(pos["target_price"])
             holding_sessions = int(pos.get("holding_sessions", 1))
 
-            # 1. Target Hit
+            # Precedence 1: Opening Gap-Down below Stop Loss (Codex Finding 3)
+            if open_p <= stop_price:
+                exits.append(
+                    ExitSignalEvent(
+                        strategy_id=self.STRATEGY_ID,
+                        symbol=symbol,
+                        session_date=session_date,
+                        position_id=pos_id,
+                        reason="STOP_LOSS",
+                        exit_price=open_p,
+                        shares_to_exit=shares,
+                        trace={"stop_price": stop_price, "bar_open": open_p, "gap_down": True},
+                    )
+                )
+                continue
+
+            # Precedence 2: Opening Gap-Up above Target
+            if open_p >= target_price:
+                exits.append(
+                    ExitSignalEvent(
+                        strategy_id=self.STRATEGY_ID,
+                        symbol=symbol,
+                        session_date=session_date,
+                        position_id=pos_id,
+                        reason="TARGET_HIT",
+                        exit_price=open_p,
+                        shares_to_exit=shares,
+                        trace={"target_price": target_price, "bar_open": open_p, "gap_up": True},
+                    )
+                )
+                continue
+
+            # Precedence 3: Ambiguous Intrabar Range (Both stop and target touched) -> ADVERSE SELECTION: Stop Loss first
+            if low <= stop_price and high >= target_price:
+                exits.append(
+                    ExitSignalEvent(
+                        strategy_id=self.STRATEGY_ID,
+                        symbol=symbol,
+                        session_date=session_date,
+                        position_id=pos_id,
+                        reason="STOP_LOSS",
+                        exit_price=stop_price,
+                        shares_to_exit=shares,
+                        trace={"stop_price": stop_price, "target_price": target_price, "adverse_selection": True},
+                    )
+                )
+                continue
+
+            # Precedence 4: Normal Stop Loss Hit
+            if low <= stop_price:
+                exits.append(
+                    ExitSignalEvent(
+                        strategy_id=self.STRATEGY_ID,
+                        symbol=symbol,
+                        session_date=session_date,
+                        position_id=pos_id,
+                        reason="STOP_LOSS",
+                        exit_price=stop_price,
+                        shares_to_exit=shares,
+                        trace={"stop_price": stop_price, "bar_low": low},
+                    )
+                )
+                continue
+
+            # Precedence 5: Normal Target Hit
             if high >= target_price:
                 exits.append(
                     ExitSignalEvent(
@@ -229,23 +325,7 @@ class ExpiryReliefStrategy(BaseSwingStrategy):
                 )
                 continue
 
-            # 2. Stop Loss Hit
-            if low <= stop_price:
-                exits.append(
-                    ExitSignalEvent(
-                        strategy_id=self.STRATEGY_ID,
-                        symbol=symbol,
-                        session_date=session_date,
-                        position_id=pos_id,
-                        reason="STOP_LOSS",
-                        exit_price=min(stop_price, bar.get("open", stop_price)),
-                        shares_to_exit=shares,
-                        trace={"stop_price": stop_price, "bar_low": low},
-                    )
-                )
-                continue
-
-            # 3. Fixed 5-day Time Stop
+            # Precedence 6: Fixed 5-day Time Stop
             if holding_sessions >= self.max_holding_sessions:
                 exits.append(
                     ExitSignalEvent(

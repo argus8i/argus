@@ -7,9 +7,10 @@ Part of Project Swing Trades (ARGUS 8i Track 2 Liquid Desk).
 Mathematical Guardrails & Invariants:
 1. Fail-closed on missing, NaN, infinite, or corrupt bar data.
 2. Inviolable AGENTS.md Rule 2 Price Floor: Any candidate under Rs 10.00 is immediately rejected.
-3. Pre-registered configuration binding: loads and validates against pre-registered specs.
-4. Immutable SignalEvent contract: produces frozen dataclass events with audit calculation traces.
+3. Pre-registered configuration binding: loads and cryptographically validates against SPEC_MANIFEST.sha256.
+4. Immutable SignalEvent contract: produces frozen dataclass events with immutable MappingProxy calculation traces.
 5. Strict Stop and Target Ordering: Stop Loss < Reference Entry < Target Price (with finite positive values).
+6. Strict T_PLUS_1 execution timing: entry_session must be strictly after session_date with valid ISO dates.
 """
 
 from __future__ import annotations
@@ -17,14 +18,18 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
+import hashlib
 import math
 import numbers
 from pathlib import Path
+import re
+import types
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
 import yaml
 
 
 IST = timezone(timedelta(hours=5, minutes=30))
+_ISO_DATE_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 @dataclass(frozen=True)
@@ -36,14 +41,14 @@ class SignalEvent:
     strategy_id: str
     symbol: str
     session_date: str          # Date of signal generation (T)
-    entry_session: str         # Intended execution session (e.g. T+1)
+    entry_session: str         # Intended execution session (T+1, must be > session_date)
     signal_type: str = "BUY"
     order_type: str = "BUY_STOP"
     reference_price: float = 0.0
     stop_loss_price: float = 0.0
     target_price: float = 0.0
     priority_score: float = 0.0
-    trace: Dict[str, Any] = field(default_factory=dict)
+    trace: Mapping[str, Any] = field(default_factory=dict)
     created_at: str = ""
 
     def __post_init__(self) -> None:
@@ -51,11 +56,23 @@ class SignalEvent:
             raise ValueError("strategy_id must be a non-empty string")
         if not isinstance(self.symbol, str) or not self.symbol.strip():
             raise ValueError("symbol must be a non-empty string")
-        if not isinstance(self.session_date, str) or not self.session_date.strip():
-            raise ValueError("session_date must be a valid ISO date string")
-        if not isinstance(self.entry_session, str) or not self.entry_session.strip():
-            raise ValueError("entry_session must be a valid ISO date string")
 
+        # Strict Date Validation
+        for date_name, date_val in [("session_date", self.session_date), ("entry_session", self.entry_session)]:
+            if not isinstance(date_val, str) or not _ISO_DATE_REGEX.match(date_val):
+                raise ValueError(f"{date_name} must be a valid ISO date string (YYYY-MM-DD), got {date_val!r}")
+            try:
+                datetime.strptime(date_val, "%Y-%m-%d")
+            except ValueError as e:
+                raise ValueError(f"{date_name} is not a valid calendar date: {e}") from e
+
+        # Rule 4 & T_PLUS_1 Invariant: Entry session must be strictly after signal session
+        if self.entry_session <= self.session_date:
+            raise ValueError(
+                f"entry_session ({self.entry_session}) must be strictly after session_date ({self.session_date})"
+            )
+
+        # Finite Numeric Validation
         for name, val in [
             ("reference_price", self.reference_price),
             ("stop_loss_price", self.stop_loss_price),
@@ -82,6 +99,13 @@ class SignalEvent:
                 f"target_price ({self.target_price}) must be strictly greater than "
                 f"reference_price ({self.reference_price})"
             )
+
+        # Mandatory Immutable Trace Contract
+        if not isinstance(self.trace, Mapping) or not self.trace:
+            raise ValueError("trace must be a non-empty mapping containing calculation proof")
+
+        # Wrap in types.MappingProxyType so that mutation raises TypeError
+        object.__setattr__(self, "trace", types.MappingProxyType(dict(self.trace)))
 
         if not self.created_at:
             object.__setattr__(self, "created_at", datetime.now(IST).isoformat(timespec="seconds"))
@@ -115,7 +139,7 @@ class SignalEvent:
             "risk_per_share": self.risk_per_share,
             "priority_score": self.priority_score,
             "reward_risk_ratio": self.reward_risk_ratio,
-            "trace": self.trace,
+            "trace": dict(self.trace),
             "created_at": self.created_at,
         }
 
@@ -132,7 +156,7 @@ class ExitSignalEvent:
     reason: str                # TARGET_HIT, STOP_LOSS, TIME_STOP, TRAILING_STOP, SURVEILLANCE_PREEMPTION
     exit_price: float
     shares_to_exit: int
-    trace: Dict[str, Any] = field(default_factory=dict)
+    trace: Mapping[str, Any] = field(default_factory=dict)
     created_at: str = ""
 
     def __post_init__(self) -> None:
@@ -140,12 +164,18 @@ class ExitSignalEvent:
             raise ValueError("strategy_id must be a non-empty string")
         if not isinstance(self.symbol, str) or not self.symbol.strip():
             raise ValueError("symbol must be a non-empty string")
+        if not isinstance(self.session_date, str) or not _ISO_DATE_REGEX.match(self.session_date):
+            raise ValueError(f"session_date must be a valid ISO date string, got {self.session_date!r}")
         if not isinstance(self.reason, str) or not self.reason.strip():
             raise ValueError("reason must be a non-empty string")
         if not isinstance(self.exit_price, (int, float)) or isinstance(self.exit_price, bool) or not math.isfinite(self.exit_price) or self.exit_price <= 0:
             raise ValueError(f"exit_price must be a positive finite float, got {self.exit_price!r}")
         if not isinstance(self.shares_to_exit, int) or isinstance(self.shares_to_exit, bool) or self.shares_to_exit <= 0:
             raise ValueError(f"shares_to_exit must be a positive integer, got {self.shares_to_exit!r}")
+
+        # Wrap trace in MappingProxyType
+        object.__setattr__(self, "trace", types.MappingProxyType(dict(self.trace)))
+
         if not self.created_at:
             object.__setattr__(self, "created_at", datetime.now(IST).isoformat(timespec="seconds"))
 
@@ -158,7 +188,7 @@ class ExitSignalEvent:
             "reason": self.reason,
             "exit_price": self.exit_price,
             "shares_to_exit": self.shares_to_exit,
-            "trace": self.trace,
+            "trace": dict(self.trace),
             "created_at": self.created_at,
         }
 
@@ -171,12 +201,17 @@ class BaseSwingStrategy(ABC):
     def __init__(
         self,
         spec_path: Optional[Union[str, Path]] = None,
-        config: Optional[Dict[str, Any]] = None
+        config: Optional[Dict[str, Any]] = None,
+        allow_unreviewed_overrides: bool = False
     ) -> None:
         self.config: Dict[str, Any] = {}
         if spec_path is not None:
             self.config = self.load_spec(spec_path)
         if config is not None:
+            if spec_path is not None and not allow_unreviewed_overrides:
+                raise ValueError(
+                    "Unreviewed configuration overrides over pre-registered spec are strictly forbidden (Rule 8 v2)"
+                )
             self.config.update(config)
         self._validate_config()
 
@@ -211,11 +246,37 @@ class BaseSwingStrategy(ABC):
         """
         pass
 
-    def load_spec(self, spec_path: Union[str, Path]) -> Dict[str, Any]:
-        """Loads and parses a YAML strategy specification."""
-        p = Path(spec_path)
+    def load_spec(self, spec_path: Union[str, Path], verify_manifest: bool = True) -> Dict[str, Any]:
+        """
+        Loads and parses a YAML strategy specification, verifying its SHA-256 against SPEC_MANIFEST.sha256.
+        """
+        p = Path(spec_path).resolve()
         if not p.is_file():
             raise FileNotFoundError(f"Strategy specification file not found: {p}")
+
+        if verify_manifest:
+            manifest_p = p.parent / "SPEC_MANIFEST.sha256"
+            if manifest_p.is_file():
+                manifest_text = manifest_p.read_text(encoding="utf-8")
+                raw_bytes = p.read_bytes().replace(b"\r\n", b"\n")
+                calc_sha = hashlib.sha256(raw_bytes).hexdigest()
+                matched = False
+                for line in manifest_text.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1] == p.name:
+                        expected_sha = parts[0].lower()
+                        if calc_sha.lower() != expected_sha:
+                            raise ValueError(
+                                f"Specification {p.name} hash {calc_sha} does not match locked manifest {expected_sha}"
+                            )
+                        matched = True
+                        break
+                if not matched:
+                    raise ValueError(f"Specification {p.name} not found in manifest {manifest_p.name}")
+
         with open(p, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
         if not isinstance(data, dict):
@@ -262,7 +323,6 @@ class BaseSwingStrategy(ABC):
         if len(tr_values) < period:
             return None
 
-        # Return the mean of the last `period` true ranges
         recent_trs = tr_values[-period:]
         atr = sum(recent_trs) / period
         return round(atr, 4) if atr > 0 else None
@@ -289,7 +349,6 @@ class BaseSwingStrategy(ABC):
             return None
 
         alpha = 2.0 / (period + 1.0)
-        # Seed with SMA of first period bars
         ema = sum(prices[:period]) / period
         for price in prices[period:]:
             ema = alpha * price + (1.0 - alpha) * ema

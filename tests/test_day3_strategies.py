@@ -60,6 +60,7 @@ def test_signal_event_frozen_immutability():
         reference_price=3000.0,
         stop_loss_price=2900.0,
         target_price=3200.0,
+        trace={"test": 123},
     )
     with pytest.raises(Exception):
         event.reference_price = 3050.0  # Cannot mutate frozen instance
@@ -76,6 +77,7 @@ def test_signal_event_rule2_price_floor_rejection():
             reference_price=9.95,
             stop_loss_price=8.50,
             target_price=12.00,
+            trace={"test": 123},
         )
 
 
@@ -90,6 +92,7 @@ def test_signal_event_inverted_stop_loss_rejection():
             reference_price=1500.0,
             stop_loss_price=1520.0,
             target_price=1600.0,
+            trace={"test": 123},
         )
 
 
@@ -104,6 +107,7 @@ def test_signal_event_invalid_target_rejection():
             reference_price=1500.0,
             stop_loss_price=1450.0,
             target_price=1490.0,
+            trace={"test": 123},
         )
 
 
@@ -117,6 +121,7 @@ def test_signal_event_nan_inf_boolean_rejections():
             reference_price=float("nan"),
             stop_loss_price=1450.0,
             target_price=1600.0,
+            trace={"test": 123},
         )
     with pytest.raises(ValueError, match="must be a finite float"):
         SignalEvent(
@@ -127,6 +132,7 @@ def test_signal_event_nan_inf_boolean_rejections():
             reference_price=1500.0,
             stop_loss_price=1450.0,
             target_price=float("inf"),
+            trace={"test": 123},
         )
     with pytest.raises(ValueError, match="must be a finite float"):
         SignalEvent(
@@ -137,6 +143,7 @@ def test_signal_event_nan_inf_boolean_rejections():
             reference_price=True,  # boolean rejected
             stop_loss_price=1450.0,
             target_price=1600.0,
+            trace={"test": 123},
         )
 
 
@@ -312,25 +319,25 @@ def test_delivery_accumulation_rejections():
     # 1. Non-FNO underlying rejected
     bars = make_delivery_bars(n=25)
     data = {"NON_FNO": {"metadata": {"is_fno_underlying": False, "is_surveillance": False, "series": "EQ"}, "bars": bars}}
-    assert len(strat.generate_signals("2026-09-25", data)) == 0
+    assert len(strat.generate_signals("2026-09-25", data, context={"next_session": "2026-09-26"})) == 0
 
     # 2. Surveillance scrip rejected
     data = {"SURV": {"metadata": {"is_fno_underlying": True, "is_surveillance": True, "series": "EQ"}, "bars": bars}}
-    assert len(strat.generate_signals("2026-09-25", data)) == 0
+    assert len(strat.generate_signals("2026-09-25", data, context={"next_session": "2026-09-26"})) == 0
 
     # 3. Non-EQ series rejected
     data = {"BE_SERIES": {"metadata": {"is_fno_underlying": True, "is_surveillance": False, "series": "BE"}, "bars": bars}}
-    assert len(strat.generate_signals("2026-09-25", data)) == 0
+    assert len(strat.generate_signals("2026-09-25", data, context={"next_session": "2026-09-26"})) == 0
 
     # 4. Sub-Rs 10 price rejected (Rule 2)
     penny_bars = make_delivery_bars(n=25, base_price=8.0)
     data = {"PENNY": {"metadata": {"is_fno_underlying": True, "is_surveillance": False, "series": "EQ"}, "bars": penny_bars}}
-    assert len(strat.generate_signals("2026-09-25", data)) == 0
+    assert len(strat.generate_signals("2026-09-25", data, context={"next_session": "2026-09-26"})) == 0
 
     # 5. Uncompressed range rejected
     uncomp_bars = make_delivery_bars(n=25, compressed=False)
     data = {"UNCOMP": {"metadata": {"is_fno_underlying": True, "is_surveillance": False, "series": "EQ"}, "bars": uncomp_bars}}
-    assert len(strat.generate_signals("2026-09-25", data)) == 0
+    assert len(strat.generate_signals("2026-09-25", data, context={"next_session": "2026-09-26"})) == 0
 
 
 def test_delivery_accumulation_exits():
@@ -379,17 +386,24 @@ def test_delivery_accumulation_exits():
 # 4. Sleeve B: 52-Week High Momentum Tests
 # =============================================================================
 
-def make_high52_bars(n=100, base_high=1000.0, near_52w=True, breaking_out=True):
+def make_high52_bars(n=260, base_high=1000.0, near_52w=True, breaking_out=True):
     bars = []
     for i in range(n):
-        high = base_high * 0.90 + i * 0.5
+        high = base_high * 0.90 + i * 0.2
         low = high - 10.0
         close = high - 2.0
         vol = 500_000.0
-        bars.append({"high": high, "low": low, "close": close, "volume": vol})
+        bars.append({
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": vol,
+            "session_date": f"2025-{(i // 25) + 1:02d}-{(i % 25) + 1:02d}",
+        })
 
     # Set 52w high at index 20
     bars[20]["high"] = base_high
+    bars[-1]["session_date"] = "2026-10-01"
 
     if near_52w:
         # Last bar is within 2% of base_high
@@ -418,7 +432,7 @@ def make_high52_bars(n=100, base_high=1000.0, near_52w=True, breaking_out=True):
 
 def test_high52_momentum_signal():
     strat = High52MomentumStrategy()
-    bars = make_high52_bars(n=100, near_52w=True, breaking_out=True)
+    bars = make_high52_bars(n=260, near_52w=True, breaking_out=True)
 
     market_data = {
         "RELIANCE": {
@@ -431,7 +445,7 @@ def test_high52_momentum_signal():
         }
     }
 
-    signals = strat.generate_signals("2026-10-01", market_data)
+    signals = strat.generate_signals("2026-10-01", market_data, context={"next_session": "2026-10-02"})
     assert len(signals) == 1
     sig = signals[0]
     assert sig.symbol == "RELIANCE"
@@ -446,14 +460,14 @@ def test_high52_momentum_rejections():
     strat = High52MomentumStrategy()
 
     # Further than 3% from 52w high
-    bars = make_high52_bars(n=100, near_52w=False)
+    bars = make_high52_bars(n=260, near_52w=False)
     data = {"FAR_FROM_HIGH": {"metadata": {"is_fno_underlying": True, "is_surveillance": False, "series": "EQ"}, "bars": bars}}
-    assert len(strat.generate_signals("2026-10-01", data)) == 0
+    assert len(strat.generate_signals("2026-10-01", data, context={"next_session": "2026-10-02"})) == 0
 
     # Not breaking out of 20d high
-    bars2 = make_high52_bars(n=100, near_52w=True, breaking_out=False)
+    bars2 = make_high52_bars(n=260, near_52w=True, breaking_out=False)
     data2 = {"NO_BREAKOUT": {"metadata": {"is_fno_underlying": True, "is_surveillance": False, "series": "EQ"}, "bars": bars2}}
-    assert len(strat.generate_signals("2026-10-01", data2)) == 0
+    assert len(strat.generate_signals("2026-10-01", data2, context={"next_session": "2026-10-02"})) == 0
 
 
 def test_high52_momentum_exits():
@@ -497,10 +511,19 @@ def test_high52_momentum_exits():
 # =============================================================================
 
 def make_expiry_bars(n=30, base_price=100.0, cycle_decline_pct=10.0, oversold=True):
+    from datetime import date, timedelta
+    base_dt = date(2026, 8, 1)
     bars = []
     for i in range(n):
         p = base_price - (i * 0.4)
-        bars.append({"high": p + 1.0, "low": p - 1.0, "close": p, "volume": 4_000_000.0})
+        cur_dt = base_dt + timedelta(days=i)
+        bars.append({
+            "high": p + 1.0,
+            "low": p - 1.0,
+            "close": p,
+            "volume": 4_000_000.0,
+            "session_date": cur_dt.isoformat(),
+        })
 
     # Ensure last bar is heavily down from bar 20 sessions ago
     start_p = bars[-21]["close"]
@@ -508,6 +531,7 @@ def make_expiry_bars(n=30, base_price=100.0, cycle_decline_pct=10.0, oversold=Tr
     bars[-1]["high"] = bars[-1]["close"] + 0.5
     bars[-1]["low"] = bars[-1]["close"] - 1.0
     bars[-1]["volume"] = 4_000_000.0
+    bars[-1]["session_date"] = "2026-09-24"
 
     return bars
 
@@ -523,13 +547,14 @@ def test_expiry_relief_signals():
                 "is_surveillance": False,
                 "series": "EQ",
                 "nearest_fut_expiry": "2026-09-24",
+                "cycle_start_price": bars[-21]["close"],
             },
             "bars": bars,
         }
     }
 
     # On non-expiry date: zero signals
-    no_sig = strat.generate_signals("2026-09-23", market_data, context={"is_expiry_session": False})
+    no_sig = strat.generate_signals("2026-09-23", market_data, context={"is_expiry_session": False, "next_session": "2026-09-24"})
     assert len(no_sig) == 0
 
     # On expiry date: signal fires
@@ -555,11 +580,17 @@ def test_expiry_relief_rejections():
     mild_bars = make_expiry_bars(n=30, cycle_decline_pct=4.0)
     data = {
         "MILD_DROP": {
-            "metadata": {"is_fno_underlying": True, "is_surveillance": False, "series": "EQ"},
+            "metadata": {
+                "is_fno_underlying": True,
+                "is_surveillance": False,
+                "series": "EQ",
+                "nearest_fut_expiry": "2026-09-24",
+                "cycle_start_price": mild_bars[-21]["close"],
+            },
             "bars": mild_bars,
         }
     }
-    sigs = strat.generate_signals("2026-09-24", data, context={"is_expiry_session": True})
+    sigs = strat.generate_signals("2026-09-24", data, context={"is_expiry_session": True, "next_session": "2026-09-25"})
     assert len(sigs) == 0
 
 
@@ -633,9 +664,187 @@ def test_simultaneous_signals_deterministic_sorting():
         },
     }
 
-    signals = strat.generate_signals("2026-09-25", market_data)
+    signals = strat.generate_signals("2026-09-25", market_data, context={"next_session": "2026-09-26"})
     assert len(signals) == 2
     # HIGHER_SCORE must be ranked first
     assert signals[0].symbol == "HIGHER_SCORE"
     assert signals[1].symbol == "LOWER_SCORE"
     assert signals[0].priority_score > signals[1].priority_score
+
+
+# =============================================================================
+# 7. Codex Round 1 Adversarial Regression Probes
+# =============================================================================
+
+def test_codex_finding2_eligibility_and_timing_inputs_fail_closed():
+    strat = High52MomentumStrategy()
+    bars = make_high52_bars(n=100, near_52w=True, breaking_out=True)
+
+    # A: String 'False' for is_fno_underlying and None for is_surveillance must be rejected fail-closed
+    data_bad_meta = {
+        "TEST_SCRIP": {
+            "metadata": {"is_fno_underlying": "False", "is_surveillance": None, "series": "EQ"},
+            "bars": bars,
+        }
+    }
+    assert len(strat.generate_signals("2026-10-01", data_bad_meta, context={"next_session": "2026-10-02"})) == 0
+
+    # B: Missing series must be rejected
+    data_no_series = {
+        "TEST_SCRIP": {
+            "metadata": {"is_fno_underlying": True, "is_surveillance": False},
+            "bars": bars,
+        }
+    }
+    assert len(strat.generate_signals("2026-10-01", data_no_series, context={"next_session": "2026-10-02"})) == 0
+
+    # C: Future bar date (2099-01-01) must be rejected
+    bars_future = [dict(b) for b in bars]
+    bars_future[-1]["session_date"] = "2099-01-01"
+    data_future = {
+        "TEST_SCRIP": {
+            "metadata": {"is_fno_underlying": True, "is_surveillance": False, "series": "EQ"},
+            "bars": bars_future,
+        }
+    }
+    assert len(strat.generate_signals("2026-10-01", data_future, context={"next_session": "2026-10-02"})) == 0
+
+    # D: Missing next_session in context must be rejected fail-closed
+    data_valid = {
+        "TEST_SCRIP": {
+            "metadata": {"is_fno_underlying": True, "is_surveillance": False, "series": "EQ"},
+            "bars": bars,
+        }
+    }
+    assert len(strat.generate_signals("2026-10-01", data_valid, context=None)) == 0
+    assert len(strat.generate_signals("2026-10-01", data_valid, context={"next_session": "2026-10-01"})) == 0  # Not strictly after
+
+
+def test_codex_finding3_exit_evaluation_gap_down_and_ambiguous_bar():
+    strat = High52MomentumStrategy()
+    open_pos = [
+        {
+            "strategy_id": "HIGH52_MOMENTUM",
+            "symbol": "SCRIP_A",
+            "position_id": "POS_01",
+            "entry_price": 100.0,
+            "stop_price": 95.0,
+            "target_price": 110.0,
+            "shares": 50,
+            "holding_sessions": 2,
+        }
+    ]
+
+    # Codex Finding 3 scenario:
+    # stop = 95, target = 110. Bar open = 90, high = 115, low = 85, close = 100.
+    # Must exit STOP_LOSS at open 90.0, NOT TARGET_HIT!
+    bars_gap_stop = {"SCRIP_A": {"open": 90.0, "high": 115.0, "low": 85.0, "close": 100.0}}
+    exits = strat.evaluate_exits(open_pos, bars_gap_stop, "2026-10-02")
+    assert len(exits) == 1
+    assert exits[0].reason == "STOP_LOSS"
+    assert exits[0].exit_price == 90.0
+
+    # Ambiguous normal open: open = 100.0, high = 115.0, low = 85.0 (both touched).
+    # Conservative adverse selection: STOP_LOSS takes precedence!
+    bars_ambiguous = {"SCRIP_A": {"open": 100.0, "high": 115.0, "low": 85.0, "close": 100.0}}
+    exits_amb = strat.evaluate_exits(open_pos, bars_ambiguous, "2026-10-02")
+    assert len(exits_amb) == 1
+    assert exits_amb[0].reason == "STOP_LOSS"
+
+
+def test_codex_finding4_immutable_mandatory_trace_and_date_validation():
+    # A: Trace mutation must raise error
+    event = SignalEvent(
+        strategy_id="HIGH52_MOMENTUM",
+        symbol="SBIN",
+        session_date="2026-10-01",
+        entry_session="2026-10-02",
+        reference_price=800.0,
+        stop_loss_price=780.0,
+        target_price=840.0,
+        priority_score=1.0,
+        trace={"close": 800.0, "atr": 10.0, "dtv_rs": 400000000.0},
+    )
+    with pytest.raises((TypeError, AttributeError)):
+        event.trace["close"] = -123
+
+    # B: Empty trace must be rejected
+    with pytest.raises(ValueError, match="trace must be a non-empty mapping"):
+        SignalEvent(
+            strategy_id="HIGH52_MOMENTUM",
+            symbol="SBIN",
+            session_date="2026-10-01",
+            entry_session="2026-10-02",
+            reference_price=800.0,
+            stop_loss_price=780.0,
+            target_price=840.0,
+            priority_score=1.0,
+            trace={},
+        )
+
+    # C: Invalid date format must be rejected
+    with pytest.raises(ValueError, match="must be a valid ISO date"):
+        SignalEvent(
+            strategy_id="HIGH52_MOMENTUM",
+            symbol="SBIN",
+            session_date="not-a-date",
+            entry_session="2026-10-02",
+            reference_price=800.0,
+            stop_loss_price=780.0,
+            target_price=840.0,
+            trace={"close": 800.0, "atr": 10.0, "dtv_rs": 400000000.0},
+        )
+
+    # D: entry_session <= session_date must be rejected
+    with pytest.raises(ValueError, match="entry_session .* must be strictly after"):
+        SignalEvent(
+            strategy_id="HIGH52_MOMENTUM",
+            symbol="SBIN",
+            session_date="2026-10-02",
+            entry_session="2026-10-01",
+            reference_price=800.0,
+            stop_loss_price=780.0,
+            target_price=840.0,
+            trace={"close": 800.0, "atr": 10.0, "dtv_rs": 400000000.0},
+        )
+
+
+def test_codex_finding5_locked_strategy_definitions_fail_closed(tmp_path):
+    # A: High52 with 100 bars (< 252 bars) must NOT emit a signal
+    strat_52 = High52MomentumStrategy()
+    bars_100 = make_high52_bars(n=100, near_52w=True, breaking_out=True)
+    data_100 = {
+        "SHORT_HIST": {
+            "metadata": {"is_fno_underlying": True, "is_surveillance": False, "series": "EQ"},
+            "bars": bars_100,
+        }
+    }
+    sigs = strat_52.generate_signals("2026-10-01", data_100, context={"next_session": "2026-10-02"})
+    assert len(sigs) == 0
+
+    # B: Expiry Relief without explicit cycle_start_price must NOT emit a signal
+    strat_exp = ExpiryReliefStrategy()
+    bars_exp = make_expiry_bars(n=30)
+    data_no_csp = {
+        "EXP_SCRIP": {
+            "metadata": {
+                "is_fno_underlying": True,
+                "is_surveillance": False,
+                "series": "EQ",
+                "nearest_fut_expiry": "2026-09-24",
+                # cycle_start_price omitted
+            },
+            "bars": bars_exp,
+        }
+    }
+    sigs_exp = strat_exp.generate_signals("2026-09-24", data_no_csp, context={"is_expiry_session": True, "next_session": "2026-09-25"})
+    assert len(sigs_exp) == 0
+
+    # C: Spec tampering must raise ValueError upon manifest mismatch
+    tampered_yaml = tmp_path / "delivery_accumulation_v1.yaml"
+    tampered_yaml.write_text("strategy_name: HACKED\n", encoding="utf-8")
+    manifest_file = tmp_path / "SPEC_MANIFEST.sha256"
+    manifest_file.write_text("0000000000000000000000000000000000000000000000000000000000000000  delivery_accumulation_v1.yaml\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not match locked manifest"):
+        DeliveryAccumulationStrategy(spec_path=tampered_yaml)
