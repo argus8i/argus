@@ -814,3 +814,11 @@
 [2026-10-01 20:17:43] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
 [2026-10-01 20:17:43] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
 [2026-10-01 20:17:43] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-10-02 00:10:16] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-10-02 00:10:16] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-10-02 00:10:16] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-10-02 00:10:16] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
+[2026-10-02 00:12:47] FAIL-CLOSED: Parser replay verification failed: RAW_SHA256_MISMATCH_ASM
+[2026-10-02 00:12:56] FAIL-CLOSED: Parser replay verification failed: REPLAY_MISMATCH_GSM
+[2026-10-02 00:13:04] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_FNO
+[2026-10-02 00:13:32] FAIL-CLOSED: Parser replay verification failed: RAW_FILENAME_BINDING_MISMATCH_ASM
