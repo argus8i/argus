@@ -100,16 +100,18 @@ KNOWN_WEEKEND_SESSIONS = {
 }
 
 KNOWN_EXCHANGE_HOLIDAYS = {
-    # 2026 Official NSE Trading Holidays
+    # 2026 Official NSE Trading Holidays / Non-Trading Exchange Dates
+    date(2026, 1, 15),   # Municipal / Special Holiday (No CM file on disk)
     date(2026, 1, 26),   # Republic Day
-    date(2026, 2, 18),   # Maha Shivratri
     date(2026, 3, 3),    # Holi
     date(2026, 3, 26),   # Shri Ram Navami
+    date(2026, 3, 31),   # Id-Ul-Fitr / Annual Account Closing
     date(2026, 4, 3),    # Good Friday
     date(2026, 4, 14),   # Dr. Baba Saheb Ambedkar Jayanti
     date(2026, 5, 1),    # Maharashtra Day
     date(2026, 5, 28),   # Bakri Id
     date(2026, 6, 26),   # Muharram
+    date(2026, 9, 14),   # Milad-un-Nabi (No CM file on disk)
     date(2026, 10, 2),   # Mahatma Gandhi Jayanti
     date(2026, 10, 20),  # Dussehra
     date(2026, 11, 10),  # Diwali Balipratipada
