@@ -1,0 +1,41 @@
+strategy_name: HIGH52_MOMENTUM
+version: 1.0.0
+track: TRACK_2
+category: ANCHORING_MOMENTUM_SWING
+pre_registered_at: "2026-10-01T22:40:00+05:30"
+author: antigravity
+
+eligibility:
+  min_price: 10.00
+  min_dtv_rs: 300000000.0  # 30 Cr
+  required_series: "EQ"
+  is_fno_underlying: true
+  is_surveillance: false
+  enforce_slot_cap: true
+
+setup_rules:
+  lookback_days_52w: 252              # 52 weeks = 252 trading sessions
+  consolidation_days: 20
+  proximity_pct_to_52w_high: 3.0      # Close >= 0.97 * High(252)
+  volume_expansion_ratio: 1.0         # 20-day avg vol >= 50-day avg vol
+  market_regime_filter: "EMA_50"      # Close >= EMA(50) (bullish structure)
+
+entry_rules:
+  trigger: "BREAKOUT_ABOVE_20D_CONSOLIDATION_HIGH"
+  high_lookback_days: 20
+  order_type: "BUY_STOP_OR_MARKET_OPEN"
+  entry_session: "T_PLUS_1"
+
+risk_and_exits:
+  stop_loss_atr_mult: 2.0             # Stop = Entry - 2.0 * ATR(20)
+  target_profit_atr_mult: 4.0         # Target = Entry + 4.0 * ATR(20) (2.0R gross)
+  max_holding_sessions: 10            # Time stop at session 10
+  trailing_exit_indicator: "EMA_20"   # Trailing exit after session 3 if close < 20 EMA
+  single_trade_risk_budget_rs: 1500.0
+  single_slot_cap_rs: 38000.0
+  max_portfolio_slots: 3
+  participation_volume_cap_pct: 15.0
+
+scoring:
+  priority_formula: "close / high_52w"  # Highest proximity to ATH/52w high ranked first
+  deterministic_sort: "DESCENDING"

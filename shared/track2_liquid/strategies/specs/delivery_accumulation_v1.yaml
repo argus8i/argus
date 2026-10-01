@@ -1,0 +1,41 @@
+strategy_name: DELIVERY_ACCUMULATION
+version: 1.0.0
+track: TRACK_2
+category: FLOAT_ABSORPTION_SWING
+pre_registered_at: "2026-10-01T22:40:00+05:30"
+author: antigravity
+
+eligibility:
+  min_price: 10.00
+  min_dtv_rs: 300000000.0  # 30 Cr
+  required_series: "EQ"
+  is_fno_underlying: true
+  is_surveillance: false
+  enforce_slot_cap: true
+
+setup_rules:
+  lookback_days: 20
+  compression_days: 5
+  delivery_pct_expansion_ratio: 2.0  # 20-day delivery % >= 2.0x 20-day average delivery %
+  range_compression_ratio: 0.75       # 5-day price range <= 0.75x ATR(20)
+
+entry_rules:
+  trigger: "BREAKOUT_ABOVE_N_DAY_HIGH"
+  high_lookback_days: 5
+  volume_expansion_ratio: 1.5         # session volume >= 1.5x 20-day avg volume
+  order_type: "BUY_STOP_OR_MARKET_OPEN"
+  entry_session: "T_PLUS_1"
+
+risk_and_exits:
+  stop_loss_atr_mult: 1.5             # Stop = Entry - 1.5 * ATR(20)
+  target_profit_atr_mult: 3.0         # Target = Entry + 3.0 * ATR(20) (2.0R gross)
+  max_holding_sessions: 7             # Time-based stop at session 7 close
+  trailing_exit_indicator: "EMA_5"    # Trailing exit after session 3 if close < 5 EMA
+  single_trade_risk_budget_rs: 1500.0
+  single_slot_cap_rs: 38000.0
+  max_portfolio_slots: 3
+  participation_volume_cap_pct: 15.0
+
+scoring:
+  priority_formula: "(volume / vol_ma20) * (delivery_pct / deliv_ma20)"
+  deterministic_sort: "DESCENDING"

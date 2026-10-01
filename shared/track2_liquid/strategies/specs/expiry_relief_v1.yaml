@@ -1,0 +1,40 @@
+strategy_name: EXPIRY_RELIEF
+version: 1.0.0
+track: TRACK_2
+category: DERIVATIVE_PIN_MEAN_REVERSION
+pre_registered_at: "2026-10-01T22:40:00+05:30"
+author: antigravity
+
+eligibility:
+  min_price: 10.00
+  min_dtv_rs: 300000000.0  # 30 Cr
+  required_series: "EQ"
+  is_fno_underlying: true
+  is_surveillance: false
+  enforce_slot_cap: true
+
+setup_rules:
+  expiry_cycle_min_decline_pct: 8.0   # Scrip fell >= 8.0% during concluding monthly expiry cycle
+  rsi_lookback_period: 14
+  rsi_max_threshold: 30.0             # RSI(14) <= 30.0 (oversold pin)
+  timing_trigger: "POST_EXPIRY_SESSION_1" # Strictly 1st trading session post-monthly expiry
+
+entry_rules:
+  trigger: "MARKET_OPEN_REBOUND"
+  order_type: "BUY_MARKET_OPEN"
+  entry_session: "T_PLUS_1"
+
+risk_and_exits:
+  stop_loss_type: "EXPIRY_DAY_LOW_BUFFER" # Stop = Expiry Day Low - 0.5 * ATR(14)
+  stop_loss_atr_mult: 1.5             # Fallback stop: Entry - 1.5 * ATR(14)
+  target_profit_pct: 3.5              # +3.5% quick mean reversion target
+  target_profit_atr_mult: 3.0         # Or 3.0 ATR (+2.0R gross)
+  max_holding_sessions: 5             # Time stop strictly 5 sessions
+  single_trade_risk_budget_rs: 1500.0
+  single_slot_cap_rs: 38000.0
+  max_portfolio_slots: 3
+  participation_volume_cap_pct: 15.0
+
+scoring:
+  priority_formula: "(30.0 - rsi) * abs(cycle_decline_pct)"
+  deterministic_sort: "DESCENDING"
