@@ -32,6 +32,8 @@ from antigravity.daemons.inbox_worker import (
     compute_payload_hash,
     get_current_ist,
     get_process_create_time_nt,
+    validate_message_schema,
+    verify_message_auth,
     write_json_atomic,
 )
 from antigravity.daemons.tri_agent_bus import (
@@ -803,5 +805,313 @@ def test_nonce_helpers_terminal_state_immunity():
         # 4. Attempt to mutate DEAD -> RECOVERING via mark_nonce_for_recovery
         store.mark_nonce_for_recovery("NONCE-D2", message_id=dead_msg)
         assert store.get_message_state(dead_msg) == "DEAD", "mark_nonce_for_recovery mutated DEAD to RECOVERING!"
+
+
+# ==============================================================================
+# PROBE 10: Terminal Nonce Rows Immunity (Codex Finding 1)
+# ==============================================================================
+def test_terminal_nonce_rows_immunity():
+    """
+    Finding P1: Terminal nonce rows in seen_nonces (COMPLETED, FAILED) must be immutable.
+    - mark_nonce_for_recovery on COMPLETED returns False; nonce state remains COMPLETED.
+    - mark_nonce_failed on COMPLETED returns False; nonce state remains COMPLETED.
+    - mark_nonce_completed on FAILED returns False; nonce state remains FAILED.
+    - mark_nonce_for_recovery on FAILED returns False; nonce state remains FAILED.
+    """
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        db_path = os.path.join(tmpdir, "admissions.db")
+        store = DurableAdmissionStore(db_path)
+
+        nonce_c = "NONCE-TERM-COMP"
+        nonce_f = "NONCE-TERM-FAIL"
+
+        # Initialize nonces directly into seen_nonces
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO seen_nonces (nonce, sender, timestamp_ist, recorded_at, state) VALUES (?, ?, ?, ?, ?)",
+                (nonce_c, "CODEX", "2026-10-01T09:00:00+05:30", time.time(), "COMPLETED")
+            )
+            conn.execute(
+                "INSERT INTO seen_nonces (nonce, sender, timestamp_ist, recorded_at, state) VALUES (?, ?, ?, ?, ?)",
+                (nonce_f, "CODEX", "2026-10-01T09:00:00+05:30", time.time(), "FAILED")
+            )
+
+        # 1. Attempt to mutate COMPLETED -> RECOVERED_RETRY_PENDING
+        res1 = store.mark_nonce_for_recovery(nonce_c)
+        assert res1 is False
+        with sqlite3.connect(db_path) as conn:
+            row1 = conn.execute("SELECT state FROM seen_nonces WHERE nonce = ?", (nonce_c,)).fetchone()
+            assert row1[0] == "COMPLETED"
+
+        # 2. Attempt to mutate COMPLETED -> FAILED
+        res2 = store.mark_nonce_failed(nonce_c)
+        assert res2 is False
+        with sqlite3.connect(db_path) as conn:
+            row2 = conn.execute("SELECT state FROM seen_nonces WHERE nonce = ?", (nonce_c,)).fetchone()
+            assert row2[0] == "COMPLETED"
+
+        # 3. Attempt to mutate FAILED -> COMPLETED
+        res3 = store.mark_nonce_completed(nonce_f)
+        assert res3 is False
+        with sqlite3.connect(db_path) as conn:
+            row3 = conn.execute("SELECT state FROM seen_nonces WHERE nonce = ?", (nonce_f,)).fetchone()
+            assert row3[0] == "FAILED"
+
+        # 4. Attempt to mutate FAILED -> RECOVERED_RETRY_PENDING
+        res4 = store.mark_nonce_for_recovery(nonce_f)
+        assert res4 is False
+        with sqlite3.connect(db_path) as conn:
+            row4 = conn.execute("SELECT state FROM seen_nonces WHERE nonce = ?", (nonce_f,)).fetchone()
+            assert row4[0] == "FAILED"
+
+
+# ==============================================================================
+# PROBE 11: Terminal Admission Rejection On Fresh Nonces (Codex Finding 2)
+# ==============================================================================
+def test_terminal_admission_rejects_fresh_nonces():
+    """
+    Finding P1: Fresh nonces for a terminal message_id must be rejected fail-closed.
+    check_and_record_nonce must check message_admissions BEFORE seen_nonces.
+    """
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        db_path = os.path.join(tmpdir, "admissions.db")
+        store = DurableAdmissionStore(db_path)
+
+        comp_id = "MSG-COMP-TERM-CHECK"
+        dead_id = "MSG-DEAD-TERM-CHECK"
+
+        store.admit_submission(comp_id, "CORR-C", "hash", "CODEX", "ANTIGRAVITY", "sub", "2026-10-01T09:00:00+05:30")
+        store.mark_message_completed(comp_id)
+
+        store.admit_submission(dead_id, "CORR-D", "hash", "CODEX", "ANTIGRAVITY", "sub", "2026-10-01T09:00:00+05:30")
+        store.mark_message_dead(dead_id, error="SIMULATED")
+
+        # 1. Fresh nonce for COMPLETED message
+        fresh_nonce_1 = "NONCE-FRESH-FOR-COMPLETED"
+        ok1, err1 = store.check_and_record_nonce(fresh_nonce_1, "CODEX", "2026-10-01T09:00:00+05:30", message_id=comp_id)
+        assert ok1 is False
+        assert "TERMINAL_STATE" in err1
+        assert "COMPLETED" in err1
+
+        # Verify fresh nonce was NOT inserted into seen_nonces
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute("SELECT 1 FROM seen_nonces WHERE nonce = ?", (fresh_nonce_1,)).fetchone()
+            assert row is None, "Fresh nonce was recorded despite terminal message state!"
+
+        # 2. Fresh nonce for DEAD message
+        fresh_nonce_2 = "NONCE-FRESH-FOR-DEAD"
+        ok2, err2 = store.check_and_record_nonce(fresh_nonce_2, "CODEX", "2026-10-01T09:00:00+05:30", message_id=dead_id)
+        assert ok2 is False
+        assert "TERMINAL_STATE" in err2
+        assert "DEAD" in err2
+
+
+# ==============================================================================
+# PROBE 12: Untrusted Attempt Count Cannot Bypass Expiry (Codex Finding 3)
+# ==============================================================================
+def test_untrusted_attempt_count_cannot_bypass_expiry():
+    """
+    Finding P1: An unverified attempt_count in the envelope must NEVER grant recovery
+    exemption or bypass timestamp freshness checks.
+    """
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        db_path = os.path.join(tmpdir, "admissions.db")
+        store = DurableAdmissionStore(db_path)
+        secret_key = b"secret_key_32_bytes_long_123456"
+
+        old_timestamp = "2026-09-30 09:00:00"  # 24 hours old
+        msg_id = "MSG-OLD-TAMPERED-ATTEMPT"
+        corr_id = "CORR-OLD-01"
+        nonce = "NONCE-OLD-01"
+
+        body = {"cmd": "test_expiry"}
+        env = {
+            "message_id": msg_id,
+            "correlation_id": corr_id,
+            "sender": "CODEX",
+            "recipient": "ANTIGRAVITY",
+            "subject": "sub",
+            "status": "CREATED",
+            "attempt_count": 5,  # Caller supplied attempt_count > 0 without durable authorization!
+            "created_at_ist": old_timestamp,
+            "body": body,
+            "nonce": nonce,
+        }
+        env["auth_signature"] = compute_envelope_hmac(env, secret_key)
+
+        with patch("antigravity.daemons.inbox_worker.get_agent_secret_key", return_value=secret_key):
+            # Auth verification must reject with TIMESTAMP_OUT_OF_BOUNDS
+            ok, err = verify_message_auth(env, admission_store=store)
+            assert ok is False
+            assert "TIMESTAMP_OUT_OF_BOUNDS" in err
+
+            # Schema validation must reject with TIMESTAMP_OUT_OF_BOUNDS
+            val_ok, val_err = validate_message_schema(env, admission_store=store)
+            assert val_ok is False
+            assert "TIMESTAMP_OUT_OF_BOUNDS" in val_err
+
+
+# ==============================================================================
+# PROBE 13: Dead-Letter Persistence Failure Preserves Claim and Suppresses Outbox (Codex Finding 4)
+# ==============================================================================
+def test_dead_letter_persistence_failure_preserves_claim_and_suppresses_outbox():
+    """
+    Finding P1: If store.mark_message_dead fails, route_to_dead_letter must preserve
+    claimed_path, and _process_message_locked must NOT publish a contradictory FAILED outbox response.
+    """
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        db_path = os.path.join(tmpdir, "admissions.db")
+        inbox_dir = os.path.join(tmpdir, "inbox")
+        outbox_dir = os.path.join(tmpdir, "outbox")
+        dead_dir = os.path.join(tmpdir, "dead")
+        archive_dir = os.path.join(tmpdir, "archive")
+        os.makedirs(inbox_dir, exist_ok=True)
+        os.makedirs(outbox_dir, exist_ok=True)
+        os.makedirs(dead_dir, exist_ok=True)
+        os.makedirs(archive_dir, exist_ok=True)
+
+        store = DurableAdmissionStore(db_path)
+        secret_key = b"secret_key_32_bytes_long_123456"
+
+        with patch("antigravity.daemons.inbox_worker.INBOX_DIR", inbox_dir), \
+             patch("antigravity.daemons.inbox_worker.OUTBOX_DIR", outbox_dir), \
+             patch("antigravity.daemons.inbox_worker.DEAD_LETTER_DIR", dead_dir), \
+             patch("antigravity.daemons.inbox_worker.ARCHIVE_DIR", archive_dir):
+            worker = InboxWorker()
+            worker.db = store
+
+            msg_id = "MSG-FAIL-DEAD-PERSIST"
+            corr_id = "CORR-FDP"
+            claimed_path = os.path.join(inbox_dir, f"{msg_id}.claimed")
+            outbox_path = os.path.join(outbox_dir, f"{corr_id}_resp.json")
+
+            store.admit_submission(msg_id, corr_id, "hash", "CODEX", "ANTIGRAVITY", "sub", get_current_ist())
+
+            msg_data = {
+                "message_id": msg_id,
+                "correlation_id": corr_id,
+                "nonce": "NONCE-FDP",
+                "recipient": "ANTIGRAVITY",
+                "sender": "CODEX",
+                "subject": "sub",
+                "body": {"task": "test"},
+                "status": "CLAIMED",
+                "attempt_count": 0,
+                "created_at_ist": get_current_ist(),
+            }
+            msg_data["auth_signature"] = compute_envelope_hmac(msg_data, secret_key)
+            with open(claimed_path, "w", encoding="utf-8") as f:
+                json.dump(msg_data, f)
+
+            with patch.object(worker, "execute_task", return_value=("FAILED", None, {}, "TASK_FAILED")), \
+                 patch("antigravity.daemons.inbox_worker.get_agent_secret_key", return_value=secret_key), \
+                 patch.object(store, "mark_message_dead", return_value=False):
+
+                worker._process_message_locked(claimed_path, msg_data)
+
+                # Claimed envelope MUST be preserved!
+                assert os.path.exists(claimed_path), "claimed envelope was unlinked despite DB mark_message_dead failure!"
+
+                # Outbox file MUST NOT be published!
+                assert not os.path.exists(outbox_path), "Outbox response was published despite DB mark_message_dead failure!"
+
+
+# ==============================================================================
+# PROBE 14: Reconciled Response Loss Window via Durable Response (Codex Finding 5)
+# ==============================================================================
+def test_outbox_publication_failure_reconciled_via_durable_response():
+    """
+    Finding P1: When completion persistence succeeds, response_json is stored durably in SQLite.
+    If writing outbox response fails (or crashes), claimed_path is preserved, and
+    recover_orphaned_claims reconstructs the exact response from SQLite before unlinking the claim.
+    """
+    import antigravity.daemons.inbox_worker as ib_module
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        db_path = os.path.join(tmpdir, "admissions.db")
+        inbox_dir = os.path.join(tmpdir, "inbox")
+        outbox_dir = os.path.join(tmpdir, "outbox")
+        dead_dir = os.path.join(tmpdir, "dead")
+        archive_dir = os.path.join(tmpdir, "archive")
+        os.makedirs(inbox_dir, exist_ok=True)
+        os.makedirs(outbox_dir, exist_ok=True)
+        os.makedirs(dead_dir, exist_ok=True)
+        os.makedirs(archive_dir, exist_ok=True)
+
+        store = DurableAdmissionStore(db_path)
+        secret_key = b"secret_key_32_bytes_long_123456"
+
+        with patch("antigravity.daemons.inbox_worker.INBOX_DIR", inbox_dir), \
+             patch("antigravity.daemons.inbox_worker.OUTBOX_DIR", outbox_dir), \
+             patch("antigravity.daemons.inbox_worker.DEAD_LETTER_DIR", dead_dir), \
+             patch("antigravity.daemons.inbox_worker.ARCHIVE_DIR", archive_dir):
+            worker = InboxWorker()
+            worker.db = store
+
+            msg_id = "MSG-RECON-OUTBOX"
+            corr_id = "CORR-RECON"
+            claimed_path = os.path.join(inbox_dir, f"{msg_id}.claimed")
+            outbox_path = os.path.join(outbox_dir, f"{corr_id}_resp.json")
+
+            store.admit_submission(msg_id, corr_id, "hash", "CODEX", "ANTIGRAVITY", "sub", get_current_ist())
+
+            msg_data = {
+                "message_id": msg_id,
+                "correlation_id": corr_id,
+                "nonce": "NONCE-RECON",
+                "recipient": "ANTIGRAVITY",
+                "sender": "CODEX",
+                "subject": "sub",
+                "body": {"task": "reconcile"},
+                "status": "CLAIMED",
+                "worker_pid": 999999,
+                "attempt_count": 0,
+                "created_at_ist": get_current_ist(),
+            }
+            msg_data["auth_signature"] = compute_envelope_hmac(msg_data, secret_key)
+            with open(claimed_path, "w", encoding="utf-8") as f:
+                json.dump(msg_data, f)
+
+            # Injected failure on writing outbox file during _process_message_locked
+            orig_write = ib_module.write_json_atomic
+            def write_fail_on_outbox(path, data, **kwargs):
+                if path == outbox_path:
+                    raise OSError("Injected disk write error on outbox")
+                return orig_write(path, data, **kwargs)
+
+            with patch.object(worker, "execute_task", return_value=("COMPLETED", {"result": "success"}, {}, None)), \
+                 patch("antigravity.daemons.inbox_worker.get_agent_secret_key", return_value=secret_key), \
+                 patch("antigravity.daemons.inbox_worker.write_json_atomic", side_effect=write_fail_on_outbox):
+
+                worker._process_message_locked(claimed_path, msg_data)
+
+                # Claimed envelope MUST be preserved!
+                assert os.path.exists(claimed_path)
+                # Outbox file does not exist yet
+                assert not os.path.exists(outbox_path)
+
+            # State in DB is COMPLETED, and response_json was durably saved!
+            assert store.get_message_state(msg_id) == "COMPLETED"
+            saved_resp = store.get_message_response(msg_id)
+            assert saved_resp is not None
+            resp_dict = json.loads(saved_resp)
+            assert resp_dict["status"] == "COMPLETED"
+            assert resp_dict["output_payload"] == {"result": "success"}
+
+            # Now run recover_orphaned_claims()
+            # Age the claimed file so it qualifies as orphan
+            os.utime(claimed_path, (time.time() - 200, time.time() - 200))
+            worker.recover_orphaned_claims()
+
+            # The outbox file MUST have been reconstructed and published!
+            assert os.path.exists(outbox_path), "recover_orphaned_claims failed to reconstruct outbox response!"
+            with open(outbox_path, "r", encoding="utf-8") as f:
+                reconstructed_resp = json.load(f)
+            assert reconstructed_resp["status"] == "COMPLETED"
+            assert reconstructed_resp["output_payload"] == {"result": "success"}
+
+            # Now that outbox file exists, the leftover claim was safely unlinked!
+            assert not os.path.exists(claimed_path), "Leftover claim was not unlinked after outbox reconciliation!"
+
 
 
