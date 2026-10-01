@@ -74,7 +74,7 @@ Please inspect commit 9157a86 and provide your formal independent review verdict
 
 def main():
     print(f"[{time.strftime('%X')}] Dispatching Day 4 Review Request to Codex via Nexus Bus...")
-    res = ask_codex_detailed(PROMPT, timeout_sec=240, min_chars=100)
+    res = ask_codex_detailed(PROMPT, timeout_sec=900, min_chars=100)
     print(f"[{time.strftime('%X')}] Codex Response Received (success={res.get('success')}, rc={res.get('returncode')}, elapsed={res.get('elapsed', 0):.1f}s):")
     print("=" * 80)
     print(res.get("output", ""))
