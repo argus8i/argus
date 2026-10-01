@@ -62,21 +62,27 @@ def _deep_freeze(obj: Any) -> Any:
         return frozenset(_deep_freeze(v) for v in obj)
     elif isinstance(obj, bool):  # bool is a subclass of int, check bool before int
         return bool(obj)
+    elif type(obj) is int:
+        return obj
     elif isinstance(obj, int):
         val = int.__int__(obj)
         if type(val) is not int or val is obj:
             val = int(str(obj))
         return val
+    elif type(obj) is float:
+        return obj
     elif isinstance(obj, float):
         val = float.__float__(obj)
         if type(val) is not float or val is obj:
             val = float(str(obj))
         return val
+    elif type(obj) is str:
+        return obj
     elif isinstance(obj, str):
-        val = str.__str__(obj)
-        if type(val) is not str or val is obj:
-            val = "".join([chr(c) for c in bytes(obj.encode("utf-8"))])
-        return val
+        # Subclass of str: extract pure built-in str copy preserving exact unicode code points
+        return str.encode(obj, "utf-8").decode("utf-8")
+    elif type(obj) is bytes:
+        return obj
     elif isinstance(obj, bytes):
         val = bytes.__bytes__(obj)
         if type(val) is not bytes or val is obj:
@@ -87,8 +93,16 @@ def _deep_freeze(obj: Any) -> Any:
         if obj.tzinfo is not None:
             offset = obj.utcoffset()
             if offset is not None:
-                tz_name = obj.tzname()
-                tz = timezone(offset, name=tz_name) if tz_name else timezone(offset)
+                raw_tz_name = obj.tzname()
+                if raw_tz_name is not None:
+                    # Normalize timezone name to exact built-in str to detach mutable subclasses
+                    if type(raw_tz_name) is str:
+                        clean_name = raw_tz_name
+                    else:
+                        clean_name = str.encode(raw_tz_name, "utf-8").decode("utf-8")
+                else:
+                    clean_name = None
+                tz = timezone(offset, name=clean_name) if clean_name else timezone(offset)
         return datetime(
             obj.year, obj.month, obj.day,
             obj.hour, obj.minute, obj.second, obj.microsecond,

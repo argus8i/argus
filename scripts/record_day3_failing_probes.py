@@ -1,7 +1,7 @@
 """
 scripts/record_day3_failing_probes.py
 ======================================
-Runs the failing regression probes for Round 5 blockers to establish the empirical
+Runs the failing regression probes for Round 6 blockers to establish the empirical
 test-first acceptance artifact before remediations are merged.
 Part of Project Swing Trades (ARGUS 8i Track 2 Liquid Desk).
 """
@@ -14,8 +14,8 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PYTHON_EXE = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
 LOG_DIR = REPO_ROOT / "shared" / "trust" / "artifacts"
-LOG_FILE = LOG_DIR / "DAY3-ROUND5-FAILING-PROBES.log"
-SHA_FILE = LOG_DIR / "DAY3-ROUND5-FAILING-PROBES.log.sha256"
+LOG_FILE = LOG_DIR / "DAY3-ROUND6-FAILING-PROBES.log"
+SHA_FILE = LOG_DIR / "DAY3-ROUND6-FAILING-PROBES.log.sha256"
 
 
 def main() -> int:
@@ -26,7 +26,7 @@ def main() -> int:
         "pytest",
         "tests/test_day3_strategies.py",
         "-k",
-        "test_overridden_str or test_datetime_timezone",
+        "test_codex_round6",
         "-v",
     ]
     print("Running command:", " ".join(cmd))

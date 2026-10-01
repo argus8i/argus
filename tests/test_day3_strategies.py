@@ -1223,5 +1223,69 @@ def test_datetime_timezone_is_detached():
     assert frozen_dt.isoformat() == "2026-09-25T12:00:00+00:00"
 
 
+def test_codex_round6_unicode_trace_preservation():
+    # Built-in unicode string with Rupee sign and accented characters
+    unicode_str = "Price: \u20b9 10.50, caf\xe9"
+    event = ExitSignalEvent(
+        strategy_id="DELIVERY_ACCUMULATION",
+        symbol="SBIN",
+        session_date="2026-09-25",
+        position_id="POS-001",
+        reason="TARGET_HIT",
+        exit_price=850.0,
+        shares_to_exit=10,
+        trace={"text": unicode_str, "\u20b9_key": "val"},
+    )
+    # Trace must strictly preserve the exact unicode characters, not raw byte code points
+    assert event.trace["text"] == unicode_str
+    assert "\u20b9" in event.trace["text"]
+    assert "\u20b9_key" in event.trace
+
+
+def test_codex_round6_timezone_name_normalization():
+    class MutableStr(str):
+        def __init__(self, val):
+            self.tags = ["initial"]
+
+    class MutableTz(tzinfo):
+        def __init__(self, name_str):
+            self.tz_name = name_str
+
+        def utcoffset(self, dt):
+            return timedelta(hours=5, minutes=30)
+
+        def dst(self, dt):
+            return timedelta(0)
+
+        def tzname(self, dt):
+            return self.tz_name
+
+    mut_name = MutableStr("IST_MUTABLE")
+    mut_tz = MutableTz(mut_name)
+    dt = datetime(2026, 9, 25, 12, 0, tzinfo=mut_tz)
+
+    event = ExitSignalEvent(
+        strategy_id="DELIVERY_ACCUMULATION",
+        symbol="SBIN",
+        session_date="2026-09-25",
+        position_id="POS-001",
+        reason="TARGET_HIT",
+        exit_price=850.0,
+        shares_to_exit=10,
+        trace={"dt": dt},
+    )
+    frozen_dt = event.trace["dt"]
+    frozen_tz_name = frozen_dt.tzname()
+
+    # Mutate the attached name subclass
+    mut_name.tags.append("mutated")
+
+    # The frozen timezone name must be an exact built-in str without mutable subclass attributes
+    assert type(frozen_tz_name) is str
+    assert not hasattr(frozen_tz_name, "tags")
+    assert frozen_tz_name is not mut_name
+
+
+
 
 
