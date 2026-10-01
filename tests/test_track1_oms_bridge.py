@@ -106,27 +106,33 @@ class TestRule7VolumeExpansionEngine:
 
 class TestLiveDepthSchemaAndIsolation:
     def test_depth_fixture_schema_contract(self):
-        """Validates depth schema contract against a structured fixture."""
-        fixture = {
-            "auth": {"token": "dummy"},
-            "instrument_tokens": {},
+        """Validates that a live_depth payload satisfies the required schema contract."""
+        required_top_keys = {"auth", "instrument_tokens", "volume_expansion_audit", "watchlist", "status", "local_write_time"}
+        required_audit_keys = {"instrument_token"}
+        
+        # Validate that TRACK1_INSTRUMENTS defines all required keys and valid types
+        for sym, meta in TRACK1_INSTRUMENTS.items():
+            assert isinstance(sym, str) and len(sym) >= 2
+            assert isinstance(meta["primary_token"], int) and meta["primary_token"] > 0
+            assert meta["primary_exchange"] in ("NSE", "BSE")
+            
+        # Validate mock payload structure matches strict consumer contract
+        sample_payload = {
+            "auth": {"token": "dummy_auth_token", "enctoken": "dummy_enc"},
+            "instrument_tokens": {sym: meta["primary_token"] for sym, meta in TRACK1_INSTRUMENTS.items()},
             "volume_expansion_audit": {
-                sym: {"instrument_token": TRACK1_INSTRUMENTS[sym]["primary_token"]}
-                for sym in TRACK1_INSTRUMENTS
+                sym: {"instrument_token": meta["primary_token"], "volume_expansion_ratio": 1.0, "rule7_volume_qualified": False}
+                for sym, meta in TRACK1_INSTRUMENTS.items()
             },
-            "watchlist": list(TRACK1_INSTRUMENTS.keys()),
+            "watchlist": sorted(TRACK1_INSTRUMENTS.keys()),
             "status": "HEALTHY",
             "local_write_time": "2026-09-30 18:30:00",
         }
-        assert "auth" in fixture
-        assert "instrument_tokens" in fixture
-        assert "volume_expansion_audit" in fixture
-        assert "watchlist" in fixture
-        assert "status" in fixture
-        assert "local_write_time" in fixture
+        assert required_top_keys.issubset(set(sample_payload.keys()))
         for sym in TRACK1_INSTRUMENTS:
-            assert sym in fixture["volume_expansion_audit"]
-            assert fixture["volume_expansion_audit"][sym]["instrument_token"] == TRACK1_INSTRUMENTS[sym]["primary_token"]
+            assert sym in sample_payload["volume_expansion_audit"]
+            assert required_audit_keys.issubset(set(sample_payload["volume_expansion_audit"][sym].keys()))
+            assert sample_payload["volume_expansion_audit"][sym]["instrument_token"] == TRACK1_INSTRUMENTS[sym]["primary_token"]
 
     @pytest.mark.skipif(
         not os.path.exists(LIVE_DEPTH_PATH),
