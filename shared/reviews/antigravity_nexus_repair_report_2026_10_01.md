@@ -1,27 +1,32 @@
 # ARGUS Nexus Reliability Repair — Technical Verification Report
-**Date:** 2026-10-01T02:22:00+05:30  
+**Date:** 2026-10-01T12:08:00+05:30  
 **Author:** Antigravity (Quantitative Modeling & Infrastructure Orchestrator)  
 **Reviewers:** Codex (Audit Authority), Claude (Microstructure & Red-Team Authority)  
-**Status:** READY FOR CODEX RE-REVIEW — DO NOT DEPLOY UNTIL CODEX RECORDS APPROVED  
+**Status:** **APPROVED BY OPENAI CODEX** (Review ID: `CODEX-NEXUS-67C2D12`, Ledger Record `fa171ffcdfde0dfc10d39b91fef0cc2736302f1f12756ff425fafbd2c1486d8b`)  
 
 ---
 
 ## 1. Executive Summary & Git Commit Provenance
 
 - **Base Commit (Starting Point):** `06dba18f3a3e6e88cbfe004a43ba102f6ef3526f`
-- **Preserving Commit (R1–R8 + Runbook):** `428dd93f5663263314eae119dc8bfa8bfdc2263a`
-- **Final Exact-Review Commit (Finding 9 Subprocess Isolation):** `83e53cbce6aa753248a6e1760458b38de01e357b`
+- **Initial Fix Commit (R1–R8 + Runbook):** `428dd93f5663263314eae119dc8bfa8bfdc2263a`
+- **Iterative Review Repairs:**
+  - `582c313f927ebf02d87916d2ad66affc7dfc4668` (claim preservation during exhaustion, unlink only after outbox write)
+  - `2a7da7307d3d0000f1862afcf8f53bb981e6350f` (all 4 recovery paths serialized under correlation FileLock)
+  - `8e42cdb05a87dbabe3d9adb09381d87c274d3e2a` (claim validation failure serialized under correlation FileLock, Probe 23 equality & HMAC)
+- **Final Approved Commit:** `67c2d12a097e7bd15fb4980d6d3abaf495f6d219`
 - **Branch:** `fix/nexus-and-bridge-repair`
 - **Verification Summary:**
+  - 136/136 Nexus test suite tests **PASSED (100%)** across 7 files in 41.02s (Exit code: 0).
   - 14/14 Codex attack probes in `shared/reviews/test_codex_nexus_11364b2_attack.py` **PASSED (100%)**.
-  - 959/959 full repository tests **PASSED (100%)** with zero failures across `tests/` (761) and `research/tests/` (198).
-  - All 4 environment-dependent tests hermetically verified without live filesystem/PID coupling.
-  - Live `check_deep_health` verified for all three agents (**CODEX: PASS in 29.5s**, **CLAUDE: PASS in 28.1s**, **ANTIGRAVITY: PASS in 43.6s**).
-  - Orphaned background bus process PID 32832 terminated and confirmed dead.
+  - 26/26 followup probes in `tests/test_codex_nexus_followup_probes.py` **PASSED (100%)** (Probes 20–25).
+  - Complete reproduction artifact verified and committed in `shared/trust/artifacts/CODEX-NEXUS-FULL-SUITE-VERIFIED.log`.
+  - Independent AST parsing of 14 Python files passed; read-only verification exit code 0.
+  - Formal verdict: **APPROVED** by OpenAI Codex.
 
 ---
 
-## 2. Findings Matrix (Findings 1 through 9)
+## 2. Findings Matrix (Findings 1 through 18)
 
 | # | Finding ID | Root Cause | Changed File(s) | Regression Test(s) | Status | Remaining Limitation |
 |---|---|---|---|---|---|---|
@@ -35,62 +40,60 @@
 | **8** | R8 (Atomic Duplicate Receipt) | Check-then-write race between concurrent submissions returned different correlation IDs for same message_id. | `antigravity/daemons/tri_agent_bus.py` | `test_concurrent_duplicate_submit_returns_one_original_receipt` | **PASSED** | Atomic file publication re-reads persisted file to return winner's `correlation_id` to all callers. |
 | **9** | F9 (Codex Dispatch Reliability) | Windows console events (0xC000013A) terminated Codex children; old v0.146 binary rejected `gpt-6.1-sol`. | `antigravity/daemons/tri_agent_bus.py` | `test_get_codex_bin_prefers_localappdata`, `test_real_codex_bin_resolves_v0159_or_newer` | **PASSED** | LocalAppData v0.159.2 resolved by mtime; `subprocess.CREATE_NO_WINDOW` isolates all peer CLI processes. |
 | **10** | F10 (FileLock Successor Safety) | Contender B acquiring while A releases could see lock deleted by A's late cleanup. | `antigravity/daemons/inbox_worker.py` | `test_filelock_never_deletes_successor_active_lock` | **PASSED** | Owner A writes `{"released": true}` without unlinking; contender B acquires cleanly without race deletion. |
-| **11** | F11 (Atomic Cross-Process Admission) | Duplicate submissions across processes could admit conflicting bodies or return divergent receipts. | `antigravity/daemons/tri_agent_bus.py`, `antigravity/daemons/inbox_worker.py` | `test_cross_process_duplicate_submission_atomic_receipt` | **PASSED** | Coordinated atomic SQLite binding of `(message_id, correlation_id, payload_hash)` across all lifecycle states (`QUEUED`, `CLAIMED`, `COMPLETED`, `DEAD`). Conflicting payloads raise explicit `ValueError("CONFLICT: ...")`. |
-| **12** | F12 (Recovery Arrival Freshness) | Legitimate crashed requests recovered >300s after arrival were rejected by timestamp expiration. | `antigravity/daemons/inbox_worker.py` | `test_recovered_request_admitted_even_if_timestamp_older_than_300s` | **PASSED** | Requests admitted on arrival and marked recovering bypass `delta_sec > val_sec` arrival expiry via durable admission store `is_message_recovering()`. |
-| **13** | F13 (Claude Review Read-Only Tools) | Claude review invocations passed empty tools instead of explicit read-only tools and permission bypass. | `antigravity/daemons/tri_agent_bus.py` | `test_claude_route_enforces_read_only_tools` | **PASSED** | Passed `--tools Read,Grep,Glob --permission-mode dontAsk` when `chat_only=True`. Codex semver asserted `>= (0, 159, 2)`. |
+| **11** | F11 (Atomic Cross-Process Admission) | Duplicate submissions across processes could admit conflicting bodies or return divergent receipts. | `antigravity/daemons/tri_agent_bus.py`, `antigravity/daemons/inbox_worker.py` | `test_cross_process_duplicate_submission_atomic_receipt` | **PASSED** | Coordinated atomic SQLite binding of `(message_id, correlation_id, payload_hash)` across all lifecycle states (`QUEUED`, `CLAIMED`, `COMPLETED`, `DEAD`). |
+| **12** | F12 (Recovery Arrival Freshness) | Legitimate crashed requests recovered >300s after arrival were rejected by timestamp expiration. | `antigravity/daemons/inbox_worker.py` | `test_recovered_request_admitted_even_if_timestamp_older_than_300s` | **PASSED** | Requests admitted on arrival and marked recovering bypass `delta_sec > val_sec` arrival expiry via durable admission store. |
+| **13** | F13 (Claude Review Read-Only Tools) | Claude review invocations passed empty tools instead of explicit read-only tools. | `antigravity/daemons/tri_agent_bus.py` | `test_claude_route_enforces_read_only_tools` | **PASSED** | Passed `--tools Read,Grep,Glob --permission-mode dontAsk` when `chat_only=True`. |
+| **14** | F14 (Exhaustion Without Key) | In orphan recovery exhaustion, if agent secret key was unavailable, claim envelope was deleted without recording durable failure or writing outbox response. | `antigravity/daemons/inbox_worker.py` | `tests/test_codex_nexus_followup_probes.py::test_exhaustion_without_agent_secret_key_preserves_claim` (Probe 21) | **PASSED** | Claim envelope preserved until valid HMAC signature is signed and outbox published. |
+| **15** | F15 (Schema/Task Failure Outbox Persistence) | Outbox publication failure during schema or task error unlinked `.claimed` file prematurely, losing evidence. | `antigravity/daemons/inbox_worker.py` | `tests/test_codex_nexus_followup_probes.py::test_schema_or_task_failure_outbox_failure_reconciled_on_second_pass` (Probe 23) | **PASSED** | Claim unlinked strictly after outbox publication succeeds; second pass safely reconciles from durable SQLite. |
+| **16** | F16 (Recovery Outbox Mutual Exclusion) | Dead-letter sweep published responses without acquiring correlation `FileLock`, risking overwriting concurrent live winning reply. | `antigravity/daemons/inbox_worker.py` | `tests/test_codex_nexus_followup_probes.py::test_dead_letter_sweep_filelock_prevents_overwriting_concurrent_publisher` (Probe 24) | **PASSED** | All 4 recovery paths (`COMPLETED`, `DEAD`, orphan exhaustion, independent sweep) acquire correlation `FileLock` and recheck `os.path.exists`. |
+| **17** | F17 (Claim Validation Outbox Mutual Exclusion) | `claim_message` validation-failure outbox write didn't acquire correlation `FileLock`. | `antigravity/daemons/inbox_worker.py` | `tests/test_codex_nexus_followup_probes.py::test_claim_validation_failure_filelock_prevents_overwriting_winning_response` (Probe 25) | **PASSED** | `claim_message` wraps outbox publication in `FileLock` with inside-lock existence recheck and durable SQLite persistence. |
+| **18** | F18 (Rule 8 v2 Invariant 3 Reproduction Artifact) | Test suite log lacked exact invocation command, working directory, timestamps, and process exit code. | `scripts/run_and_record_nexus_suite.py`, `shared/trust/artifacts/CODEX-NEXUS-FULL-SUITE-VERIFIED.log` | Reviewer reproduction validation | **PASSED** | Complete reproduction artifact generated with command, CWD, timestamps, and `EXIT CODE: 0`. |
 
 ---
 
 ## 3. Exact Verification Commands & Exit Codes
 
-### A. Codex Attack & Followup Probes (19/19 Green)
+### A. Full Nexus Test Suite (136/136 Green in 41.02s)
 ```powershell
-$env:ARGUS_NEXUS_REVIEW_ROOT = (Get-Location).Path
+.venv\Scripts\python.exe scripts/run_and_record_nexus_suite.py
+```
+- **Exit Code:** 0
+- **Elapsed:** 41.48s
+- **Output:** 136 passed in 41.02s
+- **Retained Log:** `shared/trust/artifacts/CODEX-NEXUS-FULL-SUITE-VERIFIED.log` (SHA-256: `16fbf6fee5f3d26c8e295172b50474709e59cbe0d98a4d14ab8ec8f25f1db073`)
+
+### B. Codex Attack & Followup Probes (40/40 Green)
+```powershell
 .venv\Scripts\python.exe -m pytest shared/reviews/test_codex_nexus_11364b2_attack.py tests/test_codex_nexus_followup_probes.py -v
 ```
 - **Exit Code:** 0
-- **Output:** 19 passed in 2.92s
+- **Output:** 40 passed (14 attack probes + 26 followup probes) in 4.12s
 
-### B. Consolidated Test Suite (964/964 Green)
-```powershell
-.venv\Scripts\python.exe -m pytest tests/ research/tests/ -q
-```
-- **Exit Code:** 0
-- **Total:** 964 passed in 201.80s, 0 failed, 0 errors.
+---
 
-### C. Live Tri-Agent Deep Health Verification
-```powershell
-.venv\Scripts\python.exe -c "from antigravity.daemons.tri_agent_bus import check_deep_health; print('CODEX:', check_deep_health('CODEX', timeout_sec=120))"
-# Output: CODEX: {'status': 'PASS', 'verified': True, 'agent': 'CODEX', 'review_id': 'CODEX-T2-01-4BE7563', 'elapsed': 29.51, 'error': None}
+## 4. OpenAI Codex Independent Review Verdict
 
-.venv\Scripts\python.exe -c "from antigravity.daemons.tri_agent_bus import check_deep_health; print('CLAUDE:', check_deep_health('CLAUDE', timeout_sec=120))"
-# Output: CLAUDE: {'status': 'PASS', 'verified': True, 'agent': 'CLAUDE', 'review_id': 'CODEX-T2-01-4BE7563', 'elapsed': 28.11, 'error': None}
+```text
+**APPROVED** for commit 67c2d12a097e7bd15fb4980d6d3abaf495f6d219, scoped to the Nexus repair and the previously outstanding reproduction-artifact gate.
 
-.venv\Scripts\python.exe -c "from antigravity.daemons.tri_agent_bus import check_deep_health; print('ANTIGRAVITY:', check_deep_health('ANTIGRAVITY', timeout_sec=120))"
-# Output: ANTIGRAVITY: {'status': 'PASS', 'verified': True, 'agent': 'ANTIGRAVITY', 'review_id': 'CODEX-T2-01-4BE7563', 'elapsed': 43.58, 'error': None}
+Verified:
+- Its direct parent is 8e42cdb05a87dbabe3d9adb09381d87c274d3e2a.
+- The parent contains the claim-validation FileLock and existence recheck, Probe 23 A–D durable-response equality checks, and A–C HMAC checks.
+- The committed test artifact records the command, CWD, timestamps, 136 passing tests across seven files, and exit code 0.
+- Independent read-only AST parsing passed for 14 committed Python files; the verification command exited 0. Scoped workspace files match the commit after line-ending normalization.
 ```
 
 ---
 
-## 4. Re-Review Prompt for OpenAI Codex
+## 5. Trust Ledger Confirmation
 
-```text
-To: OpenAI Codex (Senior Systems, Execution-Reality & Reliability Engineer)
-From: Antigravity (Quantitative Modeling & Infrastructure Orchestrator)
-Subject: Exact-Commit Whole-Bus Verification for ARGUS Nexus Bus & Supervisor
+Record appended to `shared/trust/reviews.jsonl`:
+- **Review ID:** `CODEX-NEXUS-67C2D12`
+- **Reviewed Commit:** `67c2d12a097e7bd15fb4980d6d3abaf495f6d219`
+- **Parent Commit:** `8e42cdb05a87dbabe3d9adb09381d87c274d3e2a`
+- **Tree SHA:** `10f34c63c7731bade5cc59d09bfe714e72c946d8`
+- **Patch SHA256:** `4988ef5696b64d4476a939bdfeb6b4d66c73bc439cfa56b4cfaffc067b141adc`
+- **Verdict:** `APPROVED`
+- **Record SHA256:** `fa171ffcdfde0dfc10d39b91fef0cc2736302f1f12756ff425fafbd2c1486d8b`
+- **Chain Status:** Verified valid across all 19 records.
 
-Please perform an independent, unsparing peer review of the Nexus reliability repair at this exact commit.
-
-Scope:
-- antigravity/daemons/inbox_worker.py (FileLock release safety, atomic admission store, replay store, runtime metadata hmac normalization, recovery freshness exemption)
-- antigravity/daemons/supervised_inbox_worker.py (Heartbeat, breaker, process identity)
-- antigravity/daemons/tri_agent_bus.py (Atomic cross-process admission, Claude read-only CLI flags, LocalAppData Codex v0.159.2, CREATE_NO_WINDOW, HEALTH_DEEP)
-- scripts/register_nexus_tasks.ps1 (Watchdog 1m cadence)
-- docs/NEXUS_DEPLOYMENT_RUNBOOK.md (One-page deployment runbook)
-
-Acceptance Criteria:
-- Verify that all 14 attack probes in shared/reviews/test_codex_nexus_11364b2_attack.py pass.
-- Verify that all 5 followup probes in tests/test_codex_nexus_followup_probes.py pass.
-- Verify that the full repository test suite (964 tests) passes hermetically.
-- If satisfied, record your independent review verdict (APPROVED) in shared/trust/reviews.jsonl.
-```
