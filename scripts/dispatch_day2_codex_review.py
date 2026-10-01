@@ -1,7 +1,7 @@
 """
 scripts/dispatch_day2_codex_review.py
 =====================================
-Dispatches Sprint Day 2 review request to OpenAI Codex over the Nexus Bus.
+Dispatches Sprint Day 2 re-review request to OpenAI Codex over the Nexus Bus.
 """
 import sys
 import time
@@ -21,65 +21,53 @@ Scope:
 - tests/test_execution_risk_governor.py
 - scripts/run_and_record_day2_suite.py
 - shared/trust/artifacts/DAY2-EXECUTION-RISK-GOVERNOR-TESTS.log
+- shared/trust/artifacts/DAY2-EXECUTION-RISK-GOVERNOR-TESTS.log.sha256
 
-Active Branch: feature/day2-execution-and-risk-governor
+Exact Commit to Review: 2a0a240 (on branch feature/day2-execution-and-risk-governor)
+Parent Commit: 4a1663e
 
 Mandate:
-Perform formal peer review on Sprint Day 2 deliverables under the Master 5-Day Sprint (ARGUS 8i Track 2 Liquid Desk):
+Perform formal re-review and acceptance gate evaluation on commit 2a0a240 resolving all findings from your Round 2 review:
 
-1. Multi-Day Swing Execution Reality Engine (`antigravity/engine/execution_simulator.py`):
-   - Itemized Statutory Friction (Zerodha Cash Delivery):
-     * Brokerage: Rs 0.00
-     * STT: 0.1% on delivery buy and sell turnover
-     * Exchange Charges: NSE 0.00297%
-     * SEBI Turnover Fees: 0.0001% (Rs 10 / Crore)
-     * Stamp Duty: 0.015% on buy turnover only (Rs 0 on sell)
-     * Depository Participant (DP) Charges: flat Rs 15.93 on delivery scrip sale (Codex Mandate 2)
-     * Goods & Services Tax (GST): 18% on (Brokerage + Exchange Charges + SEBI Fees)
-   - Slippage Modeling:
-     * Base slippage: 7.5 bps per side on liquid F&O underlyings
-     * Gap stress slippage: 25.0 bps on gap-openings
-     * Adverse direction: Buy executed above benchmark; Sell executed below benchmark
-   - Discrete Execution States & Circuit Mechanics (AGENTS.md Rules 3, 4, 5):
-     * LOCKED_NO_OFFER: Upper Circuit lock on Buy -> fill probability 0%, 0 shares filled (Rule 3)
-     * LOCKED_NO_BID: Lower Circuit lock on Exit -> fill probability 0%, position carried forward (Rules 4 & 5)
-     * Gap-up open on entry -> fills at Open price + slippage
-     * Gap-down open past stop -> fills at Open price - slippage, actual loss exceeds 1R planned budget
-     * Claude Rule 9: 15% volume participation cap -> excess quantity results in PARTIAL fill
-     * Rule 2: Absolute Rs 10.00 price floor -> sub-Rs 10 securities disqualified immediately
+1. Remediation of Finding 4 (Cash Buffer Enforced at Actual Fill):
+   - In `confirm_fill_from_reservation`: Added strict check that actual fill outlay (actual_notional + transaction_costs) leaves remaining cash >= Rs 136,000 cash buffer. If below, raises `ValueError("CASH_BUFFER_BREACH_AT_FILL")` fail-closed.
+   - Tested in `test_codex_round2_cash_buffer_at_fill`.
 
-2. Central Risk Governor & Portfolio Accounting (`antigravity/engine/risk_governor.py`):
-   - Pinned Adjusted A1 Capacity Limits (Yashu Mandate):
-     * Total Corpus: Rs 2,50,000.00
-     * Unencumbered Cash Buffer: Rs 1,36,000.00
-     * Deployable Capital / Exposure Ceiling: Rs 1,14,000.00
-     * Max Concurrent Position Slots: 3 slots (MAX_SLOTS = 3)
-     * Max Single Position Slot Cap: Rs 38,000.00 (SLOT_CAP_RS = 38,000.00)
-     * Planned Risk Budget per Trade: Rs 1,500.00 (1R)
-     * Max Aggregate Open Risk Cap: Rs 4,500.00 (3 * Rs 1,500.00)
-   - Sizing Mechanics (`compute_position_size`):
-     * Exact mathematical floor without float-boundary rounding up
-     * Fail-closed missing ATR (= 0 shares)
-   - Sector Concentration:
-     * Max 2 positions per sector
-     * Unmapped sector strictly rejected fail-closed
-   - Deterministic Simultaneous Signal Priority (`rank_and_allocate_signals`):
-     * Deterministic ranking by priority score descending with symbol tie-breaker
-   - Portfolio State Machine & Realism Accounting:
-     * Circuit-locked exit lockout preserves position and slot in portfolio ledger
-     * Gap-down exit losses (> 1R) reconciled truthfully into cash and equity without state corruption
+2. Remediation of Finding 3 (Partial Fills Preserve Outstanding Reservation):
+   - In `confirm_fill_from_reservation`: Confirming partial quantity (e.g. 15 shares of 100) preserves the remaining 85 shares in `self.pending_reservations` with updated notional and risk. Reservation popped only when fully filled.
+   - Tested in `test_codex_round2_partial_fill_preserves_reservation`.
 
-3. Verification Evidence:
-   - Reproduction artifact recorded at `shared/trust/artifacts/DAY2-EXECUTION-RISK-GOVERNOR-TESTS.log`:
-     * 26 adversarial tests in `tests/test_execution_risk_governor.py` passing 100%
-     * 12 contract tests in `tests/test_day1_data_contracts.py` passing 100%
-     * Total: 38 passed in 0.19s, exit code: 0
+3. Remediation of Finding 3 (NaN, Inf, and Non-Positive Input Validation):
+   - In `confirm_fill_from_reservation`: Rejects `float('nan')`, inf, boolean, negative prices, and zero/negative filled quantities fail-closed with `ValueError("FAIL-CLOSED")`.
+   - Tested in `test_codex_round2_actual_fill_nan_rejected`.
 
-Please review the implementation and test logs, verify that all requirements and invariants hold, and provide your formal independent review verdict (APPROVED or CHANGES_REQUIRED) with specific findings.
+4. Remediation of Finding 2 (Execution-Event Identity & Idempotency):
+   - In `reconcile_exit`: Accepts `exit_event_id` and records processed event IDs in `self.processed_exit_events`. Replaying an exit event ID raises `ValueError("DUPLICATE_EXIT_EVENT")` fail-closed.
+   - Tested in `test_codex_round2_exit_event_idempotency`.
+
+5. Remediation of Finding 1 (Non-Stop / Take-Profit Touch Verification & Benchmark):
+   - In `simulate_exit`: Accepts `target_price: Optional[float] = None`. For `TAKE_PROFIT` / `TARGET`, verifies `bar.high >= target_price`. If untouched, returns `QUEUED` with 0 filled shares and `position_remains_open=True`.
+   - Benchmarks execution against `target_price` (or gap up open) minus adverse slippage, NOT against stop price. Realized PnL and R-multiple are positive for target exits.
+   - Tested in `test_codex_round2_take_profit_touch_and_benchmark`.
+
+6. Remediation of Finding 8 (Cost Separation & Entry Basis Persistence):
+   - In `ExecutionReport`: Separated `exit_transaction_costs` from combined `total_cost`.
+   - In `reconcile_exit`: Deducts ONLY exit transaction friction from sale proceeds (accepting `exit_transaction_costs`), preventing double-deduction of entry costs from cash.
+   - On partial exits, pro-rates remaining `entry_costs` basis on the remaining shares.
+   - Tested in `test_codex_round2_exit_reconciliation_no_double_entry_deduction`.
+
+Empirical Evidence:
+- Complete test suite: 40 adversarial tests in `tests/test_execution_risk_governor.py` + 12 in `tests/test_day1_data_contracts.py` (total 52 passed in 0.21s, exit code 0).
+- Reproduction command: `.venv\\Scripts\\python.exe -m pytest tests/test_day1_data_contracts.py tests/test_execution_risk_governor.py -v`
+- Execution runner & recorder: `scripts/run_and_record_day2_suite.py`
+- Hash-sealed log: `shared/trust/artifacts/DAY2-EXECUTION-RISK-GOVERNOR-TESTS.log`
+- Log SHA-256: `9B2E0D7F33C044738F5B315B7D18886D9D285D5EA5C49B44D5285ED3F93774F7` (sealed in `DAY2-EXECUTION-RISK-GOVERNOR-TESTS.log.sha256`)
+
+Please inspect commit 2a0a240 and provide your formal independent review verdict (APPROVED or CHANGES_REQUIRED).
 """
 
 def main():
-    print("Dispatching Sprint Day 2 review request to OpenAI Codex (timeout=300s, chat_only=True)...")
+    print("Dispatching Sprint Day 2 re-review request to OpenAI Codex (timeout=300s, chat_only=True)...")
     t0 = time.time()
     res = ask_codex_detailed(PROMPT, timeout_sec=300, chat_only=True)
     elapsed = time.time() - t0
