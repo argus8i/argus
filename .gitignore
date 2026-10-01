@@ -36,3 +36,7 @@ antigravity/logs/live_depth_ticks.csv
 # Local scratch and OS metadata
 scratch/
 desktop.ini
+Kronos/
+.agents/
+skills-lock.json
+
