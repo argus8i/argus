@@ -905,7 +905,7 @@ def test_codex_finding5_locked_strategy_definitions_fail_closed(tmp_path):
 
     # D: Spec file with lookback < 252 must be rejected fail-closed
     short_spec = tmp_path / "short_spec.yaml"
-    short_spec.write_text("setup_rules:\n  lookback_days_52w: 100\n", encoding="utf-8")
+    short_spec.write_text("strategy_name: HIGH52_MOMENTUM\ntrack: TRACK_2\nsetup_rules:\n  lookback_days_52w: 100\n", encoding="utf-8")
     manifest_short = tmp_path / "SPEC_MANIFEST.sha256"
     short_sha = hashlib.sha256(short_spec.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
     manifest_short.write_text(f"{short_sha}  short_spec.yaml\n", encoding="utf-8")
@@ -913,9 +913,9 @@ def test_codex_finding5_locked_strategy_definitions_fail_closed(tmp_path):
     with pytest.raises(ValueError, match="cannot be less than 252"):
         High52MomentumStrategy(spec_path=short_spec)
 
-    # Exploratory override mode succeeds when explicitly authorized
+    # Exploratory override mode succeeds when explicitly authorized with valid identity and track
     exploratory_strat = High52MomentumStrategy(
-        config={"setup_rules": {"lookback_days_52w": 100}},
+        config={"strategy_name": "HIGH52_MOMENTUM", "track": "TRACK_2", "setup_rules": {"lookback_days_52w": 100}},
         allow_unreviewed_overrides=True
     )
     assert exploratory_strat.lookback_52w == 100
@@ -1046,5 +1046,117 @@ def test_codex_round3_cross_sleeve_spec_rejection():
     delivery_spec = Path("shared/track2_liquid/strategies/specs/delivery_accumulation_v1.yaml")
     with pytest.raises(ValueError, match="does not match strategy"):
         High52MomentumStrategy(spec_path=delivery_spec)
+
+
+def test_codex_round4_blocker1_subclass_and_mapping_key_immutability():
+    # Blocker 1: Mutable subclass of str/int as value or mapping key must not allow external alias mutation
+    class MutableStr(str):
+        def __init__(self, val):
+            self.tags = ["initial"]
+
+    class MutableInt(int):
+        def __init__(self, val):
+            self.tags = ["initial"]
+
+    # 1. Subclass as value:
+    m_val = MutableStr("test_val")
+    event_val = ExitSignalEvent(
+        strategy_id="DELIVERY_ACCUMULATION",
+        symbol="SBIN",
+        session_date="2026-09-25",
+        position_id="POS-001",
+        reason="TARGET_HIT",
+        exit_price=850.0,
+        shares_to_exit=10,
+        trace={"key": m_val},
+    )
+    # External mutation to the instance must not alias into the trace
+    m_val.tags.append("mutated")
+    # Must be exact primitive type, without mutable subclass attributes
+    assert type(event_val.trace["key"]) is str
+    assert not hasattr(event_val.trace["key"], "tags")
+
+    # 2. Subclass as mapping key:
+    m_key = MutableStr("test_key")
+    event_key = ExitSignalEvent(
+        strategy_id="DELIVERY_ACCUMULATION",
+        symbol="SBIN",
+        session_date="2026-09-25",
+        position_id="POS-001",
+        reason="TARGET_HIT",
+        exit_price=850.0,
+        shares_to_exit=10,
+        trace={m_key: 123},
+    )
+    m_key.tags.append("mutated")
+    frozen_key = list(event_key.trace.keys())[0]
+    assert type(frozen_key) is str
+    assert not hasattr(frozen_key, "tags")
+
+    # 3. Invalid non-scalar key type (e.g. custom object or tuple) must be rejected
+    class CustomKey:
+        def __hash__(self):
+            return 42
+
+    with pytest.raises(TypeError, match="Unsupported mutable or unverified leaf type|Mapping key"):
+        ExitSignalEvent(
+            strategy_id="DELIVERY_ACCUMULATION",
+            symbol="SBIN",
+            session_date="2026-09-25",
+            position_id="POS-001",
+            reason="TARGET_HIT",
+            exit_price=850.0,
+            shares_to_exit=10,
+            trace={CustomKey(): "val"},
+        )
+
+    # 4. Non-scalar container key (e.g. tuple) must be rejected for mapping keys
+    with pytest.raises(TypeError, match="Mapping key in trace must be an immutable scalar primitive"):
+        ExitSignalEvent(
+            strategy_id="DELIVERY_ACCUMULATION",
+            symbol="SBIN",
+            session_date="2026-09-25",
+            position_id="POS-001",
+            reason="TARGET_HIT",
+            exit_price=850.0,
+            shares_to_exit=10,
+            trace={(1, 2): "val"},
+        )
+
+
+def test_codex_round4_blocker2_spec_binding_fail_closed(tmp_path):
+    strat = High52MomentumStrategy()
+
+    # Case 2a: Conflicting second identity (strategy_name matches, but strategy_id conflicts)
+    strat.config = {
+        "strategy_name": "HIGH52_MOMENTUM",
+        "strategy_id": "DELIVERY_ACCUMULATION",
+        "track": "TRACK_2",
+    }
+    with pytest.raises(ValueError, match="does not match"):
+        strat._validate_config()
+
+    # Case 2b: Missing identity (neither strategy_name nor strategy_id declared)
+    strat.config = {
+        "track": "TRACK_2",
+    }
+    with pytest.raises(ValueError, match="must declare 'strategy_name' or 'strategy_id'"):
+        strat._validate_config()
+
+    # Case 2c: Missing track
+    strat.config = {
+        "strategy_name": "HIGH52_MOMENTUM",
+    }
+    with pytest.raises(ValueError, match="unapproved track|expected TRACK_2"):
+        strat._validate_config()
+
+    # Case 2d: track: False
+    strat.config = {
+        "strategy_name": "HIGH52_MOMENTUM",
+        "track": False,
+    }
+    with pytest.raises(ValueError, match="unapproved track|expected TRACK_2"):
+        strat._validate_config()
+
 
 

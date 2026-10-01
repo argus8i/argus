@@ -35,24 +35,49 @@ _ISO_DATE_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 def _deep_freeze(obj: Any) -> Any:
     """
     Recursively freezes mappings, sequences, and sets into deeply immutable types.
-    Ensures leaves are strictly immutable:
-    - Mapping -> types.MappingProxyType
-    - list/tuple -> tuple
-    - set/frozenset -> frozenset
+    Ensures leaves and mapping keys are strictly immutable:
+    - Mapping -> types.MappingProxyType with validated/converted immutable scalar keys
+    - list/tuple -> tuple with deeply frozen elements
+    - set/frozenset -> frozenset with deeply frozen elements
     - bytearray -> bytes (isolated immutable copy)
-    - int, float, str, bool, bytes, None, date, datetime -> preserved as-is
+    - int, float, str, bool, bytes, date, datetime -> exact primitive conversion to strip subclass mutability
+    - None -> None
     - Any other type -> raises TypeError to prevent aliased mutable leakage.
     """
     if isinstance(obj, Mapping):
-        return types.MappingProxyType({k: _deep_freeze(v) for k, v in obj.items()})
+        frozen_dict = {}
+        for k, v in obj.items():
+            frozen_k = _deep_freeze(k)
+            if type(frozen_k) not in (str, int, float, bool, bytes, date, datetime) and frozen_k is not None:
+                raise TypeError(
+                    f"Mapping key in trace must be an immutable scalar primitive, got {type(frozen_k).__name__}"
+                )
+            frozen_dict[frozen_k] = _deep_freeze(v)
+        return types.MappingProxyType(frozen_dict)
     elif isinstance(obj, bytearray):
         return bytes(obj)
     elif isinstance(obj, (list, tuple)):
         return tuple(_deep_freeze(v) for v in obj)
     elif isinstance(obj, (set, frozenset)):
         return frozenset(_deep_freeze(v) for v in obj)
-    elif isinstance(obj, (int, float, str, bool, bytes, date, datetime)) or obj is None:
-        return obj
+    elif isinstance(obj, bool):  # bool is a subclass of int, check bool before int
+        return bool(obj)
+    elif isinstance(obj, int):
+        return int(obj)
+    elif isinstance(obj, float):
+        return float(obj)
+    elif isinstance(obj, str):
+        return str(obj)
+    elif isinstance(obj, bytes):
+        return bytes(obj)
+    elif isinstance(obj, datetime):  # datetime is a subclass of date, check datetime before date
+        return datetime(
+            obj.year, obj.month, obj.day, obj.hour, obj.minute, obj.second, obj.microsecond, obj.tzinfo
+        )
+    elif isinstance(obj, date):
+        return date(obj.year, obj.month, obj.day)
+    elif obj is None:
+        return None
     else:
         raise TypeError(
             f"Unsupported mutable or unverified leaf type in trace: {type(obj).__name__}. "
@@ -421,19 +446,29 @@ class BaseSwingStrategy(ABC):
     def _validate_config(self) -> None:
         """Validates base parameters, schema, track, and strategy identity binding."""
         if not self.config:
-            return
+            raise ValueError("Specification configuration cannot be empty")
 
-        # 1. Strategy Identity Validation (Codex Round 3 Gap 3)
-        declared_strat = self.config.get("strategy_name") or self.config.get("strategy_id")
-        if declared_strat and declared_strat != self.strategy_id:
+        # 1. Strategy Identity Validation (Codex Round 4 Finding 2)
+        strat_name = self.config.get("strategy_name")
+        strat_id = self.config.get("strategy_id")
+        if not strat_name and not strat_id:
             raise ValueError(
-                f"Specification declared strategy_name '{declared_strat}' does not match "
+                f"Specification must declare 'strategy_name' or 'strategy_id' matching '{self.strategy_id}'"
+            )
+        if strat_name is not None and strat_name != self.strategy_id:
+            raise ValueError(
+                f"Specification declared strategy_name '{strat_name}' does not match "
+                f"strategy '{self.strategy_id}'"
+            )
+        if strat_id is not None and strat_id != self.strategy_id:
+            raise ValueError(
+                f"Specification declared strategy_id '{strat_id}' does not match "
                 f"strategy '{self.strategy_id}'"
             )
 
-        # 2. Track Isolation (Rule 11)
+        # 2. Track Isolation (Rule 11) - Fail-Closed, explicit approved track required
         declared_track = self.config.get("track")
-        if declared_track and declared_track not in ("TRACK_2", "TRACK_2_LIQUID"):
+        if declared_track not in ("TRACK_2", "TRACK_2_LIQUID"):
             raise ValueError(
                 f"Strategy specification belongs to unapproved track '{declared_track}', "
                 "expected TRACK_2 / TRACK_2_LIQUID (Rule 11 invariant)"

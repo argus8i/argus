@@ -1,0 +1,65 @@
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\yashw\swing trades\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\yashw\swing trades
+configfile: pytest.ini
+collecting ... collected 32 items / 30 deselected / 2 selected
+
+tests/test_day3_strategies.py::test_codex_round4_blocker1_subclass_and_mapping_key_immutability FAILED [ 50%]
+tests/test_day3_strategies.py::test_codex_round4_blocker2_spec_binding_fail_closed FAILED [100%]
+
+================================== FAILURES ===================================
+______ test_codex_round4_blocker1_subclass_and_mapping_key_immutability _______
+
+    def test_codex_round4_blocker1_subclass_and_mapping_key_immutability():
+        # Blocker 1: Mutable subclass of str/int as value or mapping key must not allow external alias mutation
+        class MutableStr(str):
+            def __init__(self, val):
+                self.tags = ["initial"]
+    
+        class MutableInt(int):
+            def __init__(self, val):
+                self.tags = ["initial"]
+    
+        # 1. Subclass as value:
+        m_val = MutableStr("test_val")
+        event_val = ExitSignalEvent(
+            strategy_id="DELIVERY_ACCUMULATION",
+            symbol="SBIN",
+            session_date="2026-09-25",
+            position_id="POS-001",
+            reason="TARGET_HIT",
+            exit_price=850.0,
+            shares_to_exit=10,
+            trace={"key": m_val},
+        )
+        # External mutation to the instance must not alias into the trace
+        m_val.tags.append("mutated")
+        # Must be exact primitive type, without mutable subclass attributes
+>       assert type(event_val.trace["key"]) is str
+E       AssertionError: assert <class 'test_day3_strategies.test_codex_round4_blocker1_subclass_and_mapping_key_immutability.<locals>.MutableStr'> is str
+E        +  where <class 'test_day3_strategies.test_codex_round4_blocker1_subclass_and_mapping_key_immutability.<locals>.MutableStr'> = type('test_val')
+
+tests\test_day3_strategies.py:1076: AssertionError
+_____________ test_codex_round4_blocker2_spec_binding_fail_closed _____________
+
+tmp_path = WindowsPath('C:/Users/yashw/swing trades/.pytest_tmp/test_codex_round4_blocker2_spe0')
+
+    def test_codex_round4_blocker2_spec_binding_fail_closed(tmp_path):
+        strat = High52MomentumStrategy()
+    
+        # Case 2a: Conflicting second identity (strategy_name matches, but strategy_id conflicts)
+        strat.config = {
+            "strategy_name": "HIGH52_MOMENTUM",
+            "strategy_id": "DELIVERY_ACCUMULATION",
+            "track": "TRACK_2",
+        }
+>       with pytest.raises(ValueError, match="does not match"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests\test_day3_strategies.py:1123: Failed
+=========================== short test summary info ===========================
+FAILED tests/test_day3_strategies.py::test_codex_round4_blocker1_subclass_and_mapping_key_immutability
+FAILED tests/test_day3_strategies.py::test_codex_round4_blocker2_spec_binding_fail_closed
+====================== 2 failed, 30 deselected in 0.12s =======================
