@@ -23,47 +23,45 @@ Scope:
 - shared/trust/artifacts/DAY2-EXECUTION-RISK-GOVERNOR-TESTS.log
 - shared/trust/artifacts/DAY2-EXECUTION-RISK-GOVERNOR-TESTS.log.sha256
 
-Exact Commit to Review: 2a0a240 (on branch feature/day2-execution-and-risk-governor)
-Parent Commit: 4a1663e
+Exact Commit to Review: be0e591 (on branch feature/day2-execution-and-risk-governor)
+Parent Commit: f226ef7
 
 Mandate:
-Perform formal re-review and acceptance gate evaluation on commit 2a0a240 resolving all findings from your Round 2 review:
+Perform formal re-review and acceptance gate evaluation on commit be0e591 resolving all 4 findings from your prior review:
 
-1. Remediation of Finding 4 (Cash Buffer Enforced at Actual Fill):
-   - In `confirm_fill_from_reservation`: Added strict check that actual fill outlay (actual_notional + transaction_costs) leaves remaining cash >= Rs 136,000 cash buffer. If below, raises `ValueError("CASH_BUFFER_BREACH_AT_FILL")` fail-closed.
-   - Tested in `test_codex_round2_cash_buffer_at_fill`.
+1. Remediation of Finding 1 (Cumulative Risk & Weighted Entry Basis on Partial Fills):
+   - In `confirm_fill`: When adding shares to an existing active position, recalculates weighted-average entry price `new_notional / new_shares`, updates notional, re-evaluates open risk against stop price, and aggregates transaction costs into `pos["entry_costs"]`.
+   - In `confirm_fill_from_reservation`: Evaluates CUMULATIVE position notional (`comb_notional`) and CUMULATIVE position risk (`comb_risk`) combining existing shares with the proposed fill. If `comb_notional > slot_cap_rs` (Rs 38,000) or `comb_risk > risk_per_trade_rs` (Rs 1,500), rejects fail-closed with `ValueError("EXPOSURE_OR_RISK_BREACH")`.
+   - Tested in `test_codex_round3_partial_fills_cumulative_risk_and_entry_basis`.
 
-2. Remediation of Finding 3 (Partial Fills Preserve Outstanding Reservation):
-   - In `confirm_fill_from_reservation`: Confirming partial quantity (e.g. 15 shares of 100) preserves the remaining 85 shares in `self.pending_reservations` with updated notional and risk. Reservation popped only when fully filled.
-   - Tested in `test_codex_round2_partial_fill_preserves_reservation`.
+2. Remediation of Finding 2 (Mandatory & Atomic Exit Idempotency):
+   - In `reconcile_exit`: `exit_event_id` is strictly MANDATORY (rejects None, empty, or whitespace with `ValueError("FAIL-CLOSED: exit_event_id is required")`).
+   - Validates existence of active position, valid shares quantity, finite positive exit price, and non-negative exit transaction costs BEFORE recording `evt_id` in `self.processed_exit_events`.
+   - If validation fails, `evt_id` is NOT consumed, allowing corrected retry with the same ID.
+   - Replaying the same `exit_event_id` after successful reconciliation raises `ValueError("DUPLICATE_EXIT_EVENT")` fail-closed.
+   - Tested in `test_codex_round3_exit_idempotency_mandatory_and_atomic`.
 
-3. Remediation of Finding 3 (NaN, Inf, and Non-Positive Input Validation):
-   - In `confirm_fill_from_reservation`: Rejects `float('nan')`, inf, boolean, negative prices, and zero/negative filled quantities fail-closed with `ValueError("FAIL-CLOSED")`.
-   - Tested in `test_codex_round2_actual_fill_nan_rejected`.
+3. Remediation of Finding 3 (Prorated Entry Costs Basis on Partial Exits):
+   - In `reconcile_exit`: On partial exits (`remaining_shares > 0`), prorates `pos["entry_costs"]` based on remaining share ratio: `pos["entry_costs"] -= round(pos["entry_costs"] * (shares_to_sell / open_shares), 2)`.
+   - Residual entry cost basis is accurately preserved for subsequent partial/final exits.
+   - Tested in `test_codex_round3_partial_exit_prorates_entry_costs`.
 
-4. Remediation of Finding 2 (Execution-Event Identity & Idempotency):
-   - In `reconcile_exit`: Accepts `exit_event_id` and records processed event IDs in `self.processed_exit_events`. Replaying an exit event ID raises `ValueError("DUPLICATE_EXIT_EVENT")` fail-closed.
-   - Tested in `test_codex_round2_exit_event_idempotency`.
+4. Remediation of Finding 4 (Finite Positive Target Validation):
+   - In `simulate_exit`: For `trigger_reason in ("TAKE_PROFIT", "TARGET")`, strictly validates that `target_price` is a finite positive number (`math.isfinite(x) and x > 0 and not isinstance(x, bool)`). Rejects missing, negative, zero, NaN, inf, or boolean targets fail-closed with `ValueError("FAIL-CLOSED")`.
+   - Tested in `test_codex_round3_target_validation_finite_positive`.
 
-5. Remediation of Finding 1 (Non-Stop / Take-Profit Touch Verification & Benchmark):
-   - In `simulate_exit`: Accepts `target_price: Optional[float] = None`. For `TAKE_PROFIT` / `TARGET`, verifies `bar.high >= target_price`. If untouched, returns `QUEUED` with 0 filled shares and `position_remains_open=True`.
-   - Benchmarks execution against `target_price` (or gap up open) minus adverse slippage, NOT against stop price. Realized PnL and R-multiple are positive for target exits.
-   - Tested in `test_codex_round2_take_profit_touch_and_benchmark`.
-
-6. Remediation of Finding 8 (Cost Separation & Entry Basis Persistence):
-   - In `ExecutionReport`: Separated `exit_transaction_costs` from combined `total_cost`.
-   - In `reconcile_exit`: Deducts ONLY exit transaction friction from sale proceeds (accepting `exit_transaction_costs`), preventing double-deduction of entry costs from cash.
-   - On partial exits, pro-rates remaining `entry_costs` basis on the remaining shares.
-   - Tested in `test_codex_round2_exit_reconciliation_no_double_entry_deduction`.
+5. Newline & Cryptographic Hash Normalization:
+   - `scripts/run_and_record_day2_suite.py` explicitly enforces standard LF (`\n`) newlines across platforms (`newline="\\n"`).
+   - Log SHA-256 is computed directly on the normalized LF bytes matching the Git blob object.
 
 Empirical Evidence:
-- Complete test suite: 40 adversarial tests in `tests/test_execution_risk_governor.py` + 12 in `tests/test_day1_data_contracts.py` (total 52 passed in 0.21s, exit code 0).
+- Complete test suite: 44 adversarial tests in `tests/test_execution_risk_governor.py` + 12 in `tests/test_day1_data_contracts.py` (total 56 passed in 0.30s, exit code 0).
 - Reproduction command: `.venv\\Scripts\\python.exe -m pytest tests/test_day1_data_contracts.py tests/test_execution_risk_governor.py -v`
 - Execution runner & recorder: `scripts/run_and_record_day2_suite.py`
 - Hash-sealed log: `shared/trust/artifacts/DAY2-EXECUTION-RISK-GOVERNOR-TESTS.log`
-- Log SHA-256: `9B2E0D7F33C044738F5B315B7D18886D9D285D5EA5C49B44D5285ED3F93774F7` (sealed in `DAY2-EXECUTION-RISK-GOVERNOR-TESTS.log.sha256`)
+- Log SHA-256: `7356435880E32DBAC964B0CFF03C34ECAA136FE5BEF6A44A560F79CC75C9E17D` (normalized LF, sealed in `DAY2-EXECUTION-RISK-GOVERNOR-TESTS.log.sha256`)
 
-Please inspect commit 2a0a240 and provide your formal independent review verdict (APPROVED or CHANGES_REQUIRED).
+Please inspect commit be0e591 and provide your formal independent review verdict (APPROVED or CHANGES_REQUIRED).
 """
 
 def main():
