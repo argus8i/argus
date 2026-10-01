@@ -119,26 +119,27 @@ def get_codex_bin() -> str:
                     res = subprocess.run([c, "--version"], capture_output=True, text=True, timeout=5)
                     if res.returncode == 0 and res.stdout.strip():
                         v_str = res.stdout.strip()
-                        m = re.search(r"(\d+)\.(\d+)\.(\d+)", v_str)
+                        # Strict SemVer 2.0.0 parsing: digits.digits.digits with optional pre-release tag
+                        m = re.search(r"\b(\d+)\.(\d+)\.(\d+)(?:-([a-zA-Z0-9.\-_]+))?", v_str)
                         if m:
-                            maj, min_, pat = map(int, m.groups())
-                            if (maj, min_, pat) >= (0, 159, 2):
-                                valid_candidates.append((c, v_str, (maj, min_, pat)))
+                            maj, min_, pat = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                            prerelease = m.group(4)
+                            v_tuple = (maj, min_, pat)
+                            # Pre-release of 0.159.2 (e.g. 0.159.2-rc.1) is strictly < 0.159.2
+                            if v_tuple > (0, 159, 2) or (v_tuple == (0, 159, 2) and prerelease is None):
+                                valid_candidates.append((c, v_str, v_tuple))
             except Exception:
                 pass
 
-    if valid_candidates:
-        valid_candidates.sort(key=lambda item: (item[2], os.path.getmtime(item[0])), reverse=True)
-        resolved = valid_candidates[0][0]
-        version_str = valid_candidates[0][1]
-    else:
-        resolved = candidates[0] if candidates else fallback
-        version_str = "unverified"
-        for c in candidates:
-            if os.path.exists(c):
-                resolved = c
-                break
+    if not valid_candidates:
+        raise RuntimeError(
+            f"No compatible Codex binary found satisfying semver floor >= (0, 159, 2). "
+            f"Checked candidates: {candidates}"
+        )
 
+    valid_candidates.sort(key=lambda item: (item[2], os.path.getmtime(item[0])), reverse=True)
+    resolved = valid_candidates[0][0]
+    version_str = valid_candidates[0][1]
     logger.info("Resolved Codex binary: %s (version: %s)", resolved, version_str)
     return resolved
 

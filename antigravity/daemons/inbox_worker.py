@@ -187,55 +187,6 @@ def compute_sha256(filepath: str) -> Optional[str]:
     return h.hexdigest()
 
 
-def write_json_atomic(filepath: str, data: Dict[str, Any], allow_overwrite_claimed: bool = False):
-    """Writes a dictionary to JSON atomically using a temporary file and replace."""
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    tmp_path = filepath + f".tmp_{uuid.uuid4().hex[:8]}"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-        f.flush()
-        os.fsync(f.fileno())
-    # For inbox messages, serialize write attempts to avoid racing overwrites of identical message_ids
-    norm_dir = os.path.normpath(os.path.dirname(filepath))
-    is_inbox = os.path.basename(norm_dir) == "inbox" and filepath.endswith(".json")
-    if is_inbox:
-        claimed_path = filepath.replace(".json", ".claimed")
-        dead_path = os.path.join(DEAD_LETTER_DIR, os.path.basename(filepath).replace(".json", ".dead.json"))
-        archive_path = os.path.join(ARCHIVE_DIR, os.path.basename(filepath))
-        thread_lock = _get_process_thread_lock(filepath)
-        written = False
-        with thread_lock:
-            # If already present in inbox, dead-letter, archive, or claimed (unless allow_overwrite_claimed), do not re-publish
-            if (os.path.exists(filepath) or os.path.exists(dead_path) or os.path.exists(archive_path) or
-                (not allow_overwrite_claimed and os.path.exists(claimed_path))):
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
-                return
-            for attempt in range(5):
-                try:
-                    os.replace(tmp_path, filepath)
-                    written = True
-                    break
-                except PermissionError:
-                    if attempt == 4:
-                        raise
-                    time.sleep(0.02)
-        if written:
-            _notify_active_inbox_workers()
-        return
-    else:
-        for attempt in range(5):
-            try:
-                os.replace(tmp_path, filepath)
-                return
-            except PermissionError:
-                if attempt == 4:
-                    raise
-                time.sleep(0.02)
-
-
 _ACTIVE_INBOX_WORKERS: weakref.WeakSet = weakref.WeakSet()
 _ACTIVE_INBOX_WORKERS_LOCK = threading.Lock()
 
@@ -310,23 +261,35 @@ class FileLock:
     def _break_stale_lock(self) -> bool:
         break_token = self.lock_path + ".break"
         b_fd = None
-        try:
+        for _break_attempt in range(2):
             try:
                 b_fd = os.open(break_token, os.O_CREAT | os.O_EXCL | os.O_RDWR)
                 os.write(b_fd, json.dumps({"pid": os.getpid(), "ts": time.time()}).encode("utf-8"))
+                break
             except FileExistsError:
                 # Another contender is in the process of inspecting/breaking the lock.
-                # Clean up if break_token itself is abandoned (older than 2s and holder dead)
+                # Clean up if break_token itself is abandoned (empty, malformed, or holder dead)
                 try:
                     t_mtime = os.path.getmtime(break_token)
-                    if (time.time() - t_mtime) > 2.0:
+                    t_size = os.path.getsize(break_token)
+                    age = time.time() - t_mtime
+                    should_remove = False
+                    if t_size == 0 and age > 0.1:
+                        should_remove = True
+                    elif age > 1.0:
                         try:
                             with open(break_token, "r", encoding="utf-8") as tf:
                                 t_info = json.load(tf)
                             t_pid = t_info.get("pid")
-                            if t_pid and not _pid_is_running(t_pid):
-                                os.remove(break_token)
-                        except Exception:
+                            if not t_pid or not _pid_is_running(t_pid):
+                                should_remove = True
+                        except (json.JSONDecodeError, ValueError):
+                            should_remove = True
+                    if should_remove:
+                        try:
+                            os.remove(break_token)
+                            continue
+                        except OSError:
                             pass
                 except OSError:
                     pass
@@ -334,6 +297,10 @@ class FileLock:
             except OSError:
                 return False
 
+        if b_fd is None:
+            return False
+
+        try:
             if not os.path.exists(self.lock_path):
                 return True
 
@@ -421,6 +388,73 @@ class FileLock:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.release()
+
+
+def write_json_atomic(filepath: str, data: Dict[str, Any], allow_overwrite_claimed: bool = False):
+    """Writes a dictionary to JSON atomically using a temporary file and replace."""
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    tmp_path = filepath + f".tmp_{uuid.uuid4().hex[:8]}"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+    # For inbox messages, serialize write attempts to avoid racing overwrites of identical message_ids
+    norm_dir = os.path.normpath(os.path.dirname(filepath))
+    is_inbox = os.path.basename(norm_dir) == "inbox" and filepath.endswith(".json")
+    if is_inbox:
+        claimed_path = filepath.replace(".json", ".claimed")
+        dead_path = os.path.join(DEAD_LETTER_DIR, os.path.basename(filepath).replace(".json", ".dead.json"))
+        archive_path = os.path.join(ARCHIVE_DIR, os.path.basename(filepath))
+        msg_id = data.get("message_id") or os.path.basename(filepath).replace(".json", "")
+        written = False
+        try:
+            with FileLock(filepath, timeout_sec=5.0):
+                # Cross-process check: if already present in inbox, dead-letter, archive, or claimed
+                if (os.path.exists(filepath) or os.path.exists(dead_path) or os.path.exists(archive_path) or
+                    (not allow_overwrite_claimed and os.path.exists(claimed_path))):
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
+                    return
+                # Also check durable admission store state inside cross-process lock
+                if not allow_overwrite_claimed:
+                    store = get_default_admission_store()
+                    if store:
+                        st = store.get_message_state(msg_id)
+                        if st and st in ("CLAIMED", "COMPLETED", "DEAD"):
+                            try:
+                                os.remove(tmp_path)
+                            except OSError:
+                                pass
+                            return
+                for attempt in range(5):
+                    try:
+                        os.replace(tmp_path, filepath)
+                        written = True
+                        break
+                    except PermissionError:
+                        if attempt == 4:
+                            raise
+                        time.sleep(0.02)
+        except TimeoutError:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            return
+        if written:
+            _notify_active_inbox_workers()
+        return
+    else:
+        for attempt in range(5):
+            try:
+                os.replace(tmp_path, filepath)
+                return
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.02)
 
 
 class DurableAdmissionStore:
@@ -547,8 +581,9 @@ class DurableAdmissionStore:
                 cur = conn.execute("SELECT state FROM message_admissions WHERE message_id = ?", (message_id,))
                 row = cur.fetchone()
                 return row[0] if row else None
-        except Exception:
-            return None
+        except Exception as e:
+            logger.error("Error reading message state for %s: %s", message_id, e)
+            return "ERROR"
 
     def is_message_recovering(self, message_id: str, payload_hash: Optional[str] = None) -> bool:
         """Checks if a message has been authorized for recovery retry in the durable store."""
@@ -573,42 +608,85 @@ class DurableAdmissionStore:
             pass
         return False
 
-    def mark_message_claimed(self, message_id: str) -> bool:
+    def mark_message_claimed(
+        self,
+        message_id: str,
+        correlation_id: Optional[str] = None,
+        payload_hash: Optional[str] = None,
+        sender: Optional[str] = None,
+        recipient: Optional[str] = None,
+        subject: Optional[str] = None,
+        timestamp_ist: Optional[str] = None,
+    ) -> bool:
         """Atomically marks message as CLAIMED in admission store."""
         try:
             with sqlite3.connect(self.db_path, timeout=10.0) as conn:
-                cur = conn.execute(
-                    "UPDATE message_admissions SET state = 'CLAIMED' WHERE message_id = ? AND state IN ('QUEUED', 'RECOVERING')",
-                    (message_id,)
-                )
-                conn.commit()
-                return cur.rowcount > 0
-        except Exception:
+                conn.row_factory = sqlite3.Row
+                cur = conn.execute("SELECT state FROM message_admissions WHERE message_id = ?", (message_id,))
+                row = cur.fetchone()
+                if row is None:
+                    # Message enqueued directly without prior admission row: create row as CLAIMED
+                    conn.execute(
+                        """
+                        INSERT INTO message_admissions
+                        (message_id, correlation_id, payload_hash, sender, recipient, subject, admitted_at, original_timestamp_ist, state, attempt_count)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CLAIMED', 0)
+                        """,
+                        (
+                            message_id,
+                            correlation_id or f"corr_{message_id}",
+                            payload_hash or "",
+                            sender or "UNKNOWN",
+                            recipient or "UNKNOWN",
+                            subject or "UNKNOWN",
+                            time.time(),
+                            timestamp_ist or get_current_ist(),
+                        )
+                    )
+                    conn.commit()
+                    return True
+                if row["state"] in ("COMPLETED", "DEAD"):
+                    # Terminal state: cannot claim!
+                    return False
+                if row["state"] in ("QUEUED", "RECOVERING", "RECOVERED_ACTIVE"):
+                    cur_update = conn.execute(
+                        "UPDATE message_admissions SET state = 'CLAIMED' WHERE message_id = ? AND state IN ('QUEUED', 'RECOVERING', 'RECOVERED_ACTIVE')",
+                        (message_id,)
+                    )
+                    conn.commit()
+                    return cur_update.rowcount > 0
+                return False
+        except Exception as e:
+            logger.error("Error in mark_message_claimed for %s: %s", message_id, e)
             return False
 
-    def mark_message_completed(self, message_id: str) -> None:
+    def mark_message_completed(self, message_id: str) -> bool:
         """Persists COMPLETED terminal state with completion timestamp in admission store."""
         try:
             with sqlite3.connect(self.db_path, timeout=10.0) as conn:
-                conn.execute(
+                cur = conn.execute(
                     "UPDATE message_admissions SET state = 'COMPLETED', completed_at = ? WHERE message_id = ?",
                     (time.time(), message_id)
                 )
                 conn.commit()
-        except Exception:
-            pass
+                return cur.rowcount > 0
+        except Exception as e:
+            logger.error("Failed to mark message %s completed in store: %s", message_id, e)
+            return False
 
-    def mark_message_dead(self, message_id: str, error: Optional[str] = None) -> None:
+    def mark_message_dead(self, message_id: str, error: Optional[str] = None) -> bool:
         """Persists DEAD terminal state with completion timestamp in admission store."""
         try:
             with sqlite3.connect(self.db_path, timeout=10.0) as conn:
-                conn.execute(
+                cur = conn.execute(
                     "UPDATE message_admissions SET state = 'DEAD', completed_at = ? WHERE message_id = ?",
                     (time.time(), message_id)
                 )
                 conn.commit()
-        except Exception:
-            pass
+                return cur.rowcount > 0
+        except Exception as e:
+            logger.error("Failed to mark message %s dead in store: %s", message_id, e)
+            return False
 
     def mark_message_recovering(
         self,
@@ -620,12 +698,14 @@ class DurableAdmissionStore:
         recipient: Optional[str] = None,
         subject: Optional[str] = None,
         timestamp_ist: Optional[str] = None,
-    ) -> None:
-        """Marks message for recovery, inserting a new RECOVERING row for pre-upgrade claims if missing."""
+    ) -> bool:
+        """Marks message for recovery if not terminal. Returns True if authorized for recovery, False if terminal or error."""
         try:
             with sqlite3.connect(self.db_path, timeout=10.0) as conn:
-                cur = conn.execute("SELECT message_id FROM message_admissions WHERE message_id = ?", (message_id,))
-                if cur.fetchone() is None:
+                conn.row_factory = sqlite3.Row
+                cur = conn.execute("SELECT state FROM message_admissions WHERE message_id = ?", (message_id,))
+                row = cur.fetchone()
+                if row is None:
                     # Pre-upgrade claim without an existing admission row: create row in RECOVERING state
                     conn.execute(
                         """
@@ -646,15 +726,20 @@ class DurableAdmissionStore:
                         )
                     )
                 else:
+                    if row["state"] in ("COMPLETED", "DEAD"):
+                        # Terminal state: NEVER reverse back to RECOVERING!
+                        return False
                     conn.execute(
-                        "UPDATE message_admissions SET state = 'RECOVERING', attempt_count = attempt_count + 1 WHERE message_id = ?",
+                        "UPDATE message_admissions SET state = 'RECOVERING', attempt_count = attempt_count + 1 WHERE message_id = ? AND state NOT IN ('COMPLETED', 'DEAD')",
                         (message_id,)
                     )
                 if nonce:
                     conn.execute("UPDATE seen_nonces SET state = 'RECOVERED_RETRY_PENDING' WHERE nonce = ?", (nonce,))
                 conn.commit()
-        except Exception:
-            pass
+                return True
+        except Exception as e:
+            logger.error("Error in mark_message_recovering for %s: %s", message_id, e)
+            return False
 
     def check_and_record_nonce(
         self,
@@ -685,11 +770,6 @@ class DurableAdmissionStore:
                     "INSERT INTO seen_nonces (nonce, sender, timestamp_ist, recorded_at, message_id, state) VALUES (?, ?, ?, ?, ?, ?)",
                     (nonce, sender, timestamp_ist, now, message_id, "RECORDED")
                 )
-                if message_id:
-                    conn.execute(
-                        "UPDATE message_admissions SET state = 'CLAIMED' WHERE message_id = ? AND state = 'QUEUED'",
-                        (message_id,)
-                    )
                 conn.commit()
             return True, None
         except sqlite3.IntegrityError:
@@ -1250,7 +1330,15 @@ class InboxWorker:
                             nonce = data.get("nonce")
                             store = getattr(self, "db", None) or get_default_admission_store()
                             if store:
-                                store.mark_message_recovering(
+                                cur_st = store.get_message_state(msg_id)
+                                if cur_st in ("COMPLETED", "DEAD"):
+                                    # Leftover claim from terminal message: clean up leftover .claimed and do not revert
+                                    try:
+                                        os.remove(claimed_path)
+                                    except OSError:
+                                        pass
+                                    continue
+                                authorized = store.mark_message_recovering(
                                     msg_id,
                                     nonce=nonce,
                                     correlation_id=corr_id,
@@ -1260,6 +1348,12 @@ class InboxWorker:
                                     subject=data.get("subject"),
                                     timestamp_ist=data.get("created_at_ist"),
                                 )
+                                if not authorized:
+                                    try:
+                                        os.remove(claimed_path)
+                                    except OSError:
+                                        pass
+                                    continue
                             if nonce:
                                 replay_store = get_default_admission_store()
                                 replay_store.mark_nonce_for_recovery(nonce, msg_id)
@@ -1308,6 +1402,9 @@ class InboxWorker:
                             os.remove(base_path)
                         except OSError:
                             pass
+                        return None
+                    if cur_state == "ERROR":
+                        # Database failure: fail closed, do not claim
                         return None
                 replaced = False
                 for _attempt in range(5):
@@ -1388,7 +1485,22 @@ class InboxWorker:
                     data["worker_create_time_nt"] = get_process_create_time_nt(os.getpid())
                     write_json_atomic(claimed_path, data)
                     if store:
-                        store.mark_message_claimed(data.get("message_id", json_filename.replace(".json", "")))
+                        claimed_ok = store.mark_message_claimed(
+                            data.get("message_id", json_filename.replace(".json", "")),
+                            correlation_id=data.get("correlation_id"),
+                            payload_hash=compute_payload_hash(data.get("body")),
+                            sender=data.get("sender"),
+                            recipient=data.get("recipient"),
+                            subject=data.get("subject"),
+                            timestamp_ist=data.get("created_at_ist"),
+                        )
+                        if not claimed_ok:
+                            # State transition failed (e.g. database error or already terminal): fail closed
+                            try:
+                                os.remove(claimed_path)
+                            except OSError:
+                                pass
+                            return None
                     try:
                         os.utime(claimed_path, (time.time(), time.time()))
                     except OSError:

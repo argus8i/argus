@@ -39,11 +39,17 @@ def test_get_codex_bin_prefers_localappdata(tmp_path, monkeypatch):
 
     codex_old = hash_old / "codex.exe"
     codex_new = hash_new / "codex.exe"
-    codex_old.write_text("old")
+    codex_old.write_bytes(b"MZ" + b"\x00" * 100)
     time.sleep(0.05)
-    codex_new.write_text("new")
+    codex_new.write_bytes(b"MZ" + b"\x00" * 100)
 
     monkeypatch.setenv("LOCALAPPDATA", str(localappdata))
+
+    class MockProcess:
+        returncode = 0
+        stdout = "codex-cli 0.159.2\n"
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: MockProcess())
 
     resolved = tab.get_codex_bin()
     assert os.path.normcase(resolved) == os.path.normcase(str(codex_new))

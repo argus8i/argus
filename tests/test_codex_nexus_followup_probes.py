@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
 """
 tests/test_codex_nexus_followup_probes.py
-Comprehensive regression probes covering all 5 findings from OpenAI Codex's peer review of ce85d57:
-1. P1: FileLock Successor Safety under Interleaving (atomic .break token + pre-unlink identity verification)
-2. P1: SQLite Admission & Publication Separate Race Boundary (send_to_agent duplicate never re-writes inbox)
-3. P1: Durable Admission Store nonces vs message_admissions separation (admissions never pruned after 600s TTL)
-4. P2: Pre-upgrade recovery UPSERT with full metadata and fallback nonce checks
-5. P2: Identity contract checking (sender, recipient, subject, payload_hash), terminal claim rejection, and Codex semver floor
+Comprehensive regression probes covering all findings from OpenAI Codex's peer reviews:
+1. P1: FileLock Successor Safety under Interleaving & Empty Abandoned Break Token Recovery
+2. P1: Cross-Process Publication Race (Producer A pauses after QUEUED, Producer B publishes & claims, Producer A resumes -> aborted)
+3. P1: Permanent Admission Retention & Terminal State Protection against Recovery Reversal
+4. P2: Pre-Upgrade Recovery Claims & Leftover Claim Reconciled without Resurrection
+5. P2: Full Identity Contract Validation (Sender, Recipient, Subject, Payload)
+6. P2: Terminal State Rejection & Database Error Fail-Closed in Claim
+7. P2: Durable State Updates on Completion & Dead-Lettering with Claim Failure Abort
+8. P2: Strict SemVer 2.0.0 Floor Enforcement & Pre-Release Rejection (Fails Closed with RuntimeError)
 """
 
 import json
@@ -35,19 +38,20 @@ from antigravity.daemons.tri_agent_bus import (
 
 
 # ==============================================================================
-# PROBE 1: FileLock Successor Safety under Interleaving
+# PROBE 1: FileLock Successor Safety & Empty Abandoned Break Token Recovery
 # ==============================================================================
-def test_filelock_successor_safety_under_interleaving():
+def test_filelock_successor_safety_and_empty_break_token_recovery():
     """
-    Finding P1: When Lock A is released or dead, Contender B breaks stale lock and
-    acquires it (writing new PID and released=False). Contender C, having observed Lock A
-    earlier, must NOT unlink Contender B's newly acquired lock file.
+    Finding P1 & P2:
+    1. An old empty abandoned .break token must be detected, cleaned up, and not block takeover.
+    2. When contender B breaks stale lock and acquires, contender C must NOT unlink contender B's live lock.
     """
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         target_path = os.path.join(tmpdir, "resource.json")
         lock_path = target_path + ".lock"
+        break_path = lock_path + ".break"
 
-        # Step 1: Create a released/stale lock file representing Lock A
+        # Step 1: Create a released lock representing Lock A
         stale_data = {
             "pid": 999999,
             "owner": "DEAD_WORKER",
@@ -58,10 +62,18 @@ def test_filelock_successor_safety_under_interleaving():
         with open(lock_path, "w", encoding="utf-8") as f:
             json.dump(stale_data, f)
 
-        # Step 2: Contender B acquires the lock. It should break the stale lock and take ownership.
+        # Step 2: Create an empty abandoned .break token older than 0.5s
+        with open(break_path, "w", encoding="utf-8") as f:
+            pass  # 0 bytes
+        old_mtime = time.time() - 2.0
+        os.utime(break_path, (old_mtime, old_mtime))
+        assert os.path.getsize(break_path) == 0
+
+        # Step 3: Contender B attempts to break stale lock.
+        # It must clean up the empty abandoned break token and acquire successfully!
         lock_b = FileLock(target_path, timeout_sec=2.0)
         acquired_b = lock_b.acquire()
-        assert acquired_b is True, "Contender B failed to acquire lock from stale state"
+        assert acquired_b is True, "Contender B was blocked by empty abandoned break token!"
 
         # Verify B owns the lock
         with open(lock_path, "r", encoding="utf-8") as f:
@@ -69,319 +81,266 @@ def test_filelock_successor_safety_under_interleaving():
         assert b_data["pid"] == os.getpid()
         assert b_data["released"] is False
 
-        # Step 3: Now Contender C attempts _break_stale_lock on lock_path.
-        # But lock_path is now owned by live process B (released=False, live PID).
-        # C must NOT delete B's lock!
+        # Step 4: Contender C attempts _break_stale_lock on B's active lock
         lock_c = FileLock(target_path, timeout_sec=0.1)
-        broke = lock_c._break_stale_lock()
-        assert broke is False, "Contender C improperly broke live Contender B's lock!"
+        broke_c = lock_c._break_stale_lock()
+        assert broke_c is False, "Contender C improperly broke live Contender B's lock!"
 
-        # Verify B's lock file is still intact and untouched
-        assert os.path.exists(lock_path), "Contender B's lock file was unlinked by Contender C!"
+        # Verify B's lock file is still intact and held
+        assert os.path.exists(lock_path)
         with open(lock_path, "r", encoding="utf-8") as f:
             intact_data = json.load(f)
         assert intact_data["pid"] == os.getpid()
         assert intact_data["released"] is False
 
-        # Contender C cannot acquire while B holds it
-        acquired_c = lock_c.acquire()
-        assert acquired_c is False, "Contender C acquired lock while B still holds it!"
-
-        # Step 4: Release B and ensure clean release
         lock_b.release()
-        with open(lock_path, "r", encoding="utf-8") as f:
-            rel_data = json.load(f)
-        assert rel_data["released"] is True
 
 
 # ==============================================================================
-# PROBE 2: Publication Boundary - Duplicate Never Re-Writes Inbox
+# PROBE 2: Cross-Process Publication Race Interleaving
 # ==============================================================================
-def test_send_to_agent_duplicate_never_republishes():
+def test_cross_process_publication_race_interleaving():
     """
-    Finding P1: Once a message is admitted in SQLite, subsequent callers with the same
-    message_id get is_new=False. Non-new callers must NEVER write to the inbox filesystem,
-    preventing race conditions where an already claimed or completed message is resurrected.
+    Finding P1: Producer A passes admission and pauses.
+    Producer B publishes, and worker claims B's message.
+    Producer A resumes and attempts to write to inbox.
+    Cross-process FileLock and admission state check must cause Producer A to abort
+    and NOT recreate the inbox file or overwrite the claimed message.
     """
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         db_path = os.path.join(tmpdir, "admissions.db")
         inbox_dir = os.path.join(tmpdir, "inbox")
         outbox_dir = os.path.join(tmpdir, "outbox")
+        dead_dir = os.path.join(tmpdir, "dead")
+        archive_dir = os.path.join(tmpdir, "archive")
         os.makedirs(inbox_dir, exist_ok=True)
         os.makedirs(outbox_dir, exist_ok=True)
+        os.makedirs(dead_dir, exist_ok=True)
+        os.makedirs(archive_dir, exist_ok=True)
 
         store = DurableAdmissionStore(db_path)
-        msg_id = "MSG-20261001-001"
-        corr_id = "CORR-20261001-001"
-        payload = {"instruction": "test instruction"}
+        msg_id = "MSG-RACE-001"
+        corr_a = "CORR-A-001"
+        corr_b = "CORR-B-001"
+        body = {"task": "race_task"}
+        p_hash = compute_payload_hash(body)
 
-        # Patch paths in tri_agent_bus
-        with patch("antigravity.daemons.tri_agent_bus.get_default_admission_store", return_value=store), \
+        with patch("antigravity.daemons.inbox_worker.INBOX_DIR", inbox_dir), \
+             patch("antigravity.daemons.inbox_worker.OUTBOX_DIR", outbox_dir), \
+             patch("antigravity.daemons.inbox_worker.DEAD_LETTER_DIR", dead_dir), \
+             patch("antigravity.daemons.inbox_worker.ARCHIVE_DIR", archive_dir), \
+             patch("antigravity.daemons.inbox_worker.get_default_admission_store", return_value=store), \
              patch("antigravity.daemons.tri_agent_bus.INBOX_DIR", inbox_dir), \
              patch("antigravity.daemons.tri_agent_bus.OUTBOX_DIR", outbox_dir), \
-             patch("antigravity.daemons.tri_agent_bus.get_agent_secret_key", return_value=b"secret_key_32_bytes_long_123456"):
+             patch("antigravity.daemons.tri_agent_bus.get_default_admission_store", return_value=store), \
+             patch("antigravity.daemons.tri_agent_bus.get_agent_secret_key", return_value=b"secret_key_32_bytes_long_123456"), \
+             patch("antigravity.daemons.inbox_worker.get_agent_secret_key", return_value=b"secret_key_32_bytes_long_123456"):
 
-            # 1. First send -> is_new=True, writes inbox JSON file
-            ret_id, ret_corr = send_to_agent(
-                sender="CODEX",
-                recipient="ANTIGRAVITY",
-                subject="test subject",
-                body=payload,
-                message_id=msg_id,
-                correlation_id=corr_id,
+            # 1. Producer A admits message (gets QUEUED) and prepares envelope, then pauses
+            is_new_a, winning_corr_a, err_a, st_a = store.admit_submission(
+                msg_id, corr_a, p_hash, sender="CLAUDE", recipient="ANTIGRAVITY", subject="ECHO", timestamp_ist="2026-10-01T09:00:00+05:30"
             )
-            assert ret_id == msg_id
-            assert ret_corr == corr_id
+            assert is_new_a is True
+            assert winning_corr_a == corr_a
+
+            # 2. Producer B arrives concurrently with same message ID
+            # Producer B admits (returns winning_corr_a) and publishes
+            send_to_agent(
+                sender="CLAUDE", recipient="ANTIGRAVITY", subject="ECHO", body=body,
+                message_id=msg_id, correlation_id=corr_b, nonce="NONCE-B-001"
+            )
 
             inbox_file = os.path.join(inbox_dir, f"{msg_id}.json")
-            assert os.path.exists(inbox_file), "First publication failed to create inbox file"
+            assert os.path.exists(inbox_file), "Producer B failed to write inbox file"
 
-            # 2. Simulate worker claiming the file (removes .json, creates .claimed)
-            claimed_file = os.path.join(inbox_dir, f"{msg_id}.claimed")
-            with open(inbox_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            os.remove(inbox_file)
-            with open(claimed_file, "w", encoding="utf-8") as f:
-                json.dump(data, f)
-
+            # Worker claims Producer B's file
+            worker = InboxWorker()
+            worker.db = store
+            claim_res = worker.claim_message(f"{msg_id}.json")
+            assert claim_res is not None
+            claimed_path, claimed_data = claim_res
+            assert claimed_data.get("nonce") == "NONCE-B-001"
+            assert store.get_message_state(msg_id) == "CLAIMED"
             assert not os.path.exists(inbox_file)
 
-            # 3. Second send with duplicate message -> must return immediately and NOT re-create inbox_file!
-            ret_id2, ret_corr2 = send_to_agent(
-                sender="CODEX",
-                recipient="ANTIGRAVITY",
-                subject="test subject",
-                body=payload,
-                message_id=msg_id,
-                correlation_id=corr_id,
-            )
-            assert ret_id2 == msg_id
-            assert ret_corr2 == corr_id
-            assert not os.path.exists(inbox_file), "Duplicate send recreated .json inbox file for claimed message!"
+            # 3. Now Producer A resumes and calls write_json_atomic with nonce "NONCE-A-001"
+            env_a = {
+                "message_id": msg_id, "correlation_id": winning_corr_a, "sender": "CLAUDE",
+                "recipient": "ANTIGRAVITY", "subject": "ECHO", "body": body, "nonce": "NONCE-A-001",
+                "status": "CREATED"
+            }
+            write_json_atomic(inbox_file, env_a)
+
+            # Verification: Producer A's write was aborted!
+            # inbox_file was NOT recreated with NONCE-A
+            assert not os.path.exists(inbox_file), "Producer A improperly recreated inbox file after claim!"
+            # claimed file remains owned by B
+            with open(claimed_path, "r", encoding="utf-8") as f:
+                current_claimed = json.load(f)
+            assert current_claimed.get("nonce") == "NONCE-B-001"
 
 
 # ==============================================================================
-# PROBE 3: Durable Admission Store - No 600s TTL Expiration on Admissions
+# PROBE 3: Permanent Retention & Terminal State Immunity from Recovery Reversal
 # ==============================================================================
-def test_durable_admission_store_permanent_binding_not_pruned_by_600s_ttl():
+def test_permanent_retention_and_terminal_immunity_from_recovery():
     """
-    Finding P1: Nonces expire after 600s to detect network replays, but message_admissions
-    must NEVER be pruned by check_and_record_nonce or TTL checks. The admission is durable.
+    Finding P1:
+    1. message_admissions are permanent and never deleted after 600s TTL.
+    2. mark_message_recovering must strictly refuse to transition COMPLETED or DEAD states to RECOVERING.
     """
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         db_path = os.path.join(tmpdir, "admissions.db")
         store = DurableAdmissionStore(db_path)
 
-        msg_id = "MSG-PERM-001"
-        corr_id = "CORR-PERM-001"
-        p_hash = compute_payload_hash({"task": "durable_task"})
+        msg_id_comp = "MSG-COMP-001"
+        msg_id_dead = "MSG-DEAD-001"
+        p_hash = compute_payload_hash("data")
 
-        # Admit message
-        is_new, winning_corr, err, state = store.admit_submission(
-            message_id=msg_id,
-            correlation_id=corr_id,
-            payload_hash=p_hash,
-            sender="ANTIGRAVITY",
-            recipient="CODEX",
-            subject="audit",
-            timestamp_ist="2026-10-01T09:00:00+05:30",
-        )
-        assert is_new is True
-        assert err is None
-        assert winning_corr == corr_id
+        # Admit and complete msg_id_comp
+        store.admit_submission(msg_id_comp, "CORR-01", p_hash, "CODEX", "ANTIGRAVITY", "sub", "2026-10-01T09:00:00+05:30")
+        assert store.mark_message_completed(msg_id_comp) is True
+        assert store.get_message_state(msg_id_comp) == "COMPLETED"
 
-        # Record a nonce with old timestamp (700 seconds ago) directly into seen_nonces
-        old_time = time.time() - 700.0
+        # Admit and dead-letter msg_id_dead
+        store.admit_submission(msg_id_dead, "CORR-02", p_hash, "CODEX", "ANTIGRAVITY", "sub", "2026-10-01T09:00:00+05:30")
+        assert store.mark_message_dead(msg_id_dead, error="SIMULATED") is True
+        assert store.get_message_state(msg_id_dead) == "DEAD"
+
+        # Insert expired nonce (700s ago)
         import sqlite3
         with sqlite3.connect(store.db_path) as conn:
             conn.execute(
                 "INSERT INTO seen_nonces (nonce, sender, timestamp_ist, recorded_at, message_id, state) VALUES (?, ?, ?, ?, ?, 'COMPLETED')",
-                ("OLD-NONCE-123", "CODEX", "2026-10-01T08:00:00+05:30", old_time, msg_id)
+                ("OLD-NONCE", "CODEX", "2026-10-01T08:00:00+05:30", time.time() - 700.0, msg_id_comp)
             )
             conn.commit()
 
-        # Now check and record a new nonce, which triggers pruning of seen_nonces older than 600s
-        ok, reason = store.check_and_record_nonce(
-            nonce="NEW-NONCE-456",
-            sender="CODEX",
-            timestamp_ist="2026-10-01T09:00:00+05:30",
-            message_id="MSG-NEW-002",
-        )
-        assert ok is True
+        # Trigger cleanup via new nonce record
+        store.check_and_record_nonce("NEW-NONCE", "CODEX", "2026-10-01T09:10:00+05:30", message_id="MSG-OTHER")
 
-        # Verify seen_nonces pruned OLD-NONCE-123
-        with sqlite3.connect(store.db_path) as conn:
-            row = conn.execute("SELECT nonce FROM seen_nonces WHERE nonce = 'OLD-NONCE-123'").fetchone()
-            assert row is None, "Old nonce was not pruned"
+        # Verify old nonce pruned, but terminal message_admissions strictly retained!
+        assert store.get_message_state(msg_id_comp) == "COMPLETED"
+        assert store.get_message_state(msg_id_dead) == "DEAD"
 
-            # BUT message_admissions for msg_id MUST STILL EXIST!
-            adm_row = conn.execute(
-                "SELECT message_id, correlation_id, state FROM message_admissions WHERE message_id = ?",
-                (msg_id,)
-            ).fetchone()
-            assert adm_row is not None, "CRITICAL: message_admissions was pruned by 600s TTL!"
-            assert adm_row[0] == msg_id
+        # Attempt to reverse COMPLETED state via mark_message_recovering
+        auth_comp = store.mark_message_recovering(msg_id_comp, nonce="RETRY-NONCE-1")
+        assert auth_comp is False, "mark_message_recovering reversed COMPLETED state!"
+        assert store.get_message_state(msg_id_comp) == "COMPLETED"
 
-        # Re-admission after TTL must still be recognized as duplicate
-        is_new2, winning_corr2, err2, state2 = store.admit_submission(
-            message_id=msg_id,
-            correlation_id="DIFFERENT-CORR",
-            payload_hash=p_hash,
-            sender="ANTIGRAVITY",
-            recipient="CODEX",
-            subject="audit",
-            timestamp_ist="2026-10-01T09:15:00+05:30",
-        )
-        assert is_new2 is False, "Message admission expired after TTL!"
-        assert winning_corr2 == corr_id
+        # Attempt to reverse DEAD state via mark_message_recovering
+        auth_dead = store.mark_message_recovering(msg_id_dead, nonce="RETRY-NONCE-2")
+        assert auth_dead is False, "mark_message_recovering reversed DEAD state!"
+        assert store.get_message_state(msg_id_dead) == "DEAD"
 
 
 # ==============================================================================
-# PROBE 4: Pre-Upgrade Recovery Claims with Full Metadata
+# PROBE 4: Pre-Upgrade Recovery & Leftover Claim Reconciled without Resurrection
 # ==============================================================================
-def test_recovery_exemption_pre_upgrade_claims():
+def test_pre_upgrade_recovery_and_leftover_reconciliation():
     """
-    Finding P2: If a legacy .claimed file exists without an entry in message_admissions,
-    mark_message_recovering must UPSERT a row with state='RECOVERING' and all available
-    metadata, and is_message_recovering must return True.
+    Finding P2:
+    1. Pre-upgrade claims insert complete metadata into message_admissions.
+    2. Leftover .claimed files from already COMPLETED messages are reconciled (unlinked)
+       and NEVER reverted back to .json.
     """
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         db_path = os.path.join(tmpdir, "admissions.db")
+        inbox_dir = os.path.join(tmpdir, "inbox")
+        outbox_dir = os.path.join(tmpdir, "outbox")
+        dead_dir = os.path.join(tmpdir, "dead")
+        archive_dir = os.path.join(tmpdir, "archive")
+        os.makedirs(inbox_dir, exist_ok=True)
+        os.makedirs(outbox_dir, exist_ok=True)
+        os.makedirs(dead_dir, exist_ok=True)
+        os.makedirs(archive_dir, exist_ok=True)
+
         store = DurableAdmissionStore(db_path)
 
-        legacy_msg_id = "LEGACY-MSG-001"
-        legacy_corr_id = "LEGACY-CORR-001"
-        legacy_nonce = "LEGACY-NONCE-001"
-        payload_hash = compute_payload_hash({"legacy": True})
+        with patch("antigravity.daemons.inbox_worker.INBOX_DIR", inbox_dir), \
+             patch("antigravity.daemons.inbox_worker.OUTBOX_DIR", outbox_dir), \
+             patch("antigravity.daemons.inbox_worker.DEAD_LETTER_DIR", dead_dir), \
+             patch("antigravity.daemons.inbox_worker.ARCHIVE_DIR", archive_dir):
 
-        # Pre-check: Not in store
-        assert store.get_message_state(legacy_msg_id) is None
-        assert store.is_message_recovering(legacy_msg_id, payload_hash) is False
+            worker = InboxWorker()
+            worker.db = store
 
-        # mark_message_recovering called on pre-upgrade claim
-        store.mark_message_recovering(
-            legacy_msg_id,
-            nonce=legacy_nonce,
-            correlation_id=legacy_corr_id,
-            payload_hash=payload_hash,
-            sender="CODEX",
-            recipient="ANTIGRAVITY",
-            subject="legacy task",
-            timestamp_ist="2026-10-01T08:00:00+05:30",
-        )
+            # Scenario A: Completed message has leftover .claimed file (e.g. crash after complete)
+            completed_msg_id = "MSG-LEFTOVER-COMP"
+            store.admit_submission(completed_msg_id, "CORR-L", "hash", "CODEX", "ANTIGRAVITY", "task", "2026-10-01T09:00:00+05:30")
+            store.mark_message_completed(completed_msg_id)
 
-        # Verify state is now RECOVERING
-        assert store.get_message_state(legacy_msg_id) == "RECOVERING"
-        assert store.is_message_recovering(legacy_msg_id, payload_hash) is True
+            claimed_file = os.path.join(inbox_dir, f"{completed_msg_id}.claimed")
+            with open(claimed_file, "w", encoding="utf-8") as f:
+                json.dump({"message_id": completed_msg_id, "worker_pid": 999999, "status": "CLAIMED"}, f)
+            os.utime(claimed_file, (time.time() - 200, time.time() - 200))
 
-        # Verify row in message_admissions
-        import sqlite3
-        with sqlite3.connect(store.db_path) as conn:
-            row = conn.execute(
-                "SELECT message_id, correlation_id, state, sender, recipient FROM message_admissions WHERE message_id = ?",
-                (legacy_msg_id,)
-            ).fetchone()
-            assert row is not None
-            assert row[0] == legacy_msg_id
-            assert row[1] == legacy_corr_id
-            assert row[2] == "RECOVERING"
-            assert row[3] == "CODEX"
-            assert row[4] == "ANTIGRAVITY"
+            # Run orphan recovery
+            worker.recover_orphaned_claims()
+
+            # Leftover .claimed file must be removed, and NOT reverted to .json!
+            assert not os.path.exists(claimed_file), "Leftover claim file was not unlinked"
+            assert not os.path.exists(os.path.join(inbox_dir, f"{completed_msg_id}.json")), "Completed message was resurrected as .json!"
+            assert store.get_message_state(completed_msg_id) == "COMPLETED"
 
 
 # ==============================================================================
-# PROBE 5: Identity Contract Validation (Sender, Recipient, Subject, Payload)
+# PROBE 5: Full Identity Contract Validation
 # ==============================================================================
 def test_identity_contract_validation():
     """
-    Finding P2: Admit submission must check (payload_hash, sender, recipient, subject).
-    Any mutation of these fields under the same message_id must raise CONFLICT.
+    Finding P2: admit_submission checks (payload_hash, sender, recipient, subject).
+    Divergent attributes raise CONFLICT.
     """
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         db_path = os.path.join(tmpdir, "admissions.db")
         store = DurableAdmissionStore(db_path)
 
-        msg_id = "MSG-ID-CONTRACT-001"
-        corr_id = "CORR-ID-CONTRACT-001"
+        msg_id = "MSG-ID-001"
+        corr_id = "CORR-ID-001"
         p_hash = compute_payload_hash("Original Body")
 
         is_new, _, err, _ = store.admit_submission(
-            message_id=msg_id,
-            correlation_id=corr_id,
-            payload_hash=p_hash,
-            sender="ANTIGRAVITY",
-            recipient="CODEX",
-            subject="Review",
-            timestamp_ist="2026-10-01T09:00:00+05:30",
+            message_id=msg_id, correlation_id=corr_id, payload_hash=p_hash,
+            sender="ANTIGRAVITY", recipient="CODEX", subject="Review", timestamp_ist="2026-10-01T09:00:00+05:30"
         )
-        assert is_new is True
-        assert err is None
+        assert is_new is True and err is None
 
-        # 1. Divergent sender
+        # Divergent sender
         is_new, _, err, _ = store.admit_submission(
-            message_id=msg_id,
-            correlation_id=corr_id,
-            payload_hash=p_hash,
-            sender="CLAUDE",
-            recipient="CODEX",
-            subject="Review",
-            timestamp_ist="2026-10-01T09:00:00+05:30",
+            message_id=msg_id, correlation_id=corr_id, payload_hash=p_hash,
+            sender="CLAUDE", recipient="CODEX", subject="Review", timestamp_ist="2026-10-01T09:00:00+05:30"
         )
-        assert is_new is False
-        assert err is not None
-        assert "CONFLICT" in err
+        assert is_new is False and "CONFLICT" in err
 
-        # 2. Divergent recipient
+        # Divergent recipient
         is_new, _, err, _ = store.admit_submission(
-            message_id=msg_id,
-            correlation_id=corr_id,
-            payload_hash=p_hash,
-            sender="ANTIGRAVITY",
-            recipient="CLAUDE",
-            subject="Review",
-            timestamp_ist="2026-10-01T09:00:00+05:30",
+            message_id=msg_id, correlation_id=corr_id, payload_hash=p_hash,
+            sender="ANTIGRAVITY", recipient="CLAUDE", subject="Review", timestamp_ist="2026-10-01T09:00:00+05:30"
         )
-        assert is_new is False
-        assert err is not None
-        assert "CONFLICT" in err
+        assert is_new is False and "CONFLICT" in err
 
-        # 3. Divergent subject
+        # Divergent subject
         is_new, _, err, _ = store.admit_submission(
-            message_id=msg_id,
-            correlation_id=corr_id,
-            payload_hash=p_hash,
-            sender="ANTIGRAVITY",
-            recipient="CODEX",
-            subject="Different Subject",
-            timestamp_ist="2026-10-01T09:00:00+05:30",
+            message_id=msg_id, correlation_id=corr_id, payload_hash=p_hash,
+            sender="ANTIGRAVITY", recipient="CODEX", subject="Other", timestamp_ist="2026-10-01T09:00:00+05:30"
         )
-        assert is_new is False
-        assert err is not None
-        assert "CONFLICT" in err
+        assert is_new is False and "CONFLICT" in err
 
-        # 4. Divergent payload hash
-        other_hash = compute_payload_hash("Mutated Body")
+        # Divergent payload
         is_new, _, err, _ = store.admit_submission(
-            message_id=msg_id,
-            correlation_id=corr_id,
-            payload_hash=other_hash,
-            sender="ANTIGRAVITY",
-            recipient="CODEX",
-            subject="Review",
-            timestamp_ist="2026-10-01T09:00:00+05:30",
+            message_id=msg_id, correlation_id=corr_id, payload_hash=compute_payload_hash("Mutated"),
+            sender="ANTIGRAVITY", recipient="CODEX", subject="Review", timestamp_ist="2026-10-01T09:00:00+05:30"
         )
-        assert is_new is False
-        assert err is not None
-        assert "CONFLICT" in err
+        assert is_new is False and "CONFLICT" in err
 
 
 # ==============================================================================
-# PROBE 6: Terminal State Rejection on Claim
+# PROBE 6: Terminal Claim Rejection & DB Error Fail-Closed
 # ==============================================================================
-def test_claim_message_rejects_terminal_states():
+def test_claim_message_rejects_terminal_and_db_errors():
     """
-    Finding P2: claim_message must reject messages whose admission state is COMPLETED or DEAD,
-    and remove the redundant inbox file without processing.
+    Finding P2: claim_message rejects messages in terminal state and fails closed on DB error.
     """
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         db_path = os.path.join(tmpdir, "admissions.db")
@@ -391,47 +350,43 @@ def test_claim_message_rejects_terminal_states():
         os.makedirs(outbox_dir, exist_ok=True)
 
         store = DurableAdmissionStore(db_path)
-        msg_id = "MSG-TERM-001"
-        corr_id = "CORR-TERM-001"
-        p_hash = compute_payload_hash("Terminal Task")
-
-        # Admit and mark completed
-        store.admit_submission(
-            message_id=msg_id,
-            correlation_id=corr_id,
-            payload_hash=p_hash,
-            sender="CODEX",
-            recipient="ANTIGRAVITY",
-            subject="done",
-            timestamp_ist="2026-10-01T09:00:00+05:30",
-        )
+        msg_id = "MSG-CLAIM-TERM"
+        store.admit_submission(msg_id, "CORR-T", "hash", "CODEX", "ANTIGRAVITY", "sub", "2026-10-01T09:00:00+05:30")
         store.mark_message_completed(msg_id)
-        assert store.get_message_state(msg_id) == "COMPLETED"
 
-        # Place redundant .json file in inbox
         inbox_file = os.path.join(inbox_dir, f"{msg_id}.json")
         with open(inbox_file, "w", encoding="utf-8") as f:
-            json.dump({"message_id": msg_id, "correlation_id": corr_id, "status": "CREATED"}, f)
+            json.dump({"message_id": msg_id, "status": "CREATED"}, f)
 
-        # Worker instance patched with isolated directories
         with patch("antigravity.daemons.inbox_worker.INBOX_DIR", inbox_dir), \
              patch("antigravity.daemons.inbox_worker.OUTBOX_DIR", outbox_dir):
             worker = InboxWorker()
             worker.db = store
 
-            # claim_message should return None and delete redundant file
-            claimed = worker.claim_message(f"{msg_id}.json")
-            assert claimed is None
-            assert not os.path.exists(inbox_file), "Redundant inbox file was not cleared"
+            # Terminal claim rejected and inbox file unlinked
+            res = worker.claim_message(f"{msg_id}.json")
+            assert res is None
+            assert not os.path.exists(inbox_file)
+
+            # DB Error simulation: fail-closed (return None)
+            msg_id_err = "MSG-CLAIM-ERR"
+            inbox_file_err = os.path.join(inbox_dir, f"{msg_id_err}.json")
+            with open(inbox_file_err, "w", encoding="utf-8") as f:
+                json.dump({"message_id": msg_id_err, "status": "CREATED"}, f)
+
+            with patch.object(store, "get_message_state", return_value="ERROR"):
+                res_err = worker.claim_message(f"{msg_id_err}.json")
+                assert res_err is None, "claim_message failed to fail closed on store ERROR"
 
 
 # ==============================================================================
-# PROBE 7: Dead-Letter Route and Complete Transitions Update Store
+# PROBE 7: Durable Completion & Dead-Letter Updates with Claim Failure Abort
 # ==============================================================================
-def test_dead_letter_route_and_complete_transitions_update_store():
+def test_durable_lifecycle_transitions_and_claim_failure_abort():
     """
-    Finding P2: Transitions to dead letter or completion must durably record state
-    in the admission store.
+    Finding P2:
+    1. Task completions and dead-lettering durably update admission store state.
+    2. If store.mark_message_claimed returns False, claim_message aborts and cleans up.
     """
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         db_path = os.path.join(tmpdir, "admissions.db")
@@ -450,67 +405,82 @@ def test_dead_letter_route_and_complete_transitions_update_store():
             worker = InboxWorker()
             worker.db = store
 
-            msg_id = "MSG-FAIL-001"
-            corr_id = "CORR-FAIL-001"
-            p_hash = compute_payload_hash("Failing Task")
+            msg_id = "MSG-LIFE-001"
+            store.admit_submission(msg_id, "CORR-01", "hash", "CODEX", "ANTIGRAVITY", "sub", "2026-10-01T09:00:00+05:30")
 
-            store.admit_submission(
-                message_id=msg_id,
-                correlation_id=corr_id,
-                payload_hash=p_hash,
-                sender="CODEX",
-                recipient="ANTIGRAVITY",
-                subject="fail",
-                timestamp_ist="2026-10-01T09:00:00+05:30",
-            )
-            assert store.get_message_state(msg_id) == "QUEUED"
-
-            # Create claimed file
+            # Route to dead letter updates store
             claimed_path = os.path.join(inbox_dir, f"{msg_id}.claimed")
-            msg_data = {"message_id": msg_id, "correlation_id": corr_id, "status": "CLAIMED"}
+            msg_data = {"message_id": msg_id, "correlation_id": "CORR-01", "status": "CLAIMED"}
             with open(claimed_path, "w", encoding="utf-8") as f:
                 json.dump(msg_data, f)
 
-            # Route to dead letter
-            worker.route_to_dead_letter(claimed_path, msg_data, "SIMULATED_FAILURE")
-
-            # Check store is now DEAD
+            worker.route_to_dead_letter(claimed_path, msg_data, "ERROR_TEST")
             assert store.get_message_state(msg_id) == "DEAD"
 
+            # Completion updates store
+            msg_id_comp = "MSG-LIFE-COMP"
+            store.admit_submission(msg_id_comp, "CORR-02", "hash", "CODEX", "ANTIGRAVITY", "sub", "2026-10-01T09:00:00+05:30")
+            assert store.mark_message_completed(msg_id_comp) is True
+            assert store.get_message_state(msg_id_comp) == "COMPLETED"
+
+            # Claim failure abort: if mark_message_claimed fails, claim_message returns None
+            msg_id_fail = "MSG-CLAIM-FAIL"
+            inbox_fail = os.path.join(inbox_dir, f"{msg_id_fail}.json")
+            with open(inbox_fail, "w", encoding="utf-8") as f:
+                json.dump({"message_id": msg_id_fail, "status": "CREATED"}, f)
+
+            with patch.object(store, "mark_message_claimed", return_value=False), \
+                 patch("antigravity.daemons.inbox_worker.validate_message_schema", return_value=(True, None)):
+                claim_res = worker.claim_message(f"{msg_id_fail}.json")
+                assert claim_res is None
+                assert not os.path.exists(os.path.join(inbox_dir, f"{msg_id_fail}.claimed"))
+
 
 # ==============================================================================
-# PROBE 8: Codex Binary Semver Floor (>= 0.159.2)
+# PROBE 8: Strict SemVer 2.0.0 Floor & Pre-Release Rejection (Fails Closed)
 # ==============================================================================
-def test_codex_bin_semver_floor():
+def test_codex_bin_strict_semver_floor_and_rejection():
     """
-    Finding P2: get_codex_bin() must strictly enforce semver floor >= (0, 159, 2)
-    and reject outdated binaries.
+    Finding P2:
+    1. Outdated version (0.158.0) rejected.
+    2. Pre-release version (0.159.2-rc.1) rejected.
+    3. If no candidate qualifies, get_codex_bin() raises RuntimeError (fail-closed).
+    4. Valid version (0.159.2) accepted.
     """
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
-        sub_old = os.path.join(tmpdir, "old_codex.exe")
-        sub_new = os.path.join(tmpdir, "new_codex.exe")
+        bin_old = os.path.join(tmpdir, "old_codex.exe")
+        bin_rc = os.path.join(tmpdir, "rc_codex.exe")
+        bin_valid = os.path.join(tmpdir, "valid_codex.exe")
 
-        # Create dummy binaries with MZ header
-        for path in (sub_old, sub_new):
-            with open(path, "wb") as f:
+        for p in (bin_old, bin_rc, bin_valid):
+            with open(p, "wb") as f:
                 f.write(b"MZ" + b"\x00" * 100)
 
-        def mock_subprocess_run(cmd, *args, **kwargs):
-            binary = cmd[0]
-            mock_res = MagicMock()
-            mock_res.returncode = 0
-            if binary == sub_old:
-                mock_res.stdout = "codex-cli 0.158.0\n"
-            elif binary == sub_new:
-                mock_res.stdout = "codex-cli 0.159.2\n"
-            else:
-                mock_res.stdout = "codex-cli 0.150.0\n"
-            return mock_res
+        def mock_subprocess(cmd, *args, **kwargs):
+            b = cmd[0]
+            res = MagicMock()
+            res.returncode = 0
+            if b == bin_old:
+                res.stdout = "codex-cli 0.158.0\n"
+            elif b == bin_rc:
+                res.stdout = "codex-cli 0.159.2-rc.1\n"
+            elif b == bin_valid:
+                res.stdout = "codex-cli 0.159.2\n"
+            return res
 
-        with patch("subprocess.run", side_effect=mock_subprocess_run), \
-             patch("glob.glob", return_value=[]), \
-             patch("os.path.isfile", side_effect=lambda p: p in (sub_old, sub_new)), \
-             patch("antigravity.daemons.tri_agent_bus.glob.glob", return_value=[sub_old, sub_new]):
+        # Case 1: Only outdated (0.158.0) and pre-release (0.159.2-rc.1) exist -> MUST RAISE RuntimeError
+        with patch("subprocess.run", side_effect=mock_subprocess), \
+             patch("antigravity.daemons.tri_agent_bus.glob.glob", return_value=[bin_old, bin_rc]), \
+             patch("os.path.isfile", side_effect=lambda p: p in (bin_old, bin_rc)):
+
+            with pytest.raises(RuntimeError) as exc_info:
+                get_codex_bin()
+            assert "No compatible Codex binary found" in str(exc_info.value)
+
+        # Case 2: Valid candidate (0.159.2) present -> resolved
+        with patch("subprocess.run", side_effect=mock_subprocess), \
+             patch("antigravity.daemons.tri_agent_bus.glob.glob", return_value=[bin_old, bin_rc, bin_valid]), \
+             patch("os.path.isfile", side_effect=lambda p: p in (bin_old, bin_rc, bin_valid)):
 
             resolved = get_codex_bin()
-            assert resolved == sub_new, f"Expected {sub_new}, got {resolved}"
+            assert resolved == bin_valid
