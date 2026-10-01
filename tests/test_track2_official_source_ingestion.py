@@ -505,6 +505,21 @@ def test_evidence_window_rejects_past_session(temp_surv_dir):
     assert result["verified"] is False
 
 
+def test_evidence_window_rejects_intervening_holiday_and_weekend_dates(temp_surv_dir):
+    # Thursday 2026-10-01 19:00 IST -> next session is Monday 2026-10-05
+    # Intervening dates 2026-10-02 (Gandhi Jayanti holiday), 2026-10-03 (Sat), 2026-10-04 (Sun)
+    # are NOT scheduled active sessions and must be rejected fail-closed.
+    fixed_now = datetime(2026, 10, 1, 19, 0, tzinfo=IST)
+    ingestor = Track2OfficialSourceIngestor(
+        surveillance_dir=str(temp_surv_dir), fetcher=make_mock_fetcher(), now_fn=lambda: fixed_now
+    )
+    for intervening in ["2026-10-02", "2026-10-03", "2026-10-04"]:
+        result = ingestor.ingest_session(intervening)
+        assert result["verified"] is False, f"Expected {intervening} to be rejected, got verified=True"
+        assert result["reason"] in ("SESSION_DATE_NOT_ALLOWED", "EVIDENCE_WINDOW_INVALID_SESSION_DATE", "SESSION_DATE_NOT_AN_ACTIVE_SESSION")
+
+
+
 
 def test_poller_rejects_stale_per_source_timestamp(temp_surv_dir):
     fixed_now = datetime(2026, 9, 21, 8, 30, tzinfo=IST)

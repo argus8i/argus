@@ -403,6 +403,8 @@ class Track2OfficialSourceIngestor:
         next_session = calculate_next_session_date(now.date())
         if session_day > next_session:
             return {"verified": False, "reason": "EVIDENCE_WINDOW_TOO_EARLY_FOR_SESSION"}
+        if session_day not in {now.date(), next_session}:
+            return {"verified": False, "reason": "SESSION_DATE_NOT_AN_ACTIVE_SESSION"}
 
         # Decision cutoff at 09:00 IST on session day
         decision_cutoff = datetime.combine(session_day, DECISION_CUTOFF_TIME, tzinfo=IST)
