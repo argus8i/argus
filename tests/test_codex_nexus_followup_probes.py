@@ -14,6 +14,7 @@ Comprehensive regression probes covering all findings from OpenAI Codex's peer r
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -27,7 +28,9 @@ from antigravity.daemons.inbox_worker import (
     DurableAdmissionStore,
     FileLock,
     InboxWorker,
+    compute_envelope_hmac,
     compute_payload_hash,
+    get_current_ist,
     get_process_create_time_nt,
     write_json_atomic,
 )
@@ -312,11 +315,46 @@ def test_pre_upgrade_recovery_and_leftover_reconciliation():
             assert store.get_message_state(dead_id) == "DEAD"
 
             # Scenario C: Zero-rowcount recovery refusal in mark_message_recovering
-            store.check_and_record_nonce("TEST-NONCE-ZC", "CODEX", "2026-10-01T09:00:00+05:30", message_id=comp_id_1)
-            auth_res = store.mark_message_recovering(comp_id_1, nonce="TEST-NONCE-ZC")
-            assert auth_res is False, "mark_message_recovering authorized recovery on COMPLETED message!"
+            # 1. On terminal message: returns False before update
+            store.check_and_record_nonce("TEST-NONCE-TERM", "CODEX", "2026-10-01T09:00:00+05:30", message_id=comp_id_1)
+            auth_term = store.mark_message_recovering(comp_id_1, nonce="TEST-NONCE-TERM")
+            assert auth_term is False, "mark_message_recovering authorized recovery on COMPLETED message!"
+
+            # 2. On active message: update executes but rowcount is 0 (e.g. concurrent race)
+            act_id_zc = "MSG-ACTIVE-ZC"
+            store.admit_submission(act_id_zc, "CORR-ZC", "hash", "CODEX", "ANTIGRAVITY", "task", "2026-10-01T09:00:00+05:30")
+            store.check_and_record_nonce("TEST-NONCE-ZC", "CODEX", "2026-10-01T09:00:00+05:30", message_id=act_id_zc)
+
+            orig_connect = sqlite3.connect
+            class MockConn:
+                def __init__(self, real_conn):
+                    self._real = real_conn
+                def execute(self, sql, params=()):
+                    res = self._real.execute(sql, params)
+                    if "UPDATE message_admissions SET state = 'RECOVERING'" in sql:
+                        mock_cur = MagicMock()
+                        mock_cur.rowcount = 0
+                        return mock_cur
+                    return res
+                def commit(self):
+                    self._real.commit()
+                def __getattr__(self, name):
+                    return getattr(self._real, name)
+                def __setattr__(self, name, val):
+                    if name == "_real":
+                        super().__setattr__(name, val)
+                    else:
+                        setattr(self._real, name, val)
+                def __enter__(self):
+                    return self
+                def __exit__(self, *args):
+                    return self._real.__exit__(*args)
+
+            with patch("sqlite3.connect", side_effect=lambda *args, **kwargs: MockConn(orig_connect(*args, **kwargs))):
+                auth_res = store.mark_message_recovering(act_id_zc, nonce="TEST-NONCE-ZC")
+                assert auth_res is False, "mark_message_recovering did not check rowcount == 0!"
+
             # Verify nonce state was NOT mutated to RECOVERED_RETRY_PENDING
-            import sqlite3
             with sqlite3.connect(store.db_path) as conn:
                 conn.row_factory = sqlite3.Row
                 nrow = conn.execute("SELECT state FROM seen_nonces WHERE nonce = 'TEST-NONCE-ZC'").fetchone()
@@ -483,53 +521,103 @@ def test_durable_lifecycle_transitions_and_claim_failure_abort():
             assert store.mark_message_completed(msg_id_comp) is True
             assert store.get_message_state(msg_id_comp) == "COMPLETED"
 
-            # Claim failure zero-loss envelope preservation:
-            # If mark_message_claimed fails due to DB error, claim_message returns None
-            # and RESTORES the .json envelope in inbox with status 'CREATED'!
+            # Claim failure zero-loss envelope preservation & retry recovery:
+            # When mark_message_claimed fails on an active or CLAIMED message, claim_message returns None,
+            # RESTORES the .json envelope in inbox with status 'CREATED', and marks nonce for recovery.
+            # Then the subsequent claim with REAL validate_message_schema succeeds without REPLAY_ATTACK!
             msg_id_fail = "MSG-CLAIM-FAIL"
-            store.admit_submission(msg_id_fail, "CORR-FAIL", "hash", "CODEX", "ANTIGRAVITY", "sub", "2026-10-01T09:00:00+05:30")
-            inbox_fail = os.path.join(inbox_dir, f"{msg_id_fail}.json")
-            with open(inbox_fail, "w", encoding="utf-8") as f:
-                json.dump({
-                    "message_id": msg_id_fail, "correlation_id": "CORR-FAIL",
-                    "sender": "CODEX", "recipient": "ANTIGRAVITY", "subject": "sub",
-                    "status": "CREATED", "created_at_ist": "2026-10-01T09:00:00+05:30",
-                    "body": "test"
-                }, f)
+            corr_id_fail = "CORR-FAIL"
+            nonce_fail = "NONCE-CLAIM-FAIL"
+            secret_key = b"secret_key_32_bytes_long_123456"
 
-            with patch.object(store, "mark_message_claimed", return_value=False), \
-                 patch("antigravity.daemons.inbox_worker.validate_message_schema", return_value=(True, None)):
-                claim_res = worker.claim_message(f"{msg_id_fail}.json")
-                assert claim_res is None
-                assert not os.path.exists(os.path.join(inbox_dir, f"{msg_id_fail}.claimed"))
-                # ZERO LOSS: The message envelope must still exist in the inbox!
-                assert os.path.exists(inbox_fail), "Persistence failure deleted the only recoverable envelope!"
-                with open(inbox_fail, "r", encoding="utf-8") as f:
-                    restored_data = json.load(f)
-                assert restored_data["status"] == "CREATED"
+            body_fail = {"task": "claim_fail_test"}
+            store.admit_submission(msg_id_fail, corr_id_fail, compute_payload_hash(body_fail), "CODEX", "ANTIGRAVITY", "sub", get_current_ist())
+            inbox_fail = os.path.join(inbox_dir, f"{msg_id_fail}.json")
+            env_fail = {
+                "message_id": msg_id_fail,
+                "correlation_id": corr_id_fail,
+                "sender": "CODEX",
+                "recipient": "ANTIGRAVITY",
+                "subject": "sub",
+                "status": "CREATED",
+                "attempt_count": 0,
+                "created_at_ist": get_current_ist(),
+                "body": body_fail,
+                "nonce": nonce_fail,
+            }
+            env_fail["auth_signature"] = compute_envelope_hmac(env_fail, secret_key)
+            with open(inbox_fail, "w", encoding="utf-8") as f:
+                json.dump(env_fail, f)
+
+            with patch("antigravity.daemons.inbox_worker.get_agent_secret_key", return_value=secret_key):
+                # 1. First claim attempt: mark_message_claimed fails, message state is CLAIMED
+                with patch.object(store, "mark_message_claimed", return_value=False), \
+                     patch.object(store, "get_message_state", return_value="CLAIMED"):
+                    claim_res = worker.claim_message(f"{msg_id_fail}.json")
+                    assert claim_res is None
+                    assert not os.path.exists(os.path.join(inbox_dir, f"{msg_id_fail}.claimed"))
+                    # ZERO LOSS: The message envelope must still exist in the inbox!
+                    assert os.path.exists(inbox_fail), "Persistence failure deleted the only recoverable envelope!"
+                    with open(inbox_fail, "r", encoding="utf-8") as f:
+                        restored_data = json.load(f)
+                    assert restored_data["status"] == "CREATED"
+
+                # Verify nonce was marked for recovery in durable store
+                with sqlite3.connect(store.db_path) as conn:
+                    conn.row_factory = sqlite3.Row
+                    nrow = conn.execute("SELECT state FROM seen_nonces WHERE nonce = ?", (nonce_fail,)).fetchone()
+                    assert nrow["state"] == "RECOVERED_RETRY_PENDING"
+
+                # 2. Second claim attempt: REAL validate_message_schema and REAL mark_message_claimed!
+                # Must succeed without REPLAY_ATTACK!
+                claim_res2 = worker.claim_message(f"{msg_id_fail}.json")
+                assert claim_res2 is not None, "Second claim attempt failed with real schema validation!"
+                claimed_p2, claimed_d2 = claim_res2
+                assert claimed_d2["status"] == "CLAIMED"
+                assert store.get_message_state(msg_id_fail) == "CLAIMED"
 
             # Completion persistence failure handling:
             # If mark_message_completed returns False, routes to dead letter with COMPLETION_PERSISTENCE_FAILED
+            # AND publishes FAILED response with COMPLETION_PERSISTENCE_FAILED to outbox!
             msg_id_comp_fail = "MSG-COMP-PERSIST-FAIL"
-            store.admit_submission(msg_id_comp_fail, "CORR-CPF", "hash", "CODEX", "ANTIGRAVITY", "sub", "2026-10-01T09:00:00+05:30")
+            corr_id_cpf = "CORR-CPF"
+            store.admit_submission(msg_id_comp_fail, corr_id_cpf, "hash", "CODEX", "ANTIGRAVITY", "sub", get_current_ist())
             claimed_cpf = os.path.join(inbox_dir, f"{msg_id_comp_fail}.claimed")
             msg_cpf = {
-                "message_id": msg_id_comp_fail, "correlation_id": "CORR-CPF", "nonce": "NONCE-CPF",
-                "recipient": "ANTIGRAVITY", "sender": "CODEX", "status": "CLAIMED"
+                "message_id": msg_id_comp_fail,
+                "correlation_id": corr_id_cpf,
+                "nonce": "NONCE-CPF",
+                "recipient": "ANTIGRAVITY",
+                "sender": "CODEX",
+                "subject": "sub",
+                "body": {"task": "comp_fail"},
+                "status": "CLAIMED",
+                "attempt_count": 0,
+                "created_at_ist": get_current_ist(),
             }
+            msg_cpf["auth_signature"] = compute_envelope_hmac(msg_cpf, secret_key)
             with open(claimed_cpf, "w", encoding="utf-8") as f:
                 json.dump(msg_cpf, f)
 
             with patch.object(worker, "execute_task", return_value=("COMPLETED", "output", {}, None)), \
-                 patch("antigravity.daemons.inbox_worker.validate_message_schema", return_value=(True, None)), \
+                 patch("antigravity.daemons.inbox_worker.get_agent_secret_key", return_value=secret_key), \
                  patch.object(store, "mark_message_completed", return_value=False):
                 worker._process_message_locked(claimed_cpf, msg_cpf)
+
                 # Must be dead-lettered due to completion persistence failure
                 dead_cpf = os.path.join(dead_dir, f"{msg_id_comp_fail}.dead.json")
                 assert os.path.exists(dead_cpf), "Completion persistence failure was not routed to dead letter!"
                 with open(dead_cpf, "r", encoding="utf-8") as f:
                     dead_cpf_data = json.load(f)
                 assert dead_cpf_data["error"] == "COMPLETION_PERSISTENCE_FAILED"
+
+                # Must publish FAILED response to outbox
+                outbox_cpf = os.path.join(outbox_dir, f"{corr_id_cpf}_resp.json")
+                assert os.path.exists(outbox_cpf), "Outbox response file was not written!"
+                with open(outbox_cpf, "r", encoding="utf-8") as f:
+                    out_cpf_data = json.load(f)
+                assert out_cpf_data["status"] == "FAILED"
+                assert out_cpf_data["error"] == "COMPLETION_PERSISTENCE_FAILED"
 
 
 # ==============================================================================
@@ -611,4 +699,109 @@ def test_codex_bin_strict_semver_floor_and_rejection():
             res = bus.ask_codex_detailed("test prompt")
             assert res["success"] is False
             assert "Failed to resolve compatible Codex binary" in res["error"]
+
+        # Case 5: Fresh subprocess import of tri_agent_bus with clean environment
+        cmd = [
+            sys.executable,
+            "-c",
+            "import os, sys; "
+            "sys.path.insert(0, os.getcwd()); "
+            "import antigravity.daemons.tri_agent_bus as bus; "
+            "assert bus.CODEX_BIN is None; "
+            "print('FRESH_IMPORT_OK')"
+        ]
+        sub_res = subprocess.run(cmd, capture_output=True, text=True)
+        assert sub_res.returncode == 0, f"Fresh subprocess import failed: {sub_res.stderr}"
+        assert "FRESH_IMPORT_OK" in sub_res.stdout
+
+
+def test_strict_semver_prerelease_and_ascii_enforcement():
+    """
+    Finding P2: SemVer 2.0.0 Parser Strictness
+    1. Rejects numeric prerelease identifiers with leading zeros: '0.160.0-01', '0.160.0-rc.01'.
+    2. Rejects non-ASCII digits: '০.১৬০.০'.
+    3. Accepts valid SemVer 2.0.0 with ASCII digits: '0.160.0-1', '0.160.0-rc.1', '0.160.0-beta.2+build.42'.
+    """
+    import re
+    semver_pattern = (
+        r"^(?:(?:codex|codex-cli)\s+)?"
+        r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+        r"(?:-((?:0|[1-9][0-9]*|[0-9A-Za-z-]*[a-zA-Z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[a-zA-Z-][0-9A-Za-z-]*))*))?"
+        r"(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
+    )
+
+    # Valid SemVer strings
+    valid_versions = [
+        "0.160.0",
+        "codex 0.160.0",
+        "codex-cli 0.160.0",
+        "0.160.0-1",
+        "0.160.0-rc.1",
+        "0.160.0-beta.2+build.42",
+        "1.0.0-alpha",
+        "1.0.0-0.3.7",
+        "1.0.0-x.7.z.92",
+    ]
+    for v in valid_versions:
+        assert re.match(semver_pattern, v) is not None, f"Strict SemVer regex failed to match valid version '{v}'"
+
+    # Invalid SemVer strings (must NOT match)
+    invalid_versions = [
+        "0.160.0-01",        # Numeric prerelease with leading zero
+        "0.160.0-rc.01",     # Sub-identifier numeric with leading zero
+        "00.160.0",          # Leading zero in major
+        "0.0160.0",          # Leading zero in minor
+        "0.160.00",          # Leading zero in patch
+        "0.160.0-",          # Empty prerelease
+        "0.160.0+",          # Empty build
+        "০.১৬০.০",           # Non-ASCII digits
+        "0.160.0-alpha..1",  # Empty identifier
+    ]
+    for inv in invalid_versions:
+        assert re.match(semver_pattern, inv) is None, f"Strict SemVer regex incorrectly matched invalid version '{inv}'"
+
+
+# ==============================================================================
+# PROBE 9: Nonce Helpers Terminal State Immunity
+# ==============================================================================
+def test_nonce_helpers_terminal_state_immunity():
+    """
+    Finding P1: Nonce helpers (mark_nonce_completed, mark_nonce_failed, mark_nonce_for_recovery)
+    must strictly preserve terminal states (COMPLETED, DEAD) and never permit:
+    - COMPLETED -> DEAD
+    - COMPLETED -> RECOVERING
+    - DEAD -> COMPLETED
+    - DEAD -> RECOVERING
+    """
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        db_path = os.path.join(tmpdir, "admissions.db")
+        store = DurableAdmissionStore(db_path)
+
+        comp_msg = "MSG-IMMUNE-COMP"
+        dead_msg = "MSG-IMMUNE-DEAD"
+
+        store.admit_submission(comp_msg, "CORR-IC", "h1", "CODEX", "ANTIGRAVITY", "sub", "2026-10-01T09:00:00+05:30")
+        assert store.mark_message_completed(comp_msg) is True
+        assert store.get_message_state(comp_msg) == "COMPLETED"
+
+        store.admit_submission(dead_msg, "CORR-ID", "h2", "CODEX", "ANTIGRAVITY", "sub", "2026-10-01T09:00:00+05:30")
+        assert store.mark_message_dead(dead_msg, error="SIMULATED") is True
+        assert store.get_message_state(dead_msg) == "DEAD"
+
+        # 1. Attempt to mutate COMPLETED -> DEAD via mark_nonce_failed
+        store.mark_nonce_failed("NONCE-C1", message_id=comp_msg)
+        assert store.get_message_state(comp_msg) == "COMPLETED", "mark_nonce_failed mutated COMPLETED to DEAD!"
+
+        # 2. Attempt to mutate COMPLETED -> RECOVERING via mark_nonce_for_recovery
+        store.mark_nonce_for_recovery("NONCE-C2", message_id=comp_msg)
+        assert store.get_message_state(comp_msg) == "COMPLETED", "mark_nonce_for_recovery mutated COMPLETED to RECOVERING!"
+
+        # 3. Attempt to mutate DEAD -> COMPLETED via mark_nonce_completed
+        store.mark_nonce_completed("NONCE-D1", message_id=dead_msg)
+        assert store.get_message_state(dead_msg) == "DEAD", "mark_nonce_completed mutated DEAD to COMPLETED!"
+
+        # 4. Attempt to mutate DEAD -> RECOVERING via mark_nonce_for_recovery
+        store.mark_nonce_for_recovery("NONCE-D2", message_id=dead_msg)
+        assert store.get_message_state(dead_msg) == "DEAD", "mark_nonce_for_recovery mutated DEAD to RECOVERING!"
+
 

@@ -119,9 +119,12 @@ def get_codex_bin() -> str:
                     res = subprocess.run([c, "--version"], capture_output=True, text=True, timeout=5)
                     if res.returncode == 0 and res.stdout.strip():
                         v_str = res.stdout.strip()
-                        # Strict SemVer 2.0.0 parsing: anchored regex enforcing SemVer 2.0.0 without leading zeros
+                        # Strict SemVer 2.0.0 parsing: ASCII digits only, no leading zeros in numeric prerelease identifiers
                         m = re.match(
-                            r"^(?:(?:codex|codex-cli)\s+)?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$",
+                            r"^(?:(?:codex|codex-cli)\s+)?"
+                            r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+                            r"(?:-((?:0|[1-9][0-9]*|[0-9A-Za-z-]*[a-zA-Z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[a-zA-Z-][0-9A-Za-z-]*))*))?"
+                            r"(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$",
                             v_str,
                         )
                         if m:
