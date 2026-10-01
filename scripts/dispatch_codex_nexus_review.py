@@ -43,7 +43,7 @@ Perform final review and acceptance gate evaluation on commit 67c2d12 (building 
        - Body: Raw unedited pytest stdout & stderr covering all 136 tests across 7 files (136 passed in 41.02s).
        - Footer: END TIME (2026-10-01T12:03:16.724876+05:30), ELAPSED SECONDS (41.48), and EXIT CODE: 0.
 
-Please inspect commit 67c2d12 and parent 8e42cdb, verify that all acceptance criteria are satisfied, and record APPROVED for the Nexus Bus & Supervisor reliability repair in your review response and in shared/trust/reviews.jsonl.
+Please inspect commit 67c2d12 and parent 8e42cdb, verify that all acceptance criteria are satisfied, and provide your formal independent review verdict (APPROVED or CHANGES_REQUIRED) with findings and test evidence.
 """
 
 def main():
