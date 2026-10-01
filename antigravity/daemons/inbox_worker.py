@@ -1546,24 +1546,25 @@ class InboxWorker:
                             )
                             # 1. Pre-construct failure response envelope
                             antigravity_key = get_agent_secret_key("ANTIGRAVITY")
-                            err_resp = None
-                            resp_json_str = None
-                            if antigravity_key:
-                                err_resp = {
-                                    "message_id": f"resp_{uuid.uuid4().hex[:12]}",
-                                    "correlation_id": corr_id,
-                                    "responder": "ANTIGRAVITY",
-                                    "route_agent": data.get("recipient"),
-                                    "status": "FAILED",
-                                    "created_at_ist": get_current_ist(),
-                                    "completed_at_ist": get_current_ist(),
-                                    "output_payload": None,
-                                    "artifact_hashes": {},
-                                    "nonce": uuid.uuid4().hex,
-                                    "error": err_desc,
-                                }
-                                err_resp["auth_signature"] = compute_envelope_hmac(err_resp, antigravity_key)
-                                resp_json_str = json.dumps(err_resp)
+                            if not antigravity_key:
+                                logger.error("Antigravity gateway key unavailable for exhaustion response on %s; preserving claim envelope", msg_id)
+                                continue
+
+                            err_resp = {
+                                "message_id": f"resp_{uuid.uuid4().hex[:12]}",
+                                "correlation_id": corr_id,
+                                "responder": "ANTIGRAVITY",
+                                "route_agent": data.get("recipient"),
+                                "status": "FAILED",
+                                "created_at_ist": get_current_ist(),
+                                "completed_at_ist": get_current_ist(),
+                                "output_payload": None,
+                                "artifact_hashes": {},
+                                "nonce": uuid.uuid4().hex,
+                                "error": err_desc,
+                            }
+                            err_resp["auth_signature"] = compute_envelope_hmac(err_resp, antigravity_key)
+                            resp_json_str = json.dumps(err_resp)
 
                             # 2. Persist DEAD state with durable response_json
                             dead_persisted = True
@@ -1586,7 +1587,7 @@ class InboxWorker:
 
                             # 4. Reconcile outbox response before unlinking claim
                             outbox_file = os.path.join(OUTBOX_DIR, get_safe_filename(corr_id, "_resp.json"))
-                            if not os.path.exists(outbox_file) and err_resp is not None:
+                            if not os.path.exists(outbox_file):
                                 try:
                                     write_json_atomic(outbox_file, err_resp)
                                 except Exception as pub_err:
@@ -1633,6 +1634,31 @@ class InboxWorker:
                             recovered_count += 1
                     except Exception:
                         pass
+        # Independent durable reconciliation for any dead letters with missing outbox responses
+        if os.path.exists(DEAD_LETTER_DIR):
+            for dl_file in os.listdir(DEAD_LETTER_DIR):
+                if not dl_file.endswith(".dead.json"):
+                    continue
+                dl_path = os.path.join(DEAD_LETTER_DIR, dl_file)
+                try:
+                    with open(dl_path, "r", encoding="utf-8") as f:
+                        dl_data = json.load(f)
+                    dl_msg_id = dl_data.get("message_id")
+                    dl_corr_id = dl_data.get("correlation_id")
+                    if dl_corr_id and dl_msg_id:
+                        dl_outbox = os.path.join(OUTBOX_DIR, get_safe_filename(dl_corr_id, "_resp.json"))
+                        if not os.path.exists(dl_outbox):
+                            store = getattr(self, "db", None) or get_default_admission_store()
+                            if store:
+                                dl_resp = store.get_message_response(dl_msg_id)
+                                if dl_resp:
+                                    try:
+                                        write_json_atomic(dl_outbox, json.loads(dl_resp))
+                                        logger.info("Reconciled missing outbox response for dead letter %s from durable store", dl_msg_id)
+                                    except Exception:
+                                        pass
+                except Exception:
+                    pass
         return recovered_count
 
     def claim_message(self, json_filename: str) -> Optional[Tuple[str, Dict[str, Any]]]:
@@ -1808,8 +1834,18 @@ class InboxWorker:
         except TimeoutError:
             return None
 
-    def route_to_dead_letter(self, claimed_path: str, msg: Dict[str, Any], error_msg: str, response_json: Optional[str] = None) -> bool:
-        """Moves a rejected or failed message to dead_letter with full diagnostics using sanitized path."""
+    def route_to_dead_letter(
+        self,
+        claimed_path: str,
+        msg: Dict[str, Any],
+        error_msg: str,
+        response_json: Optional[str] = None,
+        unlink_claim: bool = False,
+    ) -> bool:
+        """Moves a rejected or failed message to dead_letter with full diagnostics using sanitized path.
+        If unlink_claim is False, preserves claimed_path so caller can publish outbox response
+        before unlinking, preventing claim loss on outbox write failure or crash.
+        """
         msg_id = msg.get("message_id")
         store = getattr(self, "db", None) or get_default_admission_store()
         persisted = True
@@ -1830,10 +1866,11 @@ class InboxWorker:
             logger.error("Failed to write dead letter file for %s: %s; preserving claimed envelope", msg_id, dl_err)
             return False
 
-        try:
-            os.remove(claimed_path)
-        except OSError:
-            pass
+        if unlink_claim:
+            try:
+                os.remove(claimed_path)
+            except OSError:
+                pass
         return True
 
     def execute_task(self, msg: Dict[str, Any], claimed_path: Optional[str] = None) -> Tuple[str, Any, Dict[str, str], Optional[str]]:
@@ -2056,7 +2093,7 @@ class InboxWorker:
         # An invalid second request must not overwrite an already signed reply.
         # Check before schema validation, whose failure also emits a response.
         if os.path.exists(outbox_file):
-            self.route_to_dead_letter(claimed_path, msg, f"CORRELATION_ID_COLLISION: Response already exists for '{corr_id}'")
+            self.route_to_dead_letter(claimed_path, msg, f"CORRELATION_ID_COLLISION: Response already exists for '{corr_id}'", unlink_claim=True)
             return
 
         # 1. Schema, Identifier, and Authentication Validation (already admitted; check HMAC & schema)
@@ -2078,12 +2115,17 @@ class InboxWorker:
             err_resp["auth_signature"] = compute_envelope_hmac(err_resp, antigravity_key)
             resp_json_str = json.dumps(err_resp)
 
-            persisted_dead = self.route_to_dead_letter(claimed_path, msg, schema_err or "SCHEMA_VALIDATION_FAILED", response_json=resp_json_str)
+            persisted_dead = self.route_to_dead_letter(claimed_path, msg, schema_err or "SCHEMA_VALIDATION_FAILED", response_json=resp_json_str, unlink_claim=False)
             if persisted_dead:
                 try:
                     write_json_atomic(outbox_file, err_resp)
                 except Exception as out_err:
-                    logger.error("Failed to write outbox response for invalid schema message %s: %s; claim is in dead letter", msg.get("message_id"), out_err)
+                    logger.error("Failed to write outbox response for invalid schema message %s: %s; claim preserved for recovery", msg.get("message_id"), out_err)
+                    return
+                try:
+                    os.remove(claimed_path)
+                except OSError:
+                    pass
             else:
                 logger.error("Failed to persist DEAD state for invalid schema message %s; preserving envelope and suppressing outbox reply", msg.get("message_id"))
             return
@@ -2129,24 +2171,33 @@ class InboxWorker:
                 logger.error("Failed to persist COMPLETED state for message %s in durable store; routing to dead-letter", msg_id)
                 if nonce and store:
                     store.mark_nonce_failed(nonce, msg_id)
-                persisted_dead = self.route_to_dead_letter(claimed_path, msg, "COMPLETION_PERSISTENCE_FAILED")
+                err_resp = {
+                    "message_id": f"resp_{uuid.uuid4().hex[:12]}",
+                    "correlation_id": corr_id,
+                    "responder": "ANTIGRAVITY",
+                    "route_agent": route_agent,
+                    "status": "FAILED",
+                    "created_at_ist": get_current_ist(),
+                    "completed_at_ist": get_current_ist(),
+                    "output_payload": None,
+                    "artifact_hashes": {},
+                    "nonce": uuid.uuid4().hex,
+                    "error": "COMPLETION_PERSISTENCE_FAILED"
+                }
+                err_resp["auth_signature"] = compute_envelope_hmac(err_resp, antigravity_key)
+                resp_json_str = json.dumps(err_resp)
+
+                persisted_dead = self.route_to_dead_letter(claimed_path, msg, "COMPLETION_PERSISTENCE_FAILED", response_json=resp_json_str, unlink_claim=False)
                 if persisted_dead:
-                    # Publish FAILED response to outbox only if dead-lettering succeeded in DB (Finding 4)
-                    err_resp = {
-                        "message_id": f"resp_{uuid.uuid4().hex[:12]}",
-                        "correlation_id": corr_id,
-                        "responder": "ANTIGRAVITY",
-                        "route_agent": route_agent,
-                        "status": "FAILED",
-                        "created_at_ist": get_current_ist(),
-                        "completed_at_ist": get_current_ist(),
-                        "output_payload": None,
-                        "artifact_hashes": {},
-                        "nonce": uuid.uuid4().hex,
-                        "error": "COMPLETION_PERSISTENCE_FAILED"
-                    }
-                    err_resp["auth_signature"] = compute_envelope_hmac(err_resp, antigravity_key)
-                    write_json_atomic(outbox_file, err_resp)
+                    try:
+                        write_json_atomic(outbox_file, err_resp)
+                    except Exception as out_err:
+                        logger.error("Failed to write outbox response for completion failure %s: %s; claim preserved for recovery", msg_id, out_err)
+                        return
+                    try:
+                        os.remove(claimed_path)
+                    except OSError:
+                        pass
                 else:
                     logger.error("Failed to persist DEAD state for message %s after completion persistence failure; leaving claimed envelope intact and suppressing outbox reply", msg_id)
                 return
@@ -2191,12 +2242,17 @@ class InboxWorker:
             resp_envelope["auth_signature"] = compute_envelope_hmac(resp_envelope, antigravity_key)
             resp_json_str = json.dumps(resp_envelope)
 
-            persisted_dead = self.route_to_dead_letter(claimed_path, msg, error_msg or f"TASK_{status}", response_json=resp_json_str)
+            persisted_dead = self.route_to_dead_letter(claimed_path, msg, error_msg or f"TASK_{status}", response_json=resp_json_str, unlink_claim=False)
             if persisted_dead:
                 try:
                     write_json_atomic(outbox_file, resp_envelope)
                 except Exception as out_err:
-                    logger.error("Failed to write outbox response for failed task %s: %s; claim is in dead letter", msg_id, out_err)
+                    logger.error("Failed to write outbox response for failed task %s: %s; claim preserved for recovery", msg_id, out_err)
+                    return
+                try:
+                    os.remove(claimed_path)
+                except OSError:
+                    pass
             else:
                 logger.error("Failed to persist DEAD state for message %s in task failure; leaving claimed envelope intact and suppressing outbox reply", msg_id)
 
@@ -2208,7 +2264,7 @@ class InboxWorker:
             with FileLock(outbox_file, timeout_sec=5.0, stale_sec=3600.0):
                 self._process_message_locked(claimed_path, msg)
         except TimeoutError:
-            self.route_to_dead_letter(claimed_path, msg, "CORRELATION_LOCK_BUSY")
+            self.route_to_dead_letter(claimed_path, msg, "CORRELATION_LOCK_BUSY", unlink_claim=True)
 
     def _execute_in_lane(self, claimed_path: str, msg_data: Dict[str, Any]):
         recipient = msg_data.get("recipient", "ANTIGRAVITY")

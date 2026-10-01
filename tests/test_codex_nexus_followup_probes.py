@@ -1572,16 +1572,222 @@ def test_mark_message_recovering_paired_rollback_on_incompatible_nonce():
             row_adm2 = conn.execute("SELECT state FROM message_admissions WHERE message_id = ?", (msg_id2,)).fetchone()
             assert row_adm2[0] == "QUEUED", f"Admission was not rolled back! State is {row_adm2[0]}"
 
-        # 3. Legitimate missing nonce (e.g. pre-upgrade claim) -> Inserts nonce as RECOVERED_RETRY_PENDING, returns True
-        msg_id3 = "MSG-PRE-UPGRADE-LEGIT"
-        nonce3 = "NONCE-PRE-UPGRADE-LEGIT"
+        # 3. Admission QUEUED, Nonce RECOVERED_RETRY_CONSUMED -> Rollback admission, return False
+        msg_id3 = "MSG-PAIR-REV-CONSUMED"
+        nonce3 = "NONCE-PAIR-REV-CONSUMED"
         store.admit_submission(msg_id3, "CORR-3", "hash", "CODEX", "ANTIGRAVITY", "sub", get_current_ist())
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO seen_nonces (nonce, sender, timestamp_ist, recorded_at, message_id, state) VALUES (?, ?, ?, ?, ?, 'RECOVERED_RETRY_CONSUMED')",
+                (nonce3, "CODEX", get_current_ist(), time.time(), msg_id3)
+            )
 
         res3 = store.mark_message_recovering(msg_id3, nonce=nonce3)
-        assert res3 is True, "mark_message_recovering failed for legitimate missing nonce!"
+        assert res3 is False, "mark_message_recovering succeeded despite RECOVERED_RETRY_CONSUMED nonce!"
         with sqlite3.connect(db_path) as conn:
-            row_adm3 = conn.execute("SELECT state FROM message_admissions WHERE message_id = ?", (msg_id3,)).fetchone()
-            assert row_adm3[0] == "RECOVERING"
-            row_nonce3 = conn.execute("SELECT state FROM seen_nonces WHERE nonce = ?", (nonce3,)).fetchone()
-            assert row_nonce3 is not None
-            assert row_nonce3[0] == "RECOVERED_RETRY_PENDING"
+            row_adm3 = conn.execute("SELECT state, attempt_count FROM message_admissions WHERE message_id = ?", (msg_id3,)).fetchone()
+            assert row_adm3[0] == "QUEUED", f"Admission was not rolled back! State is {row_adm3[0]}"
+            assert row_adm3[1] == 0, f"Attempt count was incremented! Count is {row_adm3[1]}"
+
+        # 4. Legitimate missing nonce (e.g. pre-upgrade claim) -> Inserts nonce as RECOVERED_RETRY_PENDING, returns True
+        msg_id4 = "MSG-PRE-UPGRADE-LEGIT"
+        nonce4 = "NONCE-PRE-UPGRADE-LEGIT"
+        store.admit_submission(msg_id4, "CORR-4", "hash", "CODEX", "ANTIGRAVITY", "sub", get_current_ist())
+
+        res4 = store.mark_message_recovering(msg_id4, nonce=nonce4)
+        assert res4 is True, "mark_message_recovering failed for legitimate missing nonce!"
+        with sqlite3.connect(db_path) as conn:
+            row_adm4 = conn.execute("SELECT state FROM message_admissions WHERE message_id = ?", (msg_id4,)).fetchone()
+            assert row_adm4[0] == "RECOVERING"
+            row_nonce4 = conn.execute("SELECT state FROM seen_nonces WHERE nonce = ?", (nonce4,)).fetchone()
+            assert row_nonce4 is not None
+            assert row_nonce4[0] == "RECOVERED_RETRY_PENDING"
+
+
+# ==============================================================================
+# PROBE 22: Orphan Exhaustion Missing Key Preserves Claim & Completes On Key Restoration
+# ==============================================================================
+def test_orphan_exhaustion_missing_key_preserves_claim_and_delivers_on_restore():
+    """
+    Finding P1: When get_agent_secret_key("ANTIGRAVITY") is None during orphan exhaustion:
+    1. Pass 1: Claim envelope MUST NOT be unlinked, mark_message_dead MUST NOT be called,
+       dead letter file MUST NOT be written, and outbox MUST NOT receive a response.
+    2. Pass 2: Once the key is restored, recover_orphaned_claims completes normally:
+       DEAD state is marked in DB, dead letter file is written, signed failure response is
+       published to outbox, and the claim envelope is safely unlinked.
+    """
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        inbox_dir = os.path.join(tmpdir, "inbox")
+        outbox_dir = os.path.join(tmpdir, "outbox")
+        dead_dir = os.path.join(tmpdir, "dead_letter")
+        archive_dir = os.path.join(tmpdir, "archive")
+        os.makedirs(inbox_dir, exist_ok=True)
+        os.makedirs(outbox_dir, exist_ok=True)
+        os.makedirs(dead_dir, exist_ok=True)
+        os.makedirs(archive_dir, exist_ok=True)
+
+        db_path = os.path.join(tmpdir, "admissions.db")
+        store = DurableAdmissionStore(db_path)
+        secret_key = b"secret_key_32_bytes_long_123456"
+
+        msg_id = "MSG-EXHAUST-NO-KEY"
+        corr_id = "CORR-NO-KEY"
+        claimed_path = os.path.join(inbox_dir, f"{msg_id}.claimed")
+        outbox_path = os.path.join(outbox_dir, f"{corr_id}_resp.json")
+        dead_path = os.path.join(dead_dir, f"{msg_id}.dead.json")
+
+        store.admit_submission(msg_id, corr_id, "hash", "CODEX", "ANTIGRAVITY", "sub", get_current_ist())
+
+        msg_data = {
+            "message_id": msg_id,
+            "correlation_id": corr_id,
+            "sender": "CODEX",
+            "recipient": "ANTIGRAVITY",
+            "subject": "sub",
+            "body": {"task": "key_unavailable_test"},
+            "status": "CLAIMED",
+            "worker_pid": 999999,
+            "attempt_count": 5,
+            "created_at_ist": get_current_ist(),
+            "nonce": "NONCE-NO-KEY",
+        }
+        with open(claimed_path, "w", encoding="utf-8") as f:
+            json.dump(msg_data, f)
+        os.utime(claimed_path, (time.time() - 200, time.time() - 200))
+
+        with patch("antigravity.daemons.inbox_worker.INBOX_DIR", inbox_dir), \
+             patch("antigravity.daemons.inbox_worker.OUTBOX_DIR", outbox_dir), \
+             patch("antigravity.daemons.inbox_worker.DEAD_LETTER_DIR", dead_dir), \
+             patch("antigravity.daemons.inbox_worker.ARCHIVE_DIR", archive_dir):
+
+            worker = InboxWorker()
+            worker.db = store
+            worker.orphan_recovery_policy = "RETRY_REQUIRED"
+
+            # Pass 1: get_agent_secret_key returns None (key missing / unreadable)
+            with patch("antigravity.daemons.inbox_worker.get_agent_secret_key", return_value=None), \
+                 patch.object(store, "mark_message_dead", wraps=store.mark_message_dead) as mock_mark_dead:
+
+                worker.recover_orphaned_claims()
+
+                # Verify nothing was finalized without the signing key
+                mock_mark_dead.assert_not_called()
+                assert store.get_message_state(msg_id) == "QUEUED"
+                assert not os.path.exists(dead_path), "Dead letter file was written without signing key!"
+                assert not os.path.exists(outbox_path), "Outbox response was published without signing key!"
+                assert os.path.exists(claimed_path), "Claim envelope was unlinked when signing key was missing!"
+
+            # Pass 2: Key is restored!
+            with patch("antigravity.daemons.inbox_worker.get_agent_secret_key", return_value=secret_key):
+                worker.recover_orphaned_claims()
+
+                # Verify clean finalization
+                assert store.get_message_state(msg_id) == "DEAD"
+                assert os.path.exists(dead_path), "Dead letter file was not written after key restoration!"
+                assert os.path.exists(outbox_path), "Outbox response was not published after key restoration!"
+                with open(outbox_path, "r", encoding="utf-8") as f:
+                    resp_data = json.load(f)
+                assert resp_data["status"] == "FAILED"
+                assert resp_data["correlation_id"] == corr_id
+                assert "auth_signature" in resp_data
+                assert not os.path.exists(claimed_path), "Claim envelope was not unlinked after successful exhaustion recovery!"
+
+
+# ==============================================================================
+# PROBE 23: Schema / Task Failure Outbox Write Failure Reconciled on Second Pass
+# ==============================================================================
+def test_schema_or_task_failure_outbox_failure_reconciled_on_second_pass():
+    """
+    Finding P1: When a message encounters a schema or task failure:
+    1. Pass 1: route_to_dead_letter runs with unlink_claim=False, persisting DEAD in DB
+       and writing the dead letter file. If write_json_atomic to outbox fails,
+       the claim envelope MUST REMAIN on disk so recovery can trigger.
+    2. Pass 2: recover_orphaned_claims sees the leftover claim and missing outbox response,
+       reconstructs the exact signed error response from store.get_message_response,
+       writes the outbox response file, and only then safely unlinks the claim.
+    """
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+        inbox_dir = os.path.join(tmpdir, "inbox")
+        outbox_dir = os.path.join(tmpdir, "outbox")
+        dead_dir = os.path.join(tmpdir, "dead_letter")
+        archive_dir = os.path.join(tmpdir, "archive")
+        os.makedirs(inbox_dir, exist_ok=True)
+        os.makedirs(outbox_dir, exist_ok=True)
+        os.makedirs(dead_dir, exist_ok=True)
+        os.makedirs(archive_dir, exist_ok=True)
+
+        db_path = os.path.join(tmpdir, "admissions.db")
+        store = DurableAdmissionStore(db_path)
+        secret_key = b"secret_key_32_bytes_long_123456"
+
+        msg_id = "MSG-TASK-FAIL-OUTBOX-FAIL"
+        corr_id = "CORR-TASK-FAIL"
+        claimed_path = os.path.join(inbox_dir, f"{msg_id}.claimed")
+        outbox_path = os.path.join(outbox_dir, f"{corr_id}_resp.json")
+        dead_path = os.path.join(dead_dir, f"{msg_id}.dead.json")
+
+        store.admit_submission(msg_id, corr_id, "hash", "CODEX", "ANTIGRAVITY", "sub", get_current_ist())
+
+        msg_data = {
+            "message_id": msg_id,
+            "correlation_id": corr_id,
+            "sender": "CODEX",
+            "recipient": "ANTIGRAVITY",
+            "subject": "sub",
+            "body": {"task": "doomed_task"},
+            "status": "CLAIMED",
+            "worker_pid": 999999,
+            "attempt_count": 0,
+            "created_at_ist": get_current_ist(),
+            "nonce": "NONCE-TASK-FAIL",
+        }
+        msg_data["auth_signature"] = compute_envelope_hmac(msg_data, secret_key)
+        with open(claimed_path, "w", encoding="utf-8") as f:
+            json.dump(msg_data, f)
+
+        with patch("antigravity.daemons.inbox_worker.INBOX_DIR", inbox_dir), \
+             patch("antigravity.daemons.inbox_worker.OUTBOX_DIR", outbox_dir), \
+             patch("antigravity.daemons.inbox_worker.DEAD_LETTER_DIR", dead_dir), \
+             patch("antigravity.daemons.inbox_worker.ARCHIVE_DIR", archive_dir), \
+             patch("antigravity.daemons.inbox_worker.get_agent_secret_key", return_value=secret_key):
+
+            worker = InboxWorker()
+            worker.db = store
+
+            # Pass 1: Task fails AND write_json_atomic on outbox raises OSError
+            orig_write = write_json_atomic
+            def write_fail_on_outbox(path, data, **kwargs):
+                if str(path).endswith("_resp.json"):
+                    raise OSError("Injected disk full error on outbox")
+                return orig_write(path, data, **kwargs)
+
+            with patch.object(worker, "execute_task", return_value=("FAILED", None, {}, "APPLICATION_TASK_ERROR")), \
+                 patch("antigravity.daemons.inbox_worker.write_json_atomic", side_effect=write_fail_on_outbox):
+
+                worker._process_message_locked(claimed_path, msg_data)
+
+            # Pass 1 Verification:
+            # - DB state is DEAD
+            assert store.get_message_state(msg_id) == "DEAD"
+            # - Dead letter file is present
+            assert os.path.exists(dead_path), "Dead letter file was not written!"
+            # - Outbox response was NOT written (failed)
+            assert not os.path.exists(outbox_path)
+            # - CRUCIAL INVARIANT: Claim envelope MUST STILL EXIST ON DISK!
+            assert os.path.exists(claimed_path), "Claim envelope was unlinked before outbox write succeeded!"
+
+            # Pass 2: Age the claimed file and run recover_orphaned_claims
+            os.utime(claimed_path, (time.time() - 200, time.time() - 200))
+            worker.recover_orphaned_claims()
+
+            # Pass 2 Verification:
+            # - Missing outbox response was reconciled from SQLite response_json
+            assert os.path.exists(outbox_path), "Outbox response was not reconciled on recovery pass!"
+            with open(outbox_path, "r", encoding="utf-8") as f:
+                resp_data = json.load(f)
+            assert resp_data["status"] == "FAILED"
+            assert resp_data["error"] == "APPLICATION_TASK_ERROR"
+            assert resp_data["correlation_id"] == corr_id
+            # - Claim envelope is now cleanly unlinked
+            assert not os.path.exists(claimed_path), "Claim envelope was not unlinked after recovery pass reconciled outbox!"
+
