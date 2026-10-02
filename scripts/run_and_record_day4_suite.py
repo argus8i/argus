@@ -3,7 +3,7 @@ scripts/run_and_record_day4_suite.py
 ====================================
 Executes the comprehensive test suite for Sprint Day 4, records full unedited
 stdout/stderr to shared/trust/artifacts/DAY4-BACKTEST-STRESS-TESTS.log,
-computes its SHA-256 seal, and verifies zero failures across all 133 tests.
+computes its SHA-256 seal, and verifies zero failures across all 137 tests.
 """
 
 from __future__ import annotations
@@ -44,6 +44,7 @@ def main():
         "shared/trust/artifacts/test_codex_day4_ee58cb3_review.py",
         "shared/trust/artifacts/test_codex_day4_7c23f6c_review.py",
         "shared/trust/artifacts/test_codex_day4_90255e7_review.py",
+        "shared/trust/artifacts/test_codex_day4_bf510da_review.py",
     ]
 
     cmd = [python_exe, "-m", "pytest", *test_files, "-v"]

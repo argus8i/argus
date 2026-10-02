@@ -1,6 +1,6 @@
 # Synthetic Component Adversarial Regime Stress-Testing Report
 
-**Date of Execution:** 2026-10-02 11:56:25 IST  
+**Date of Execution:** 2026-10-02 12:22:46 IST  
 **Evaluator:** Antigravity (Quantitative Modeling & Infrastructure Orchestrator)  
 **Governing Authority:** ARGUS 8i Track 2 Liquid Desk (Sprint Day 4 Verification)  
 **Execution Environment:** Python 3.14.7 | Commit Head: `feature/day4-backtest-and-stress-testing`  
@@ -63,6 +63,7 @@ This report documents synthetic component stress scenarios evaluated dynamically
 ---
 
 ## 5. Verification Commands & Cryptographic Artifacts
-- **Reproduction Command:** `.venv\Scripts\python.exe -m pytest tests/test_day1_data_contracts.py tests/test_execution_risk_governor.py tests/test_day3_strategies.py tests/test_day4_backtest.py shared/trust/artifacts/test_codex_day4_9157a86_review.py shared/trust/artifacts/test_codex_day4_ee58cb3_review.py shared/trust/artifacts/test_codex_day4_7c23f6c_review.py shared/trust/artifacts/test_codex_day4_90255e7_review.py -v`
-- **Unit, Strategy & Reviewer Probes:** 133 passed across all Day 1–Day 4 contracts (Exit code: 0)
-- **Suite Log & Cryptographic Seal:** `shared/trust/artifacts/DAY4-BACKTEST-STRESS-TESTS.log`
+- **Reproduction Command:** `.venv\Scripts\python.exe -m pytest tests/test_day1_data_contracts.py tests/test_execution_risk_governor.py tests/test_day3_strategies.py tests/test_day4_backtest.py shared/trust/artifacts/test_codex_day4_9157a86_review.py shared/trust/artifacts/test_codex_day4_ee58cb3_review.py shared/trust/artifacts/test_codex_day4_7c23f6c_review.py shared/trust/artifacts/test_codex_day4_90255e7_review.py shared/trust/artifacts/test_codex_day4_bf510da_review.py -v`
+- **Suite Log & Sidecar:** `shared/trust/artifacts/DAY4-BACKTEST-STRESS-TESTS.log`
+- **Validated Test Execution:** 137 passed in 1.34s (Exit code: 0)
+- **Verified Cryptographic Seal (SHA-256):** `7CD21C6C1CA02BDA38FE0AB5A4156D1B738A6F6EDA4BC6D805F05D9E4B6EF42A`

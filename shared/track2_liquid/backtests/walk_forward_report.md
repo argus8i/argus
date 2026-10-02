@@ -1,6 +1,6 @@
 # Purged Rolling Walk-Forward Backtesting & Sensitivity Report
 
-**Date of Execution:** 2026-10-02 11:56:25 IST  
+**Date of Execution:** 2026-10-02 12:22:46 IST  
 **Evaluator:** Antigravity (Quantitative Modeling & Infrastructure Orchestrator)  
 **Governing Authority:** ARGUS 8i Track 2 Liquid Desk (Sprint Day 4 Verification)  
 **Execution Environment:** Python 3.14.7 | Commit Head: `feature/day4-backtest-and-stress-testing`  

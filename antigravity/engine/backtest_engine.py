@@ -471,6 +471,10 @@ class BacktestSimulation:
                 trade.pending_exit_reason = "STOP_LOSS"
             elif trade.trailing_stop is not None and bar.low <= trade.trailing_stop:
                 trade.pending_exit_reason = "TRAILING_STOP"
+            elif trade.strategy_id == "HIGH52_MOMENTUM" and trade.holding_sessions >= 10:
+                trade.pending_exit_reason = "TIME_STOP"
+            elif trade.strategy_id == "EXPIRY_RELIEF" and trade.holding_sessions >= 5:
+                trade.pending_exit_reason = "TIME_STOP"
             return None
 
         # Check gap-down opening below stop loss
@@ -706,11 +710,28 @@ def compute_backtest_metrics(
     max_dd_pct = (max_dd_rs / corpus_rs) * 100.0 if corpus_rs > 0 else 0.0
     max_dd_r = (max_dd_rs / risk_per_trade_rs) if risk_per_trade_rs > 0 else 0.0
 
-    # 3. Hurdle Verification (Tier 2 baseline criteria)
-    # Win rate >= 45%, Profit factor >= 1.30, Net expectancy > 0.25R, Max Drawdown <= 6.0%, Cash buffer >= Rs 136,000
-    has_cash_obs = bool(equity_curve and any(hasattr(pt, "cash") for pt in equity_curve))
-    min_cash = min((pt.cash for pt in equity_curve if hasattr(pt, "cash")), default=0.0) if has_cash_obs else 0.0
-    cash_passed = has_cash_obs and (min_cash >= CASH_BUFFER_RS)
+    valid_observations = bool(equity_curve)
+    min_cash = 0.0
+    if valid_observations:
+        for pt in equity_curve:
+            c = getattr(pt, "cash", None)
+            e = getattr(pt, "equity", None)
+            if (
+                c is None
+                or e is None
+                or not isinstance(c, (int, float))
+                or not math.isfinite(c)
+                or not isinstance(e, (int, float))
+                or not math.isfinite(e)
+            ):
+                valid_observations = False
+                break
+
+    if valid_observations:
+        min_cash = min(pt.cash for pt in equity_curve)
+        cash_passed = (min_cash >= CASH_BUFFER_RS)
+    else:
+        cash_passed = False
     hurdle_passed = (
         win_rate >= 0.45
         and profit_factor >= 1.30

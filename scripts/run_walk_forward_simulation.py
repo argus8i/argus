@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import csv
 import glob
+import hashlib
 import math
 import os
 import sys
@@ -204,10 +205,13 @@ def run_fold_simulation(
                 if exit_event is not None and exit_event.reason == "GAP_STOP_LOSS":
                     is_gap_fill = True
                 max_holding = 10 if trade.strategy_id == "HIGH52_MOMENTUM" else 5
-                if exit_event is None and trade.holding_sessions >= max_holding and bar.volume > 0 and not is_locked:
-                    exit_price = bar.close * (1.0 - policy.normal_slippage_bps / 10000.0)
-                    exit_event = BarExitEvent(reason="TIME_STOP", exit_price=exit_price, raw_exit_price=bar.close)
-                    is_gap_fill = False
+                if exit_event is None and trade.holding_sessions >= max_holding:
+                    if not is_locked and bar.volume > 0:
+                        exit_price = bar.close * (1.0 - policy.normal_slippage_bps / 10000.0)
+                        exit_event = BarExitEvent(reason="TIME_STOP", exit_price=exit_price, raw_exit_price=bar.close)
+                        is_gap_fill = False
+                    elif trade.pending_exit_reason is None:
+                        trade.pending_exit_reason = "TIME_STOP"
 
             # PROCESS EXIT (FULL OR PARTIAL)
             if exit_event is not None:
@@ -839,6 +843,7 @@ Paired repricing of the identical fill ledger proving monotonic net PnL degradat
     bear_verdict = "PASS" if stress_results["bear_dd_pct"] <= 6.00 else "FAIL"
     lc_verdict = "PASS" if stress_results["lc_dd_pct"] <= 6.00 else "FAIL (Exceeds 6.00% Cap)"
     cash_verdict = "PASS" if min_stress_cash >= CASH_BUFFER_RS else "FAIL"
+    footer_text = derive_verification_footer()
 
     stress_report_path = out_dir / "stress_test_report.md"
     stress_md = f"""# Synthetic Component Adversarial Regime Stress-Testing Report
@@ -905,16 +910,68 @@ This report documents synthetic component stress scenarios evaluated dynamically
 
 ---
 
-## 5. Verification Commands & Cryptographic Artifacts
-- **Reproduction Command:** `.venv\\Scripts\\python.exe -m pytest tests/test_day1_data_contracts.py tests/test_execution_risk_governor.py tests/test_day3_strategies.py tests/test_day4_backtest.py shared/trust/artifacts/test_codex_day4_9157a86_review.py shared/trust/artifacts/test_codex_day4_ee58cb3_review.py shared/trust/artifacts/test_codex_day4_7c23f6c_review.py shared/trust/artifacts/test_codex_day4_90255e7_review.py -v`
-- **Unit, Strategy & Reviewer Probes:** 133 passed across all Day 1–Day 4 contracts (Exit code: 0)
-- **Suite Log & Cryptographic Seal:** `shared/trust/artifacts/DAY4-BACKTEST-STRESS-TESTS.log`
+{footer_text}
 """
 
     with open(stress_report_path, "w", encoding="utf-8") as f:
         f.write(stress_md)
     print(f"Generated stress test report at {stress_report_path}")
     print(f"Sprint Day 4 Simulation Completed in {time.time() - t0:.2f}s!")
+
+
+def derive_verification_footer() -> str:
+    """
+    Derives verification status directly from sealed test execution evidence
+    rather than asserting unconditional hardcoded success.
+    """
+    artifacts_dir = ROOT_DIR / "shared" / "trust" / "artifacts"
+    log_file = artifacts_dir / "DAY4-BACKTEST-STRESS-TESTS.log"
+    sha_file = artifacts_dir / "DAY4-BACKTEST-STRESS-TESTS.log.sha256"
+
+    test_files = [
+        "tests/test_day1_data_contracts.py",
+        "tests/test_execution_risk_governor.py",
+        "tests/test_day3_strategies.py",
+        "tests/test_day4_backtest.py",
+        "shared/trust/artifacts/test_codex_day4_9157a86_review.py",
+        "shared/trust/artifacts/test_codex_day4_ee58cb3_review.py",
+        "shared/trust/artifacts/test_codex_day4_7c23f6c_review.py",
+        "shared/trust/artifacts/test_codex_day4_90255e7_review.py",
+        "shared/trust/artifacts/test_codex_day4_bf510da_review.py",
+    ]
+    repro_cmd = f".venv\\Scripts\\python.exe -m pytest {' '.join(test_files)} -v"
+
+    footer_lines = [
+        "## 5. Verification Commands & Cryptographic Artifacts",
+        f"- **Reproduction Command:** `{repro_cmd}`",
+        f"- **Suite Log & Sidecar:** `{log_file.relative_to(ROOT_DIR).as_posix()}`",
+    ]
+
+    if log_file.exists() and sha_file.exists():
+        log_content = log_file.read_text(encoding="utf-8", errors="replace")
+        sha_seal = sha_file.read_text(encoding="utf-8").strip().split()[0]
+
+        actual_sha = hashlib.sha256(log_file.read_bytes()).hexdigest().upper()
+        if actual_sha == sha_seal.upper():
+            exit_code = None
+            summary = None
+            for line in log_content.splitlines():
+                if line.startswith("EXIT_CODE:"):
+                    exit_code = line.split(":", 1)[1].strip()
+                elif "passed" in line and line.strip().startswith("="):
+                    summary = line.strip("= ")
+
+            if summary and exit_code is not None:
+                footer_lines.append(f"- **Validated Test Execution:** {summary} (Exit code: {exit_code})")
+                footer_lines.append(f"- **Verified Cryptographic Seal (SHA-256):** `{sha_seal}`")
+            else:
+                footer_lines.append(f"- **Cryptographic Seal (SHA-256):** `{sha_seal}`")
+        else:
+            footer_lines.append("- **Cryptographic Seal:** MISMATCH between log file and sha256 sidecar")
+    else:
+        footer_lines.append("- **Execution Evidence:** Pending recording via `scripts/run_and_record_day4_suite.py`.")
+
+    return "\n".join(footer_lines)
 
 
 def run_adversarial_stress_scenarios() -> Dict[str, float]:
