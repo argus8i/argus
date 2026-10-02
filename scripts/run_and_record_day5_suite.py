@@ -56,6 +56,7 @@ def main():
         "shared/trust/artifacts/test_codex_day5_cd0b2bf_round5.py",
         "shared/trust/artifacts/test_codex_day5_ac6f0be_round6.py",
         "shared/trust/artifacts/test_codex_day5_369d464_round7.py",
+        "shared/trust/artifacts/test_codex_day5_b2155c4_round8.py",
     ]
 
     cmd = [python_exe, "-m", "pytest", *test_files, "-v"]

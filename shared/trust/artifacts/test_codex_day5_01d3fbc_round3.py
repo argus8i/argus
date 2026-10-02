@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 import json
+import csv
+import hashlib
 import pytest
 spec=importlib.util.spec_from_file_location('p',Path(__file__).with_name('test_codex_day5_48cb886_review.py'))
 p=importlib.util.module_from_spec(spec); spec.loader.exec_module(p)
@@ -35,7 +37,12 @@ def test_matching_labels_alone_do_not_verify_manifest(tmp_path):
 def test_missing_manifest_session_can_be_retried_with_verified_data(tmp_path):
     r=p.runner(tmp_path)
     r.run_post_close('2024-05-15',{},bhavcopy_manifest=None)
-    r.run_post_close('2024-05-15',p.bars(),bhavcopy_manifest={'status':'NORMAL','session_date':'2024-05-15'})
+    f=tmp_path/'source.csv'
+    row=dict(SYMBOL='CDSL',SERIES='EQ',OPEN='100',HIGH='105',LOW='98',CLOSE='103',VOLUME='50000',DATE='2024-05-15')
+    with f.open('w',newline='') as h:
+        w=csv.DictWriter(h,fieldnames=list(row)); w.writeheader(); w.writerow(row)
+    m=dict(status='NORMAL',session_date='2024-05-15',source_file=str(f),source_sha256=hashlib.sha256(f.read_bytes()).hexdigest())
+    r.run_post_close('2024-05-15',p.bars(),bhavcopy_manifest=m)
     assert r.store.get_latest_equity() is not None, 'missing-data run irreversibly seals session'
 
 def test_wrapped_append_event_does_not_escape_atomic_transaction(tmp_path,monkeypatch):

@@ -1635,82 +1635,89 @@ class PaperDeskRunner:
                                         vol_col = next((f_upper[c] for c in ("VOLUME", "TOTTRDQTY", "TTLTRADGVOL", "TTLTRADQTY") if c in f_upper), None)
                                         dt_col = next((f_upper[c] for c in ("DATE", "TRADDT", "SESSION_DATE", "BIZDT", "TIMESTAMP") if c in f_upper), None)
 
-                                        # Mandatory column groups: date, symbol, series, open, close
-                                        if sym_col and cls_col and opn_col and dt_col:
+                                        # Mandatory column groups: date, symbol, series, open, high, low, close, volume
+                                        if sym_col and srs_col and opn_col and hgh_col and low_col and cls_col and vol_col and dt_col:
                                             source_symbol_map = {}
+                                            has_row_conflict = False
                                             for r in reader:
                                                 r_dt = r.get(dt_col, "").strip()
                                                 if r_dt == session_date:
                                                     s_sym = r.get(sym_col, "").strip().upper()
-                                                    s_srs = r.get(srs_col, "EQ").strip().upper() if srs_col else "EQ"
+                                                    s_srs = r.get(srs_col, "").strip().upper()
                                                     if s_sym and s_srs == "EQ":
                                                         try:
                                                             s_o = float(r.get(opn_col, 0))
+                                                            s_h = float(r.get(hgh_col, 0))
+                                                            s_l = float(r.get(low_col, 0))
                                                             s_c = float(r.get(cls_col, 0))
-                                                            s_h = float(r.get(hgh_col, s_o)) if hgh_col else max(s_o, s_c)
-                                                            s_l = float(r.get(low_col, s_c)) if low_col else min(s_o, s_c)
-                                                            s_v = float(r.get(vol_col, 0)) if vol_col else 0.0
+                                                            s_v = float(r.get(vol_col, -1))
 
                                                             if (
                                                                 math.isfinite(s_o)
-                                                                and math.isfinite(s_c)
                                                                 and math.isfinite(s_h)
                                                                 and math.isfinite(s_l)
+                                                                and math.isfinite(s_c)
                                                                 and math.isfinite(s_v)
                                                                 and s_o > 0
+                                                                and s_h > 0
+                                                                and s_l > 0
                                                                 and s_c > 0
+                                                                and s_v >= 0
                                                                 and s_h >= s_l
                                                                 and s_l <= s_o <= s_h
                                                                 and s_l <= s_c <= s_h
                                                             ):
-                                                                source_symbol_map[s_sym] = {
+                                                                bar_entry = {
                                                                     "open": s_o,
                                                                     "high": s_h,
                                                                     "low": s_l,
                                                                     "close": s_c,
                                                                     "volume": s_v,
                                                                 }
+                                                                # Handle duplicate/ambiguous rows fail-closed
+                                                                if s_sym in source_symbol_map:
+                                                                    prev_entry = source_symbol_map[s_sym]
+                                                                    if (
+                                                                        abs(prev_entry["open"] - s_o) > 0.01
+                                                                        or abs(prev_entry["high"] - s_h) > 0.01
+                                                                        or abs(prev_entry["low"] - s_l) > 0.01
+                                                                        or abs(prev_entry["close"] - s_c) > 0.01
+                                                                        or abs(prev_entry["volume"] - s_v) > 0.01
+                                                                    ):
+                                                                        has_row_conflict = True
+                                                                        break
+                                                                else:
+                                                                    source_symbol_map[s_sym] = bar_entry
+                                                            else:
+                                                                has_row_conflict = True
+                                                                break
                                                         except (ValueError, TypeError):
-                                                            pass
+                                                            has_row_conflict = True
+                                                            break
 
-                                            # Coverage and price binding: every consumed symbol must be in source and match open & close
-                                            all_bars_bound = bool(source_symbol_map)
-                                            for sym, bar in bar_data_map.items():
-                                                sym_u = sym.strip().upper()
-                                                if sym_u not in source_symbol_map:
-                                                    all_bars_bound = False
-                                                    break
-                                                src_bar = source_symbol_map[sym_u]
-                                                if (
-                                                    abs(bar.open - src_bar["open"]) > 0.01
-                                                    or abs(bar.close - src_bar["close"]) > 0.01
-                                                ):
-                                                    all_bars_bound = False
-                                                    break
+                                            # Complete OHLCV coverage and price binding
+                                            if not has_row_conflict and source_symbol_map:
+                                                all_bars_bound = True
+                                                for sym, bar in bar_data_map.items():
+                                                    sym_u = sym.strip().upper()
+                                                    if sym_u not in source_symbol_map:
+                                                        all_bars_bound = False
+                                                        break
+                                                    src_bar = source_symbol_map[sym_u]
+                                                    if (
+                                                        abs(bar.open - src_bar["open"]) > 0.01
+                                                        or abs(bar.high - src_bar["high"]) > 0.01
+                                                        or abs(bar.low - src_bar["low"]) > 0.01
+                                                        or abs(bar.close - src_bar["close"]) > 0.01
+                                                        or abs(bar.volume - src_bar["volume"]) > 0.01
+                                                    ):
+                                                        all_bars_bound = False
+                                                        break
 
-                                            if all_bars_bound:
-                                                is_manifest_valid = True
+                                                if all_bars_bound:
+                                                    is_manifest_valid = True
                             except Exception:
                                 pass
-
-        # Check for empty-data retry:
-        # Permitted ONLY if retrying a session that previously completed with 0 bars and missing equity,
-        # AND desk has zero active economics (no open positions, no reservations, no fills).
-        prev_bars_cnt = self._session_bars_count.get(session_date)
-        is_empty_retry = (
-            self.store.is_session_processed(session_date)
-            and self.store.get_latest_equity() is None
-            and prev_bars_cnt == 0
-            and has_valid_bars
-            and not executed_entries
-            and not executed_exits
-            and not current_open_positions
-            and not self.governor.pending_reservations
-            and isinstance(bhavcopy_manifest, dict)
-            and bhavcopy_manifest.get("status") == "NORMAL"
-        )
-        if is_empty_retry:
-            is_manifest_valid = True
 
         if is_manifest_valid:
             self.store.record_daily_equity(daily_equity_rec)
