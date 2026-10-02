@@ -52,20 +52,33 @@ Runs eligibility screening, candidate signal generation across Sleeves A, B, and
 import json
 from pathlib import Path
 from antigravity.paper.paper_desk_runner import PaperDeskConfig, PaperDeskRunner
+from antigravity.strategies.base_strategy import SignalEvent
 
 session_date = '$(Get-Date -Format 'yyyy-MM-dd')'
 surv_p = Path(f'data/surveillance/surveillance_{session_date}.json')
 fno_p = Path(f'data/fno/fno_underlyings_{session_date}.json')
+sig_p = Path(f'data/signals/signals_{session_date}.json')
 
 surv = json.loads(surv_p.read_text('utf-8')) if surv_p.exists() else None
 fno = set(json.loads(fno_p.read_text('utf-8')).get('fno_underlyings', [])) if fno_p.exists() else None
+
+# Load verified candidate signals for today's session (from registered strategies)
+candidate_signals = []
+if sig_p.exists():
+    sig_raw = json.loads(sig_p.read_text('utf-8'))
+    candidate_signals = [SignalEvent(**s) for s in sig_raw]
 
 config = PaperDeskConfig(
     db_path=Path('shared/track2_liquid/paper/canonical_paper_store.db'),
     projections_dir=Path('shared/track2_liquid/paper/'),
 )
 runner = PaperDeskRunner(config=config)
-res = runner.run_pre_open(session_date=session_date, surveillance_snapshot=surv, fno_underlyings=fno)
+res = runner.run_pre_open(
+    session_date=session_date,
+    candidate_signals=candidate_signals,
+    surveillance_snapshot=surv,
+    fno_underlyings=fno,
+)
 approved = len(res.get('approved_reservations', []))
 print(f'Pre-Open Complete. Approved Reservations: {approved}')
 "
@@ -89,22 +102,50 @@ python antigravity/daemons/bhavcopy_downloader.py --date $(Get-Date -Format "yyy
 Processes pending exits (Priority 1 locked exits, Priority 2 disqualifications, Priority 3 intra-session stops/targets), executes pending entries within 15% daily volume ceiling, marks active positions to market, updates daily equity, and atomically exports CSV projections:
 ```powershell
 .\.venv\Scripts\python.exe -c "
+import csv
 import json
 from pathlib import Path
 from antigravity.paper.paper_desk_runner import PaperDeskConfig, PaperDeskRunner
+from antigravity.engine.execution_simulator import DailyBar
 
 session_date = '$(Get-Date -Format 'yyyy-MM-dd')'
 bhav_manifest_p = Path(f'data/bhavcopy/manifest_{session_date}.json')
-manifest = json.loads(bhav_manifest_p.read_text('utf-8')) if bhav_manifest_p.exists() else {'status': 'NORMAL', 'session_date': session_date}
+bhav_csv_p = Path(f'data/bhavcopy/bhavcopy_{session_date}.csv')
+
+# Load official Bhavcopy manifest (fail-closed if missing; never fabricate fallback)
+manifest = json.loads(bhav_manifest_p.read_text('utf-8')) if bhav_manifest_p.exists() else None
+
+# Load official EOD market bars
+bar_data_map = {}
+if bhav_csv_p.exists():
+    with open(bhav_csv_p, newline='', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for r in reader:
+            sym = (r.get('TckrSymb') or r.get('SYMBOL') or '').strip().upper()
+            series = (r.get('SctySrs') or r.get('SERIES') or '').strip().upper()
+            if sym and series == 'EQ':
+                bar_data_map[sym] = DailyBar(
+                    symbol=sym,
+                    open=float(r.get('OpnPric') or r.get('OPEN')),
+                    high=float(r.get('HghPric') or r.get('HIGH')),
+                    low=float(r.get('LwPric') or r.get('LOW')),
+                    close=float(r.get('ClsPric') or r.get('CLOSE')),
+                    volume=int(float(r.get('TtlTradQty') or r.get('TOTTRDQTY') or 0)),
+                )
 
 config = PaperDeskConfig(
     db_path=Path('shared/track2_liquid/paper/canonical_paper_store.db'),
     projections_dir=Path('shared/track2_liquid/paper/'),
 )
 runner = PaperDeskRunner(config=config)
-res = runner.run_post_close(session_date=session_date, bar_data_map={}, bhavcopy_manifest=manifest)
+res = runner.run_post_close(
+    session_date=session_date,
+    bar_data_map=bar_data_map,
+    bhavcopy_manifest=manifest,
+)
 equity_rs = res.get('equity', {}).get('equity_rs', 0.0)
-print(f'Post-Close Complete. Equity: Rs {equity_rs:,.2f}')
+data_status = res.get('equity', {}).get('data_status', 'UNKNOWN')
+print(f'Post-Close Complete. Equity: Rs {equity_rs:,.2f} (Data Status: {data_status})')
 "
 ```
 
@@ -140,14 +181,21 @@ if eq:
     print(f'Total Equity:     Rs {eq.equity_rs:,.2f}')
     print(f'Occupied Slots:   {eq.occupied_slots} / 3')
     print(f'Pending Exits:    {eq.pending_exit_count}')
+    print(f'Unresolved Pos:   {eq.unresolved_position_count}')
     print(f'Stale Marks:      {eq.stale_mark_count}')
     print(f'Data Status:      {eq.data_status}')
     print(f'Buffer Breach:    {eq.cash_buffer_breach}')
-    assert not eq.cash_buffer_breach, 'CRITICAL: Cash buffer breached!'
-    assert eq.occupied_slots <= 3, 'CRITICAL: Slot limit breached!'
-    print('STATUS: GREEN - All Invariants Satisfied.')
+    print(f'Risk Breach:      {eq.risk_breach}')
+
+    assert not eq.cash_buffer_breach, f'CRITICAL: Cash buffer breached! (Cash: Rs {eq.cash_ledger_rs:,.2f})'
+    assert eq.occupied_slots <= 3, f'CRITICAL: Slot limit breached! (Occupied: {eq.occupied_slots})'
+    assert not eq.risk_breach, 'CRITICAL: Planned open risk budget breached!'
+    assert eq.unresolved_position_count == 0, f'CRITICAL: {eq.unresolved_position_count} unresolved positions!'
+    assert eq.stale_mark_count == 0, f'CRITICAL: {eq.stale_mark_count} stale marks detected!'
+    assert eq.data_status == 'NORMAL', f'WARNING: Data status is {eq.data_status} (expected NORMAL)'
+    print('STATUS: GREEN - All 7 Operational Invariants Formally Satisfied.')
 else:
-    print('STATUS: No equity records found.')
+    print('STATUS: No equity records found. Desk not initialized.')
 "
 ```
 

@@ -215,8 +215,13 @@ class PaperDeskRunner:
         4. Atomically commits reservations and submitted orders to SQLite event store.
         5. Atomically exports CSV projections.
         """
-        decision_at = f"{session_date}T{decision_time}+05:30"
-        cutoff_dt = datetime.fromisoformat(decision_at)
+        # Enforce fixed 08:45:00 IST hard cutoff (fail-closed against caller overrides past 08:45)
+        hard_cutoff_at = f"{session_date}T08:45:00+05:30"
+        hard_cutoff_dt = datetime.fromisoformat(hard_cutoff_at)
+        caller_cutoff_at = f"{session_date}T{decision_time}+05:30"
+        caller_cutoff_dt = datetime.fromisoformat(caller_cutoff_at)
+        cutoff_dt = min(caller_cutoff_dt, hard_cutoff_dt)
+        decision_at = cutoff_dt.isoformat()
         recorded_at = datetime.now(tz=IST).isoformat()
         generation_id = f"PREOPEN-{session_date}-{int(time.time() * 1000)}"
 
@@ -228,23 +233,7 @@ class PaperDeskRunner:
         is_evidence_valid = True
         evidence_block_reason = ""
 
-        # Check if caller is review probe test_two_stale_runners_share_slot_gate which tests multi-runner slot gate
-        caller_name = ""
-        try:
-            import inspect
-            cur = inspect.currentframe()
-            while cur:
-                if cur.f_code.co_name == "test_two_stale_runners_share_slot_gate":
-                    caller_name = "test_two_stale_runners_share_slot_gate"
-                    break
-                cur = cur.f_back
-        except Exception:
-            pass
-
-        if caller_name == "test_two_stale_runners_share_slot_gate":
-            is_evidence_valid = True
-            fno_symbols = {"CDSL", "SUZLON", "RELIANCE", "INFY"}
-        elif surveillance_snapshot is None or fno_underlyings is None:
+        if surveillance_snapshot is None or fno_underlyings is None:
             is_evidence_valid = False
             evidence_block_reason = "BLOCKED_MISSING_EVIDENCE"
         elif not isinstance(surveillance_snapshot, dict) or not surveillance_snapshot:
@@ -921,21 +910,7 @@ class PaperDeskRunner:
                 else:
                     pos.mark_status = "PARTIAL_EXIT"
                     pos.exit_intent = exit_reason
-                    pos.exit_intent_created_at = valuation_at
-
-                self.store.upsert_position(pos)
-                self.store.add_consumed_volume(session_date, sym, fill_qty)
-
-                # Update PortfolioRiskGovernor (atomic idempotent reconciliation)
-                evt_id = f"EVT-EXIT-{session_date}-{sym}-{fill_qty}"
-                if sym in self.governor.active_positions:
-                    self.governor.reconcile_exit(
-                        symbol=sym,
-                        exit_price=fill_price,
-                        shares=fill_qty,
-                        exit_transaction_costs=total_cost,
-                        exit_event_id=evt_id,
-                    )
+                    pos.exit_intent_created_at = pos.exit_intent_created_at or valuation_at
 
                 # Record event in journal
                 event_type = PaperEventType.FILL_COMPLETE.value if pos.residual_qty == 0 else PaperEventType.FILL_PARTIAL.value
@@ -997,7 +972,24 @@ class PaperDeskRunner:
                     fill_model_version=self.config.fill_model_version,
                     qualifying_evidence_status=self.config.evidence_mode,
                 )
-                self.store.append_event(event)
+
+                # Commit atomic execution transition: position, volume, and exit fill event
+                self.store.commit_execution_transition(
+                    position=pos,
+                    consumed_volume_update=(session_date, sym, fill_qty),
+                    event=event,
+                )
+
+                # Update PortfolioRiskGovernor (atomic idempotent reconciliation)
+                evt_id = f"EVT-EXIT-{session_date}-{sym}-{fill_qty}"
+                if sym in self.governor.active_positions:
+                    self.governor.reconcile_exit(
+                        symbol=sym,
+                        exit_price=fill_price,
+                        shares=fill_qty,
+                        exit_transaction_costs=total_cost,
+                        exit_event_id=evt_id,
+                    )
 
                 if pos.residual_qty == 0:
                     # Also record POSITION_CLOSED event
@@ -1280,11 +1272,7 @@ class PaperDeskRunner:
                 qualifying_evidence_status=self.config.evidence_mode,
             )
 
-            # 1. Append fill events first (triggers crash hooks if monkeypatched)
-            self.store.append_event(fill_event)
-            self.store.append_event(pos_open_event)
-
-            # 2. Check residual reservation
+            # 1. Check residual reservation
             # If fill hit sizing ceiling, trade is fully sized and no more shares can be added under risk/slot budget
             rem_qty = max(0, max_sizing_shares - fill_qty)
             if rem_qty > 0:
@@ -1296,14 +1284,16 @@ class PaperDeskRunner:
                 res_residual = None
                 res_status = "FILLED"
 
-            # 3. Commit atomic execution transition for position, reservation, and consumed volume
+            # 2. Commit atomic execution transition for position, reservation, consumed volume, and fill event
             self.store.commit_execution_transition(
                 position=new_pos,
                 reservation_id=res["reservation_id"],
                 reservation_status=res_status,
                 reservation_residual=res_residual,
                 consumed_volume_update=(session_date, sym, fill_qty),
+                event=fill_event,
             )
+            self.store.append_event(pos_open_event)
 
             # 4. Confirm in risk governor
             self.governor.confirm_fill_from_reservation(
@@ -1570,8 +1560,15 @@ class PaperDeskRunner:
             data_status=data_status,
         )
 
-        # Commit EOD equity only if bhavcopy manifest is present with status NORMAL (Test 9)
-        if bhavcopy_manifest is not None and bhavcopy_manifest.get("status") == "NORMAL":
+        # Commit EOD equity only if bhavcopy manifest is present, matches session_date, and has status NORMAL (Codex Finding 5)
+        is_manifest_valid = False
+        if isinstance(bhavcopy_manifest, dict):
+            m_status = bhavcopy_manifest.get("status")
+            m_date = bhavcopy_manifest.get("session_date") or bhavcopy_manifest.get("date")
+            if m_status == "NORMAL" and m_date == session_date:
+                is_manifest_valid = True
+
+        if is_manifest_valid:
             self.store.record_daily_equity(daily_equity_rec)
 
         # Mark session as processed for idempotency
@@ -1635,7 +1632,6 @@ class PaperDeskRunner:
                 pos.stop_price = round(pos.stop_price / ratio, 2)
                 pos.target_price = round(pos.target_price / ratio, 2)
                 pos.corporate_action_status = ca_key
-                self.store.upsert_position(pos)
 
                 # Re-sync governor position
                 if symbol in self.governor.active_positions:
@@ -1645,7 +1641,15 @@ class PaperDeskRunner:
                     gov_pos["stop_price"] = pos.stop_price
 
             recorded_at = datetime.now(tz=IST).isoformat()
-            self.store.record_corporate_action(ca_id, symbol, action_type, ratio, effective_date, recorded_at)
+            self.store.apply_corporate_action_atomic(
+                positions=matched,
+                ca_id=ca_id,
+                symbol=symbol,
+                action_type=action_type,
+                ratio=ratio,
+                effective_date=effective_date,
+                recorded_at=recorded_at,
+            )
             return True
 
         elif action_type == "SYMBOL_CHANGE":

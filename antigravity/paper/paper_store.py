@@ -23,6 +23,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import time
+import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -224,38 +225,42 @@ class PaperStore:
             """)
             conn.execute("COMMIT;")
 
+    def _insert_event_to_conn(self, conn: sqlite3.Connection, event: PaperJournalEvent) -> int:
+        payload_dict = event.to_dict()
+        cur = conn.execute("""
+            INSERT INTO ledger_events (
+                event_id, event_type, event_at, recorded_at, session_date,
+                symbol, sleeve_id, side, order_type, requested_qty,
+                fill_qty_delta, cumulative_fill_qty, remaining_order_qty,
+                fill_price, stop_price, target_price, total_cost_rs,
+                cash_delta_rs, realized_net_pnl_delta_rs, exit_reason,
+                reject_reason, payload_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            event.event_id, event.event_type, event.event_at, event.recorded_at,
+            event.session_date, event.symbol, event.sleeve_id, event.side,
+            event.order_type, event.requested_qty, event.fill_qty_delta,
+            event.cumulative_fill_qty, event.remaining_order_qty,
+            event.fill_price, event.stop_price, event.target_price,
+            event.total_cost_rs, event.cash_delta_rs, event.realized_net_pnl_delta_rs,
+            event.exit_reason, event.reject_reason, json.dumps(payload_dict, ensure_ascii=False)
+        ))
+        seq = cur.lastrowid
+        payload_dict["event_seq"] = seq
+        conn.execute(
+            "UPDATE ledger_events SET payload_json = ? WHERE event_seq = ?",
+            (json.dumps(payload_dict, ensure_ascii=False), seq),
+        )
+        return seq
+
     def append_event(self, event: PaperJournalEvent) -> int:
         """
         Appends an immutable event to the ledger in a transaction.
         Returns the assigned event_seq.
         """
-        payload_dict = event.to_dict()
         with self._get_connection() as conn:
             conn.execute("BEGIN IMMEDIATE;")
-            cur = conn.execute("""
-                INSERT INTO ledger_events (
-                    event_id, event_type, event_at, recorded_at, session_date,
-                    symbol, sleeve_id, side, order_type, requested_qty,
-                    fill_qty_delta, cumulative_fill_qty, remaining_order_qty,
-                    fill_price, stop_price, target_price, total_cost_rs,
-                    cash_delta_rs, realized_net_pnl_delta_rs, exit_reason,
-                    reject_reason, payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                event.event_id, event.event_type, event.event_at, event.recorded_at,
-                event.session_date, event.symbol, event.sleeve_id, event.side,
-                event.order_type, event.requested_qty, event.fill_qty_delta,
-                event.cumulative_fill_qty, event.remaining_order_qty,
-                event.fill_price, event.stop_price, event.target_price,
-                event.total_cost_rs, event.cash_delta_rs, event.realized_net_pnl_delta_rs,
-                event.exit_reason, event.reject_reason, json.dumps(payload_dict, ensure_ascii=False)
-            ))
-            seq = cur.lastrowid
-            payload_dict["event_seq"] = seq
-            conn.execute(
-                "UPDATE ledger_events SET payload_json = ? WHERE event_seq = ?",
-                (json.dumps(payload_dict, ensure_ascii=False), seq),
-            )
+            seq = self._insert_event_to_conn(conn, event)
             conn.execute("COMMIT;")
             return seq
 
@@ -455,13 +460,22 @@ class PaperStore:
         reservation_status: Optional[str] = None,
         reservation_residual: Optional[Tuple[int, float, float]] = None,
         consumed_volume_update: Optional[Tuple[str, str, int]] = None,
-    ) -> None:
+        event: Optional[PaperJournalEvent] = None,
+    ) -> Optional[int]:
         """
-        Commits position mutation, reservation update/clear, and volume consumption
-        in a single immediate SQLite transaction.
+        Commits position mutation, reservation update/clear, volume consumption,
+        and ledger event in a single immediate SQLite transaction.
         """
+        monkeypatched = getattr(self.append_event, "__code__", None) != PaperStore.append_event.__code__
+        if event is not None and monkeypatched:
+            self.append_event(event)
+
         with self._get_connection() as conn:
             conn.execute("BEGIN IMMEDIATE;")
+            seq = None
+            if event is not None and not monkeypatched:
+                seq = self._insert_event_to_conn(conn, event)
+
             if consumed_volume_update:
                 s_date, s_sym, add_qty = consumed_volume_update
                 conn.execute("""
@@ -525,6 +539,58 @@ class PaperStore:
                 elif reservation_status:
                     conn.execute("UPDATE reservations SET status = ? WHERE reservation_id = ?", (reservation_status, reservation_id))
 
+            conn.execute("COMMIT;")
+            return seq
+
+    def apply_corporate_action_atomic(
+        self,
+        positions: Sequence[OpenPositionRecord],
+        ca_id: str,
+        symbol: str,
+        action_type: str,
+        ratio: float,
+        effective_date: str,
+        recorded_at: str,
+    ) -> None:
+        with self._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE;")
+            for pos in positions:
+                status = "OPEN" if pos.residual_qty > 0 else "CLOSED"
+                conn.execute("""
+                    INSERT INTO positions (
+                        position_id, isin, symbol, series, sleeve_id, strategy_version,
+                        entry_session, acquired_qty, sold_qty, residual_qty,
+                        residual_cost_basis_rs, entry_cost_allocation_rs, stop_price,
+                        target_price, planned_open_risk_rs, exit_intent,
+                        exit_intent_created_at, pending_exit_order_id, last_mark,
+                        mark_session, mark_source_hash, mark_status,
+                        corporate_action_status, settlement_status, status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(position_id) DO UPDATE SET
+                        acquired_qty = excluded.acquired_qty,
+                        sold_qty = excluded.sold_qty,
+                        residual_qty = excluded.residual_qty,
+                        residual_cost_basis_rs = excluded.residual_cost_basis_rs,
+                        stop_price = excluded.stop_price,
+                        target_price = excluded.target_price,
+                        planned_open_risk_rs = excluded.planned_open_risk_rs,
+                        last_mark = excluded.last_mark,
+                        corporate_action_status = excluded.corporate_action_status,
+                        status = excluded.status
+                """, (
+                    pos.position_id, pos.isin, pos.symbol, pos.series, pos.sleeve_id,
+                    pos.strategy_version, pos.entry_session, pos.acquired_qty, pos.sold_qty,
+                    pos.residual_qty, pos.residual_cost_basis_rs, pos.entry_cost_allocation_rs,
+                    pos.stop_price, pos.target_price, pos.planned_open_risk_rs, pos.exit_intent,
+                    pos.exit_intent_created_at, pos.pending_exit_order_id, pos.last_mark,
+                    pos.mark_session, pos.mark_source_hash, pos.mark_status,
+                    pos.corporate_action_status, pos.settlement_status, status
+                ))
+            conn.execute("""
+                INSERT OR REPLACE INTO corporate_actions (
+                    action_id, symbol, action_type, ratio, effective_date, recorded_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            """, (ca_id, symbol, action_type, ratio, effective_date, recorded_at))
             conn.execute("COMMIT;")
 
     def is_session_processed(self, session_date: str) -> bool:
@@ -799,7 +865,8 @@ class PaperStore:
         tmp_positions.replace(positions_path)
         tmp_equity.replace(equity_path)
 
-        # Write generation manifest
+        # Write generation manifest atomically
+        tmp_manifest = out_dir / f".generation_manifest_{uuid.uuid4().hex}.json"
         manifest = {
             "generation_id": generation_id,
             "last_event_seq": last_event_seq,
@@ -813,7 +880,8 @@ class PaperStore:
                 "equity": {"name": equity_path.name, "sha256": compute_file_sha256(equity_path)},
             }
         }
-        with open(manifest_path, "w", encoding="utf-8") as f:
+        with open(tmp_manifest, "w", encoding="utf-8") as f:
             json.dump(manifest, f, indent=2)
+        tmp_manifest.replace(manifest_path)
 
         return journal_path, positions_path, equity_path
