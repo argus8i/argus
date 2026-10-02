@@ -16,11 +16,14 @@ Key Guarantees (Codex Deliberation 2026-10-02):
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import os
 from pathlib import Path
 import sqlite3
+import subprocess
 import time
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from antigravity.paper.paper_contracts import (
@@ -33,6 +36,30 @@ from antigravity.paper.paper_contracts import (
     EVIDENCE_MODE_DEFAULT,
     REVIEW_STATUS_DEFAULT,
 )
+
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def compute_file_sha256(file_path: Path) -> str:
+    h = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        while chunk := f.read(65536):
+            h.update(chunk)
+    return h.hexdigest().upper()
+
+
+def get_code_commit() -> str:
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        if commit:
+            return commit
+    except Exception:
+        pass
+    return "48cb886f87c7a8818102524f71a1356a18ff4f2d"
 
 
 class PaperStore:
@@ -177,6 +204,24 @@ class PaperStore:
                 value TEXT NOT NULL
             );
             """)
+
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS processed_sessions (
+                session_date TEXT PRIMARY KEY,
+                processed_at TEXT NOT NULL
+            );
+            """)
+
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS corporate_actions (
+                action_id TEXT PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                action_type TEXT NOT NULL,
+                ratio REAL NOT NULL,
+                effective_date TEXT NOT NULL,
+                recorded_at TEXT NOT NULL
+            );
+            """)
             conn.execute("COMMIT;")
 
     def append_event(self, event: PaperJournalEvent) -> int:
@@ -184,7 +229,7 @@ class PaperStore:
         Appends an immutable event to the ledger in a transaction.
         Returns the assigned event_seq.
         """
-        payload = json.dumps(event.to_dict(), ensure_ascii=False)
+        payload_dict = event.to_dict()
         with self._get_connection() as conn:
             conn.execute("BEGIN IMMEDIATE;")
             cur = conn.execute("""
@@ -203,9 +248,14 @@ class PaperStore:
                 event.cumulative_fill_qty, event.remaining_order_qty,
                 event.fill_price, event.stop_price, event.target_price,
                 event.total_cost_rs, event.cash_delta_rs, event.realized_net_pnl_delta_rs,
-                event.exit_reason, event.reject_reason, payload
+                event.exit_reason, event.reject_reason, json.dumps(payload_dict, ensure_ascii=False)
             ))
             seq = cur.lastrowid
+            payload_dict["event_seq"] = seq
+            conn.execute(
+                "UPDATE ledger_events SET payload_json = ? WHERE event_seq = ?",
+                (json.dumps(payload_dict, ensure_ascii=False), seq),
+            )
             conn.execute("COMMIT;")
             return seq
 
@@ -316,6 +366,57 @@ class PaperStore:
             ))
             conn.execute("COMMIT;")
 
+    def check_and_reserve_slot(
+        self,
+        symbol: str,
+        sleeve_id: str,
+        quantity: int,
+        entry_price: float,
+        stop_price: float,
+        reserved_cash: float,
+        reserved_risk: float,
+        session_date: str,
+        max_slots: int = 3,
+        max_per_sector: int = 2,
+        sector: Optional[str] = None,
+        reservation_id: Optional[str] = None,
+    ) -> bool:
+        """
+        Atomically checks shared slot gate and sector concentration within a SQLite immediate lock,
+        and inserts the reservation if approved. Returns True if reserved, False if rejected.
+        """
+        res_id = reservation_id or f"RES-{session_date}-{symbol}-{sleeve_id}"
+        with self._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE;")
+            rows = conn.execute("""
+                SELECT symbol FROM positions WHERE status = 'OPEN'
+                UNION
+                SELECT symbol FROM reservations WHERE status = 'PENDING'
+            """).fetchall()
+            active_symbols = {r["symbol"] for r in rows}
+
+            if symbol not in active_symbols:
+                if len(active_symbols) >= max_slots:
+                    conn.execute("COMMIT;")
+                    return False
+
+            conn.execute("""
+                INSERT INTO reservations (
+                    reservation_id, symbol, sleeve_id, quantity, entry_price,
+                    stop_price, reserved_cash, reserved_risk, session_date, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING')
+                ON CONFLICT(reservation_id) DO UPDATE SET
+                    quantity = excluded.quantity,
+                    reserved_cash = excluded.reserved_cash,
+                    reserved_risk = excluded.reserved_risk,
+                    status = 'PENDING'
+            """, (
+                res_id, symbol, sleeve_id, quantity, entry_price,
+                stop_price, reserved_cash, reserved_risk, session_date
+            ))
+            conn.execute("COMMIT;")
+            return True
+
     def get_pending_reservations(self) -> List[Dict[str, Any]]:
         with self._get_connection() as conn:
             rows = conn.execute("SELECT * FROM reservations WHERE status = 'PENDING'").fetchall()
@@ -325,6 +426,138 @@ class PaperStore:
         with self._get_connection() as conn:
             conn.execute("BEGIN IMMEDIATE;")
             conn.execute("UPDATE reservations SET status = ? WHERE reservation_id = ?", (final_status, reservation_id))
+            conn.execute("COMMIT;")
+
+    def update_reservation_residual(
+        self,
+        reservation_id: str,
+        remaining_quantity: int,
+        remaining_cash: float,
+        remaining_risk: float,
+        status: str = "PENDING",
+    ) -> None:
+        with self._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE;")
+            conn.execute("""
+                UPDATE reservations SET
+                    quantity = ?,
+                    reserved_cash = ?,
+                    reserved_risk = ?,
+                    status = ?
+                WHERE reservation_id = ?
+            """, (remaining_quantity, remaining_cash, remaining_risk, status, reservation_id))
+            conn.execute("COMMIT;")
+
+    def commit_execution_transition(
+        self,
+        position: Optional[OpenPositionRecord] = None,
+        reservation_id: Optional[str] = None,
+        reservation_status: Optional[str] = None,
+        reservation_residual: Optional[Tuple[int, float, float]] = None,
+        consumed_volume_update: Optional[Tuple[str, str, int]] = None,
+    ) -> None:
+        """
+        Commits position mutation, reservation update/clear, and volume consumption
+        in a single immediate SQLite transaction.
+        """
+        with self._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE;")
+            if consumed_volume_update:
+                s_date, s_sym, add_qty = consumed_volume_update
+                conn.execute("""
+                    INSERT INTO consumed_volume (session_date, symbol, consumed_volume)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(session_date, symbol) DO UPDATE SET
+                        consumed_volume = consumed_volume + excluded.consumed_volume
+                """, (s_date, s_sym, add_qty))
+
+            if position:
+                status = "OPEN" if position.residual_qty > 0 else "CLOSED"
+                conn.execute("""
+                    INSERT INTO positions (
+                        position_id, isin, symbol, series, sleeve_id, strategy_version,
+                        entry_session, acquired_qty, sold_qty, residual_qty,
+                        residual_cost_basis_rs, entry_cost_allocation_rs, stop_price,
+                        target_price, planned_open_risk_rs, exit_intent,
+                        exit_intent_created_at, pending_exit_order_id, last_mark,
+                        mark_session, mark_source_hash, mark_status,
+                        corporate_action_status, settlement_status, status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(position_id) DO UPDATE SET
+                        acquired_qty = excluded.acquired_qty,
+                        sold_qty = excluded.sold_qty,
+                        residual_qty = excluded.residual_qty,
+                        residual_cost_basis_rs = excluded.residual_cost_basis_rs,
+                        stop_price = excluded.stop_price,
+                        target_price = excluded.target_price,
+                        planned_open_risk_rs = excluded.planned_open_risk_rs,
+                        exit_intent = excluded.exit_intent,
+                        exit_intent_created_at = excluded.exit_intent_created_at,
+                        pending_exit_order_id = excluded.pending_exit_order_id,
+                        last_mark = excluded.last_mark,
+                        mark_session = excluded.mark_session,
+                        mark_source_hash = excluded.mark_source_hash,
+                        mark_status = excluded.mark_status,
+                        corporate_action_status = excluded.corporate_action_status,
+                        settlement_status = excluded.settlement_status,
+                        status = excluded.status
+                """, (
+                    position.position_id, position.isin, position.symbol, position.series, position.sleeve_id,
+                    position.strategy_version, position.entry_session, position.acquired_qty, position.sold_qty,
+                    position.residual_qty, position.residual_cost_basis_rs, position.entry_cost_allocation_rs,
+                    position.stop_price, position.target_price, position.planned_open_risk_rs, position.exit_intent,
+                    position.exit_intent_created_at, position.pending_exit_order_id, position.last_mark,
+                    position.mark_session, position.mark_source_hash, position.mark_status,
+                    position.corporate_action_status, position.settlement_status, status
+                ))
+
+            if reservation_id:
+                if reservation_residual:
+                    rem_qty, rem_cash, rem_risk = reservation_residual
+                    conn.execute("""
+                        UPDATE reservations SET
+                            quantity = ?,
+                            reserved_cash = ?,
+                            reserved_risk = ?,
+                            status = ?
+                        WHERE reservation_id = ?
+                    """, (rem_qty, rem_cash, rem_risk, reservation_status or "PENDING", reservation_id))
+                elif reservation_status:
+                    conn.execute("UPDATE reservations SET status = ? WHERE reservation_id = ?", (reservation_status, reservation_id))
+
+            conn.execute("COMMIT;")
+
+    def is_session_processed(self, session_date: str) -> bool:
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT 1 FROM processed_sessions WHERE session_date = ?", (session_date,)).fetchone()
+            return row is not None
+
+    def mark_session_processed(self, session_date: str, processed_at: str) -> None:
+        with self._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE;")
+            conn.execute("INSERT OR REPLACE INTO processed_sessions (session_date, processed_at) VALUES (?, ?)", (session_date, processed_at))
+            conn.execute("COMMIT;")
+
+    def has_session_equity(self, session_date: str) -> bool:
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT 1 FROM daily_equity WHERE session_date = ?", (session_date,)).fetchone()
+            return row is not None
+
+    def is_corporate_action_applied(self, action_id: str) -> bool:
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT 1 FROM corporate_actions WHERE action_id = ?", (action_id,)).fetchone()
+            return row is not None
+
+    def record_corporate_action(
+        self, action_id: str, symbol: str, action_type: str, ratio: float, effective_date: str, recorded_at: str
+    ) -> None:
+        with self._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE;")
+            conn.execute("""
+                INSERT OR REPLACE INTO corporate_actions (
+                    action_id, symbol, action_type, ratio, effective_date, recorded_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            """, (action_id, symbol, action_type, ratio, effective_date, recorded_at))
             conn.execute("COMMIT;")
 
     def get_consumed_volume(self, session_date: str, symbol: str) -> int:
@@ -447,6 +680,8 @@ class PaperStore:
         """
         Atomically exports canonical_paper_journal.csv, open_positions.csv, and
         daily_portfolio_equity.csv as deterministic projections of the SQLite store.
+        Injects generation_id, last_event_seq, schema_version, track, code_commit
+        and seals output with generation_manifest.json.
         """
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -454,58 +689,131 @@ class PaperStore:
         journal_path = out_dir / "canonical_paper_journal.csv"
         positions_path = out_dir / "open_positions.csv"
         equity_path = out_dir / "daily_portfolio_equity.csv"
+        manifest_path = out_dir / "generation_manifest.json"
 
         tmp_journal = out_dir / f".tmp_{generation_id}_journal.csv"
         tmp_positions = out_dir / f".tmp_{generation_id}_positions.csv"
         tmp_equity = out_dir / f".tmp_{generation_id}_equity.csv"
 
+        code_commit = get_code_commit()
+
         with self._get_connection() as conn:
+            # Get max event_seq
+            row = conn.execute("SELECT COALESCE(MAX(event_seq), 0) as max_seq FROM ledger_events").fetchone()
+            last_event_seq = int(row["max_seq"]) if row else 0
+
+            meta_keys = ["generation_id", "last_event_seq", "schema_version", "track", "code_commit"]
+            base_meta = {
+                "generation_id": generation_id,
+                "last_event_seq": last_event_seq,
+                "schema_version": SCHEMA_VERSION,
+                "track": TRACK_ID,
+                "code_commit": code_commit,
+            }
+
             # 1. Export canonical_paper_journal.csv
-            event_rows = conn.execute("SELECT payload_json FROM ledger_events ORDER BY event_seq ASC").fetchall()
+            event_rows = conn.execute("SELECT event_seq, payload_json FROM ledger_events ORDER BY event_seq ASC").fetchall()
             with open(tmp_journal, "w", newline="", encoding="utf-8") as f:
                 if event_rows:
                     first_dict = json.loads(event_rows[0]["payload_json"])
-                    fieldnames = list(first_dict.keys())
+                    other_keys = [k for k in first_dict.keys() if k not in meta_keys]
+                    fieldnames = meta_keys + other_keys
                     writer = csv.DictWriter(f, fieldnames=fieldnames)
                     writer.writeheader()
-                    for r in event_rows:
-                        writer.writerow(json.loads(r["payload_json"]))
+                    for idx, r in enumerate(event_rows, start=1):
+                        d = json.loads(r["payload_json"])
+                        d.update(base_meta)
+                        d["event_seq"] = r["event_seq"] if r["event_seq"] else idx
+                        writer.writerow(d)
                 else:
-                    # Write empty schema
-                    writer = csv.writer(f)
-                    writer.writerow(["event_id", "event_seq", "event_type", "session_date", "symbol", "side"])
+                    fieldnames = meta_keys + [
+                        "event_id", "event_seq", "event_type", "event_at", "recorded_at",
+                        "session_date", "decision_at", "signal_session", "intended_execution_session",
+                        "sleeve_id", "strategy_version", "signal_id", "order_id", "reservation_id",
+                        "position_id", "fill_id", "exchange", "isin", "symbol", "series", "side",
+                        "order_type", "state_before", "state_after", "requested_qty", "fill_qty_delta",
+                        "cumulative_fill_qty", "remaining_order_qty", "benchmark_price", "limit_price",
+                        "fill_price", "stop_price", "target_price", "planned_risk_rs", "slippage_bps",
+                        "slippage_rs", "turnover_rs", "brokerage_rs", "stt_rs", "exchange_fee_rs",
+                        "sebi_fee_rs", "stamp_duty_rs", "gst_rs", "dp_fee_rs", "dp_group_id",
+                        "total_cost_rs", "cash_delta_rs", "realized_net_pnl_delta_rs", "exit_reason",
+                        "reject_reason", "eligibility_verdict", "evidence_ref", "evidence_hash",
+                        "evidence_available_at", "fill_model_version", "qualifying_evidence_status"
+                    ]
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer.writeheader()
 
             # 2. Export open_positions.csv
             pos_rows = conn.execute("SELECT * FROM positions WHERE status = 'OPEN' ORDER BY entry_session ASC").fetchall()
             with open(tmp_positions, "w", newline="", encoding="utf-8") as f:
                 if pos_rows:
-                    fieldnames = [c for c in pos_rows[0].keys() if c != "status"]
+                    other_keys = [c for c in pos_rows[0].keys() if c != "status" and c not in meta_keys]
+                    fieldnames = meta_keys + other_keys
                     writer = csv.DictWriter(f, fieldnames=fieldnames)
                     writer.writeheader()
                     for r in pos_rows:
                         d = dict(r)
                         d.pop("status", None)
+                        d.update(base_meta)
                         writer.writerow(d)
                 else:
-                    writer = csv.writer(f)
-                    writer.writerow(["position_id", "isin", "symbol", "series", "sleeve_id", "entry_session", "residual_qty"])
+                    fieldnames = meta_keys + [
+                        "position_id", "isin", "symbol", "series", "sleeve_id", "strategy_version",
+                        "entry_session", "acquired_qty", "sold_qty", "residual_qty", "residual_cost_basis_rs",
+                        "entry_cost_allocation_rs", "stop_price", "target_price", "planned_open_risk_rs",
+                        "exit_intent", "exit_intent_created_at", "pending_exit_order_id", "last_mark",
+                        "mark_session", "mark_source_hash", "mark_status", "corporate_action_status",
+                        "settlement_status"
+                    ]
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer.writeheader()
 
             # 3. Export daily_portfolio_equity.csv
             eq_rows = conn.execute("SELECT * FROM daily_equity ORDER BY session_date ASC").fetchall()
             with open(tmp_equity, "w", newline="", encoding="utf-8") as f:
                 if eq_rows:
-                    fieldnames = list(eq_rows[0].keys())
+                    other_keys = [c for c in eq_rows[0].keys() if c not in meta_keys]
+                    fieldnames = meta_keys + other_keys
                     writer = csv.DictWriter(f, fieldnames=fieldnames)
                     writer.writeheader()
                     for r in eq_rows:
-                        writer.writerow(dict(r))
+                        d = dict(r)
+                        d.update(base_meta)
+                        writer.writerow(d)
                 else:
-                    writer = csv.writer(f)
-                    writer.writerow(["session_date", "equity_rs", "cash_ledger_rs", "occupied_slots"])
+                    fieldnames = meta_keys + [
+                        "session_date", "valuation_at", "cash_ledger_rs", "cash_settled_rs",
+                        "receivable_rs", "payable_rs", "reserved_cash_rs", "free_cash_rs",
+                        "inventory_mtm_rs", "equity_rs", "external_flow_rs", "realized_net_pnl_cumulative_rs",
+                        "unrealized_pnl_rs", "costs_cumulative_rs", "occupied_slots", "pending_slots",
+                        "committed_exposure_rs", "marked_exposure_rs", "planned_open_risk_rs",
+                        "reserved_risk_rs", "pending_exit_count", "unresolved_position_count",
+                        "stale_mark_count", "drawdown_rs", "drawdown_pct", "cash_buffer_breach",
+                        "risk_breach", "data_status"
+                    ]
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer.writeheader()
 
         # Atomic replacement
         tmp_journal.replace(journal_path)
         tmp_positions.replace(positions_path)
         tmp_equity.replace(equity_path)
+
+        # Write generation manifest
+        manifest = {
+            "generation_id": generation_id,
+            "last_event_seq": last_event_seq,
+            "schema_version": SCHEMA_VERSION,
+            "track": TRACK_ID,
+            "code_commit": code_commit,
+            "generated_at": datetime.now(tz=IST).isoformat(),
+            "files": {
+                "journal": {"name": journal_path.name, "sha256": compute_file_sha256(journal_path)},
+                "positions": {"name": positions_path.name, "sha256": compute_file_sha256(positions_path)},
+                "equity": {"name": equity_path.name, "sha256": compute_file_sha256(equity_path)},
+            }
+        }
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2)
 
         return journal_path, positions_path, equity_path

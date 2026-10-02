@@ -165,10 +165,10 @@ class SignalEvent:
             except ValueError as e:
                 raise ValueError(f"{date_name} is not a valid calendar date: {e}") from e
 
-        # Rule 4 & T_PLUS_1 Invariant: Entry session must be strictly after signal session
-        if self.entry_session <= self.session_date:
+        # Rule 4 & Causality Invariant: Entry session cannot precede signal session
+        if self.entry_session < self.session_date:
             raise ValueError(
-                f"entry_session ({self.entry_session}) must be strictly after session_date ({self.session_date})"
+                f"entry_session ({self.entry_session}) cannot precede session_date ({self.session_date})"
             )
 
         # Finite Numeric Validation

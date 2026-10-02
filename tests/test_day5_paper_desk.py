@@ -91,13 +91,42 @@ def temp_paper_env(tmp_path: Path):
     }
 
 
+_orig_run_pre_open = PaperDeskRunner.run_pre_open
+_orig_run_post_close = PaperDeskRunner.run_post_close
+
+def _test_run_pre_open(self, session_date, *args, **kwargs):
+    if kwargs.get("surveillance_snapshot") is None and "surveillance_snapshot" not in kwargs:
+        kwargs["surveillance_snapshot"] = {
+            "fetched_at": f"{session_date}T08:30:00+05:30",
+            "asm_long_term": [],
+            "asm_short_term": [],
+            "gsm": [],
+            "esm": [],
+            "t2t": [],
+        }
+    if kwargs.get("fno_underlyings") is None and "fno_underlyings" not in kwargs:
+        kwargs["fno_underlyings"] = {
+            "CDSL", "SUZLON", "COCHINSHIP", "RELIANCE", "ANGELONE", "POLICYBZR", "INFY", "TCS", "HDFCBANK"
+        }
+    return _orig_run_pre_open(self, session_date, *args, **kwargs)
+
+def _test_run_post_close(self, session_date, *args, **kwargs):
+    if kwargs.get("bhavcopy_manifest") is None and "bhavcopy_manifest" not in kwargs:
+        kwargs["bhavcopy_manifest"] = {"status": "NORMAL", "session_date": session_date}
+    return _orig_run_post_close(self, session_date, *args, **kwargs)
+
+PaperDeskRunner.run_pre_open = _test_run_pre_open
+PaperDeskRunner.run_post_close = _test_run_post_close
+
+
 def make_signal(
     symbol: str,
     entry: float,
     stop: float,
     target: float,
     strategy_id: str = "HIGH52_MOMENTUM",
-    session_date: str = "2024-05-15",
+    session_date: str = "2024-05-14",
+    entry_session: str = "2024-05-15",
     priority_score: float = 10.0,
     volume_z_score: float = 2.0,
 ) -> SignalEvent:
@@ -105,13 +134,13 @@ def make_signal(
         strategy_id=strategy_id,
         symbol=symbol,
         session_date=session_date,
-        entry_session="2024-05-16",
+        entry_session=entry_session,
         reference_price=entry,
         stop_loss_price=stop,
         target_price=target,
         priority_score=priority_score,
         trace={"atr": 5.0, "volume_z_score": volume_z_score},
-        created_at=f"{session_date}T09:00:00+05:30",
+        created_at=f"{session_date}T08:30:00+05:30",
     )
 
 
@@ -249,11 +278,11 @@ def test_inviolable_cash_buffer_protection_at_fill_time(temp_paper_env):
     """
     runner = temp_paper_env["runner"]
 
-    # Artificially set cash near buffer limit: Rs 137,000
-    runner.governor.cash_rs = 137_000.0
-
     sig = make_signal("CDSL", 100.0, 90.0, 120.0)
     runner.run_pre_open("2024-05-15", candidate_signals=[sig])
+
+    # Artificially set cash near buffer limit before fill time: Rs 137,000
+    runner.governor.cash_rs = 137_000.0
 
     # Attempt post-close fill requiring ~Rs 15,000, which would breach Rs 136,000
     bar_map = {
@@ -307,7 +336,7 @@ def test_volume_participation_cap_restricts_entry_qty(temp_paper_env):
     assert fill_qty == 30  # exactly floor(0.15 * 200)
 
     # Zero volume session yields 0 filled shares and 0 costs
-    sig2 = make_signal("SUZLON", 50.0, 45.0, 60.0)
+    sig2 = make_signal("SUZLON", 50.0, 45.0, 60.0, session_date="2024-05-15", entry_session="2024-05-16")
     runner.run_pre_open("2024-05-16", candidate_signals=[sig2])
     bar_map2 = {
         "SUZLON": DailyBar(
@@ -735,11 +764,11 @@ def test_multi_session_uninterrupted_vs_crash_restart_replay(tmp_path: Path):
 
     sessions_data = [
         # Session 1: Buy CDSL
-        ("2024-05-13", [make_signal("CDSL", 100.0, 90.0, 120.0, session_date="2024-05-13")], {
+        ("2024-05-13", [make_signal("CDSL", 100.0, 90.0, 120.0, session_date="2024-05-12", entry_session="2024-05-13")], {
             "CDSL": DailyBar(symbol="CDSL", open=100.0, high=104.0, low=99.0, close=102.0, volume=20000),
         }),
         # Session 2: Hold CDSL, Buy SUZLON
-        ("2024-05-14", [make_signal("SUZLON", 50.0, 45.0, 60.0, session_date="2024-05-14")], {
+        ("2024-05-14", [make_signal("SUZLON", 50.0, 45.0, 60.0, session_date="2024-05-13", entry_session="2024-05-14")], {
             "CDSL": DailyBar(symbol="CDSL", open=102.0, high=106.0, low=101.0, close=105.0, volume=20000),
             "SUZLON": DailyBar(symbol="SUZLON", open=50.0, high=52.0, low=49.0, close=51.0, volume=30000),
         }),

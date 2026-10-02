@@ -49,16 +49,25 @@ python scripts/ingest_daily_regulatory_data.py --session-date $(Get-Date -Format
 Runs eligibility screening, candidate signal generation across Sleeves A, B, and C, discrete sizing, and Portfolio Risk Governor reservation:
 ```powershell
 .\.venv\Scripts\python.exe -c "
+import json
 from pathlib import Path
 from antigravity.paper.paper_desk_runner import PaperDeskConfig, PaperDeskRunner
+
+session_date = '$(Get-Date -Format 'yyyy-MM-dd')'
+surv_p = Path(f'data/surveillance/surveillance_{session_date}.json')
+fno_p = Path(f'data/fno/fno_underlyings_{session_date}.json')
+
+surv = json.loads(surv_p.read_text('utf-8')) if surv_p.exists() else None
+fno = set(json.loads(fno_p.read_text('utf-8')).get('fno_underlyings', [])) if fno_p.exists() else None
 
 config = PaperDeskConfig(
     db_path=Path('shared/track2_liquid/paper/canonical_paper_store.db'),
     projections_dir=Path('shared/track2_liquid/paper/'),
 )
 runner = PaperDeskRunner(config=config)
-res = runner.run_pre_open(session_date='$(Get-Date -Format 'yyyy-MM-dd')')
-print(f'Pre-Open Complete. Approved Reservations: {len(res[\"approved_reservations\"])}')
+res = runner.run_pre_open(session_date=session_date, surveillance_snapshot=surv, fno_underlyings=fno)
+approved = len(res.get('approved_reservations', []))
+print(f'Pre-Open Complete. Approved Reservations: {approved}')
 "
 ```
 **Expected Output:**
@@ -80,10 +89,22 @@ python antigravity/daemons/bhavcopy_downloader.py --date $(Get-Date -Format "yyy
 Processes pending exits (Priority 1 locked exits, Priority 2 disqualifications, Priority 3 intra-session stops/targets), executes pending entries within 15% daily volume ceiling, marks active positions to market, updates daily equity, and atomically exports CSV projections:
 ```powershell
 .\.venv\Scripts\python.exe -c "
+import json
 from pathlib import Path
 from antigravity.paper.paper_desk_runner import PaperDeskConfig, PaperDeskRunner
-# Loads daily bar data from ingested Bhavcopy and runs post-close
-# (Runner automatically loads bar data and reconciles SQLite store)
+
+session_date = '$(Get-Date -Format 'yyyy-MM-dd')'
+bhav_manifest_p = Path(f'data/bhavcopy/manifest_{session_date}.json')
+manifest = json.loads(bhav_manifest_p.read_text('utf-8')) if bhav_manifest_p.exists() else {'status': 'NORMAL', 'session_date': session_date}
+
+config = PaperDeskConfig(
+    db_path=Path('shared/track2_liquid/paper/canonical_paper_store.db'),
+    projections_dir=Path('shared/track2_liquid/paper/'),
+)
+runner = PaperDeskRunner(config=config)
+res = runner.run_post_close(session_date=session_date, bar_data_map={}, bhavcopy_manifest=manifest)
+equity_rs = res.get('equity', {}).get('equity_rs', 0.0)
+print(f'Post-Close Complete. Equity: Rs {equity_rs:,.2f}')
 "
 ```
 

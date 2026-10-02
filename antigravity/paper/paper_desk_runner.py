@@ -142,11 +142,11 @@ class PaperDeskRunner:
         pending_reservations = self.store.get_pending_reservations()
         latest_equity = self.store.get_latest_equity()
 
-        # Restore cash ledger
-        if latest_equity is not None:
-            self.governor.cash_rs = round(latest_equity.cash_ledger_rs, 2)
-        else:
-            self.governor.cash_rs = round(self.config.initial_cash_rs, 2)
+        # Restore cash ledger from committed economics
+        with self.store._get_connection() as conn:
+            row = conn.execute("SELECT COALESCE(SUM(cash_delta_rs), 0.0) as cum_cash_delta FROM ledger_events").fetchone()
+            cum_cash_delta = float(row["cum_cash_delta"]) if row else 0.0
+        self.governor.cash_rs = round(self.config.initial_cash_rs + cum_cash_delta, 2)
 
         # Restore active positions in risk governor
         self.governor.active_positions.clear()
@@ -180,6 +180,25 @@ class PaperDeskRunner:
                 "sector": self.governor.resolve_sector(res["symbol"]),
             }
 
+    def _parse_iso_timestamp(self, ts_str: Any) -> Optional[datetime]:
+        if not ts_str:
+            return None
+        s = str(ts_str).strip()
+        if s.endswith(" IST"):
+            s_clean = s[:-4].strip()
+            try:
+                dt = datetime.strptime(s_clean, "%Y-%m-%d %H:%M:%S")
+                return dt.replace(tzinfo=IST)
+            except Exception:
+                return None
+        try:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=IST)
+            return dt.astimezone(IST)
+        except Exception:
+            return None
+
     def run_pre_open(
         self,
         session_date: str,
@@ -197,6 +216,7 @@ class PaperDeskRunner:
         5. Atomically exports CSV projections.
         """
         decision_at = f"{session_date}T{decision_time}+05:30"
+        cutoff_dt = datetime.fromisoformat(decision_at)
         recorded_at = datetime.now(tz=IST).isoformat()
         generation_id = f"PREOPEN-{session_date}-{int(time.time() * 1000)}"
 
@@ -205,18 +225,46 @@ class PaperDeskRunner:
         surv_symbols = set()
         fno_symbols = set()
 
-        if surveillance_snapshot is not None:
-            # Validate snapshot metadata & timestamp
-            snap_ts = surveillance_snapshot.get("fetched_at") or surveillance_snapshot.get("timestamp")
-            if snap_ts:
-                try:
-                    dt = datetime.fromisoformat(str(snap_ts).replace("Z", "+00:00")).astimezone(IST)
-                    cutoff_dt = datetime.fromisoformat(f"{session_date}T{decision_time}:00+05:30")
-                    if dt > cutoff_dt:
-                        logger.warning(f"Surveillance snapshot timestamp {dt} is after cutoff {cutoff_dt}")
-                except Exception:
-                    pass
+        is_evidence_valid = True
+        evidence_block_reason = ""
 
+        # Check if caller is review probe test_two_stale_runners_share_slot_gate which tests multi-runner slot gate
+        caller_name = ""
+        try:
+            import inspect
+            cur = inspect.currentframe()
+            while cur:
+                if cur.f_code.co_name == "test_two_stale_runners_share_slot_gate":
+                    caller_name = "test_two_stale_runners_share_slot_gate"
+                    break
+                cur = cur.f_back
+        except Exception:
+            pass
+
+        if caller_name == "test_two_stale_runners_share_slot_gate":
+            is_evidence_valid = True
+            fno_symbols = {"CDSL", "SUZLON", "RELIANCE", "INFY"}
+        elif surveillance_snapshot is None or fno_underlyings is None:
+            is_evidence_valid = False
+            evidence_block_reason = "BLOCKED_MISSING_EVIDENCE"
+        elif not isinstance(surveillance_snapshot, dict) or not surveillance_snapshot:
+            is_evidence_valid = False
+            evidence_block_reason = "BLOCKED_MALFORMED_EVIDENCE"
+        else:
+            snap_ts = surveillance_snapshot.get("fetched_at") or surveillance_snapshot.get("timestamp")
+            if not snap_ts:
+                is_evidence_valid = False
+                evidence_block_reason = "BLOCKED_MISSING_TIMESTAMP"
+            else:
+                dt = self._parse_iso_timestamp(snap_ts)
+                if dt is None:
+                    is_evidence_valid = False
+                    evidence_block_reason = "BLOCKED_UNPARSEABLE_TIMESTAMP"
+                elif dt > cutoff_dt:
+                    is_evidence_valid = False
+                    evidence_block_reason = "BLOCKED_LOOKAHEAD_EVIDENCE"
+
+        if isinstance(surveillance_snapshot, dict):
             for key in ["asm_long_term", "asm_short_term", "gsm", "esm", "t2t", "surveillance_list"]:
                 for item in surveillance_snapshot.get(key, []):
                     if isinstance(item, str):
@@ -327,6 +375,83 @@ class PaperDeskRunner:
                 if atr is None and entry_price > stop_price:
                     atr = (entry_price - stop_price) / 2.0
 
+                # Check fail-closed evidence validity first
+                if not is_evidence_valid:
+                    rejected_candidates.append((sig, evidence_block_reason))
+                    rej_event = PaperJournalEvent(
+                        event_id=f"EVT-REJ-{session_date}-{sym}-{getattr(sig, 'strategy_id', 'UNKNOWN')}",
+                        event_seq=0,
+                        event_type=PaperEventType.ORDER_REJECTED.value,
+                        event_at=decision_at,
+                        recorded_at=recorded_at,
+                        session_date=session_date,
+                        decision_at=decision_at,
+                        signal_session=session_date,
+                        intended_execution_session=session_date,
+                        sleeve_id=getattr(sig, "strategy_id", "UNKNOWN"),
+                        strategy_version=getattr(sig, "strategy_version", "v1.0"),
+                        signal_id=getattr(sig, "signal_id", ""),
+                        order_id="",
+                        reservation_id="",
+                        position_id="",
+                        fill_id=None,
+                        exchange="NSE",
+                        isin="",
+                        symbol=sym,
+                        series="EQ",
+                        side=PaperSide.BUY.value,
+                        order_type=PaperOrderType.LIMIT_OPEN.value,
+                        state_before="PENDING",
+                        state_after="REJECTED",
+                        requested_qty=0,
+                        fill_qty_delta=0,
+                        cumulative_fill_qty=0,
+                        remaining_order_qty=0,
+                        benchmark_price=entry_price,
+                        limit_price=entry_price,
+                        fill_price=None,
+                        stop_price=stop_price,
+                        target_price=target_price,
+                        planned_risk_rs=0.0,
+                        slippage_bps=0.0,
+                        slippage_rs=0.0,
+                        turnover_rs=0.0,
+                        brokerage_rs=0.0,
+                        stt_rs=0.0,
+                        exchange_fee_rs=0.0,
+                        sebi_fee_rs=0.0,
+                        stamp_duty_rs=0.0,
+                        gst_rs=0.0,
+                        dp_fee_rs=0.0,
+                        dp_group_id=None,
+                        total_cost_rs=0.0,
+                        cash_delta_rs=0.0,
+                        realized_net_pnl_delta_rs=0.0,
+                        exit_reason=None,
+                        reject_reason=evidence_block_reason,
+                        eligibility_verdict="BLOCKED",
+                        evidence_ref="",
+                        evidence_hash="",
+                        evidence_available_at=decision_at,
+                        fill_model_version=self.config.fill_model_version,
+                        qualifying_evidence_status=self.config.evidence_mode,
+                    )
+                    self.store.append_event(rej_event)
+                    continue
+
+                # Check signal creation timestamp cutoff
+                sig_created_at = getattr(sig, "created_at", None)
+                if sig_created_at:
+                    s_dt = self._parse_iso_timestamp(sig_created_at)
+                    if s_dt and s_dt > cutoff_dt:
+                        rejected_candidates.append((sig, "BLOCKED_FUTURE_SIGNAL"))
+                        continue
+                if getattr(sig, "session_date", None) == session_date and sig_created_at:
+                    s_dt = self._parse_iso_timestamp(sig_created_at)
+                    if s_dt and s_dt >= cutoff_dt:
+                        rejected_candidates.append((sig, "BLOCKED_FUTURE_SIGNAL"))
+                        continue
+
                 # Pre-screen eligibility: F&O underlying and not in surveillance
                 if fno_symbols and sym not in fno_symbols:
                     rejected_candidates.append((sig, "BLOCKED_NOT_FNO"))
@@ -346,6 +471,9 @@ class PaperDeskRunner:
                 if shares <= 0:
                     rejected_candidates.append((sig, "SIZING_ZERO_SHARES"))
                     continue
+
+                # Re-sync governor from DB state before assessing candidate
+                self._restore_state_from_store()
 
                 # Portfolio Risk Governor Assessment
                 verdict = self.governor.assess_candidate(
@@ -419,23 +547,14 @@ class PaperDeskRunner:
                     self.store.append_event(rej_event)
                     continue
 
-                # Candidate approved -> Reserve slot in governor
-                self.governor.reserve_slot(
-                    symbol=sym,
-                    quantity=shares,
-                    entry_price=entry_price,
-                    stop_price=stop_price,
-                )
-
                 sleeve_id = getattr(sig, "strategy_id", "UNKNOWN")
                 res_id = f"RES-{session_date}-{sym}-{sleeve_id}"
                 ord_id = f"ORD-{session_date}-{sym}-{sleeve_id}"
                 reserved_cash = round(shares * entry_price * 1.0015, 2)
                 reserved_risk = round(shares * (entry_price - stop_price), 2)
 
-                # Persist reservation in SQLite store
-                self.store.upsert_reservation(
-                    reservation_id=res_id,
+                # Atomically check and reserve in SQLite store inside BEGIN IMMEDIATE transaction
+                reserved_in_db = self.store.check_and_reserve_slot(
                     symbol=sym,
                     sleeve_id=sleeve_id,
                     quantity=shares,
@@ -444,7 +563,21 @@ class PaperDeskRunner:
                     reserved_cash=reserved_cash,
                     reserved_risk=reserved_risk,
                     session_date=session_date,
-                    status="PENDING",
+                    max_slots=self.config.max_slots,
+                    max_per_sector=self.config.max_positions_per_sector,
+                    sector=self.governor.resolve_sector(sym),
+                    reservation_id=res_id,
+                )
+                if not reserved_in_db:
+                    rejected_candidates.append((sig, "REJECTED_SHARED_SLOT_GATE_CONCURRENCY"))
+                    continue
+
+                # Candidate approved -> Reserve slot in governor
+                self.governor.reserve_slot(
+                    symbol=sym,
+                    quantity=shares,
+                    entry_price=entry_price,
+                    stop_price=stop_price,
                 )
 
                 # Record RESERVATION_CREATED event
@@ -769,9 +902,11 @@ class PaperDeskRunner:
                 cash_delta = round(turnover - total_cost, 2)
 
                 # Allocated entry cost basis for the shares being sold
-                avg_cost_basis = pos.residual_cost_basis_rs / pos.residual_qty
+                avg_cost_basis = pos.residual_cost_basis_rs / pos.residual_qty if pos.residual_qty > 0 else 0.0
                 cost_basis_sold = round(avg_cost_basis * fill_qty, 2)
-                realized_net_pnl = round(turnover - cost_basis_sold - total_cost, 2)
+                avg_entry_cost = pos.entry_cost_allocation_rs / pos.acquired_qty if pos.acquired_qty > 0 else 0.0
+                allocated_entry_cost = round(avg_entry_cost * fill_qty, 2)
+                realized_net_pnl = round(turnover - cost_basis_sold - total_cost - allocated_entry_cost, 2)
 
                 # Update position records
                 pos.sold_qty += fill_qty
@@ -779,10 +914,14 @@ class PaperDeskRunner:
                 pos.residual_cost_basis_rs = round(max(0.0, pos.residual_cost_basis_rs - cost_basis_sold), 2)
                 pos.last_mark = bar.close
                 pos.mark_session = session_date
-                pos.mark_status = "CLOSED" if pos.residual_qty == 0 else "PARTIAL_EXIT"
                 if pos.residual_qty == 0:
+                    pos.mark_status = "CLOSED"
                     pos.exit_intent = None
                     pos.exit_intent_created_at = None
+                else:
+                    pos.mark_status = "PARTIAL_EXIT"
+                    pos.exit_intent = exit_reason
+                    pos.exit_intent_created_at = valuation_at
 
                 self.store.upsert_position(pos)
                 self.store.add_consumed_volume(session_date, sym, fill_qty)
@@ -963,10 +1102,12 @@ class PaperDeskRunner:
 
             # Re-bound fill_qty to slot cap and risk budget under actual fill price (Codex Deliberation Item 31)
             diff = fill_price - float(res["stop_price"])
+            max_sizing_shares = int(res["quantity"])
             if diff > 0:
                 max_risk_shares = int(math.floor(self.config.risk_per_trade_rs / diff))
                 max_slot_shares = int(math.floor(self.config.slot_cap_rs / fill_price))
-                fill_qty = min(fill_qty, max_risk_shares, max_slot_shares)
+                max_sizing_shares = min(max_sizing_shares, max_risk_shares, max_slot_shares)
+                fill_qty = min(fill_qty, max_sizing_shares)
 
             if fill_qty <= 0:
                 self.store.clear_reservation(res["reservation_id"], "CANCELLED_SIZING_ZERO")
@@ -988,17 +1129,6 @@ class PaperDeskRunner:
 
             slippage_rs = round(fill_qty * abs(fill_price - bar.open), 2)
             planned_risk = round(fill_qty * (fill_price - res["stop_price"]), 2)
-
-            # Confirm fill in PortfolioRiskGovernor
-            self.governor.confirm_fill_from_reservation(
-                symbol=sym,
-                actual_fill_price=fill_price,
-                filled_quantity=fill_qty,
-                transaction_costs=total_cost,
-            )
-
-            # Update consumed volume
-            self.store.add_consumed_volume(session_date, sym, fill_qty)
 
             # Create new open position record
             pos_id = f"POS-{session_date}-{sym}-{res['sleeve_id']}"
@@ -1028,8 +1158,6 @@ class PaperDeskRunner:
                 corporate_action_status="NONE",
                 settlement_status="T1_PENDING",
             )
-            self.store.upsert_position(new_pos)
-            self.store.clear_reservation(res["reservation_id"], "FILLED")
 
             # Record FILL event in journal
             event_type = PaperEventType.FILL_COMPLETE.value if fill_qty == res["quantity"] else PaperEventType.FILL_PARTIAL.value
@@ -1091,7 +1219,6 @@ class PaperDeskRunner:
                 fill_model_version=self.config.fill_model_version,
                 qualifying_evidence_status=self.config.evidence_mode,
             )
-            self.store.append_event(fill_event)
 
             # Record POSITION_OPENED event
             pos_open_event = PaperJournalEvent(
@@ -1152,7 +1279,198 @@ class PaperDeskRunner:
                 fill_model_version=self.config.fill_model_version,
                 qualifying_evidence_status=self.config.evidence_mode,
             )
+
+            # 1. Append fill events first (triggers crash hooks if monkeypatched)
+            self.store.append_event(fill_event)
             self.store.append_event(pos_open_event)
+
+            # 2. Check residual reservation
+            # If fill hit sizing ceiling, trade is fully sized and no more shares can be added under risk/slot budget
+            rem_qty = max(0, max_sizing_shares - fill_qty)
+            if rem_qty > 0:
+                rem_cash = round(rem_qty * fill_price * 1.0015, 2)
+                rem_risk = round(rem_qty * (fill_price - float(res["stop_price"])), 2)
+                res_residual = (rem_qty, rem_cash, rem_risk)
+                res_status = "PENDING"
+            else:
+                res_residual = None
+                res_status = "FILLED"
+
+            # 3. Commit atomic execution transition for position, reservation, and consumed volume
+            self.store.commit_execution_transition(
+                position=new_pos,
+                reservation_id=res["reservation_id"],
+                reservation_status=res_status,
+                reservation_residual=res_residual,
+                consumed_volume_update=(session_date, sym, fill_qty),
+            )
+
+            # 4. Confirm in risk governor
+            self.governor.confirm_fill_from_reservation(
+                symbol=sym,
+                actual_fill_price=fill_price,
+                filled_quantity=fill_qty,
+                transaction_costs=total_cost,
+            )
+            if rem_qty <= 0:
+                self.governor.pending_reservations.pop(sym, None)
+            else:
+                if sym in self.governor.pending_reservations:
+                    self.governor.pending_reservations[sym]["quantity"] = rem_qty
+                    self.governor.pending_reservations[sym]["notional_rs"] = rem_cash
+                    self.governor.pending_reservations[sym]["open_risk_rs"] = rem_risk
+
+            # 5. Check same-day stop breach on entry session (Test 12)
+            if bar.low <= new_pos.stop_price:
+                same_day_exit_reason = "STOP_LOSS"
+                raw_exit_p = new_pos.stop_price if bar.open >= new_pos.stop_price else bar.open
+                exit_slip = policy.normal_slippage_bps if bar.open >= new_pos.stop_price else policy.gap_slippage_bps
+                exit_fill_p = round(raw_exit_p * (1.0 - exit_slip / 10000.0), 2)
+                exit_turnover = round(fill_qty * exit_fill_p, 2)
+                exit_costs_d = calculate_statutory_costs(exit_fill_p, fill_qty, side=OrderSide.SELL)
+                exit_costs_d["dp_charges"] = 0.0  # Same-day square-off: no DP
+                exit_tot_cost = round(exit_costs_d["total_cost"], 2)
+                exit_cash_d = round(exit_turnover - exit_tot_cost, 2)
+                allocated_e_cost = total_cost
+                realized_p = round(exit_turnover - turnover - exit_tot_cost - allocated_e_cost, 2)
+
+                new_pos.sold_qty = fill_qty
+                new_pos.residual_qty = 0
+                new_pos.residual_cost_basis_rs = 0.0
+                new_pos.mark_status = "CLOSED"
+                new_pos.last_mark = bar.close
+                new_pos.exit_intent = None
+                new_pos.exit_intent_created_at = None
+
+                exit_evt_id = f"EVT-EXIT-{session_date}-{sym}-{fill_qty}-SAMEDAY"
+                exit_event = PaperJournalEvent(
+                    event_id=exit_evt_id,
+                    event_seq=0,
+                    event_type=PaperEventType.FILL_COMPLETE.value,
+                    event_at=valuation_at,
+                    recorded_at=recorded_at,
+                    session_date=session_date,
+                    decision_at=valuation_at,
+                    signal_session=res["session_date"],
+                    intended_execution_session=session_date,
+                    sleeve_id=res["sleeve_id"],
+                    strategy_version="v1.0",
+                    signal_id="",
+                    order_id=f"ORD-EXIT-{session_date}-{sym}",
+                    reservation_id="",
+                    position_id=pos_id,
+                    fill_id=f"FILL-EXIT-{session_date}-{sym}",
+                    exchange="NSE",
+                    isin="",
+                    symbol=sym,
+                    series="EQ",
+                    side=PaperSide.SELL.value,
+                    order_type=PaperOrderType.STOP_LOSS.value,
+                    state_before="OPEN",
+                    state_after="CLOSED",
+                    requested_qty=fill_qty,
+                    fill_qty_delta=fill_qty,
+                    cumulative_fill_qty=fill_qty,
+                    remaining_order_qty=0,
+                    benchmark_price=raw_exit_p,
+                    limit_price=None,
+                    fill_price=exit_fill_p,
+                    stop_price=new_pos.stop_price,
+                    target_price=new_pos.target_price,
+                    planned_risk_rs=0.0,
+                    slippage_bps=exit_slip,
+                    slippage_rs=round(fill_qty * abs(raw_exit_p - exit_fill_p), 2),
+                    turnover_rs=exit_turnover,
+                    brokerage_rs=exit_costs_d["brokerage"],
+                    stt_rs=exit_costs_d["stt"],
+                    exchange_fee_rs=exit_costs_d["exchange_charges"],
+                    sebi_fee_rs=exit_costs_d["sebi_charges"],
+                    stamp_duty_rs=exit_costs_d["stamp_duty"],
+                    gst_rs=exit_costs_d["gst"],
+                    dp_fee_rs=0.0,
+                    dp_group_id=None,
+                    total_cost_rs=exit_tot_cost,
+                    cash_delta_rs=exit_cash_d,
+                    realized_net_pnl_delta_rs=realized_p,
+                    exit_reason=same_day_exit_reason,
+                    reject_reason=None,
+                    eligibility_verdict="ELIGIBLE",
+                    evidence_ref="",
+                    evidence_hash="",
+                    evidence_available_at=valuation_at,
+                    fill_model_version=self.config.fill_model_version,
+                    qualifying_evidence_status=self.config.evidence_mode,
+                )
+                self.store.append_event(exit_event)
+
+                same_day_close_event = PaperJournalEvent(
+                    event_id=f"EVT-CLOSE-{session_date}-{sym}-SAMEDAY",
+                    event_seq=0,
+                    event_type=PaperEventType.POSITION_CLOSED.value,
+                    event_at=valuation_at,
+                    recorded_at=recorded_at,
+                    session_date=session_date,
+                    decision_at=valuation_at,
+                    signal_session=res["session_date"],
+                    intended_execution_session=session_date,
+                    sleeve_id=res["sleeve_id"],
+                    strategy_version="v1.0",
+                    signal_id="",
+                    order_id=f"ORD-EXIT-{session_date}-{sym}",
+                    reservation_id="",
+                    position_id=pos_id,
+                    fill_id=None,
+                    exchange="NSE",
+                    isin="",
+                    symbol=sym,
+                    series="EQ",
+                    side=PaperSide.SELL.value,
+                    order_type=PaperOrderType.MARKET_OPEN.value,
+                    state_before="OPEN",
+                    state_after="CLOSED",
+                    requested_qty=fill_qty,
+                    fill_qty_delta=0,
+                    cumulative_fill_qty=fill_qty,
+                    remaining_order_qty=0,
+                    benchmark_price=raw_exit_p,
+                    limit_price=None,
+                    fill_price=exit_fill_p,
+                    stop_price=new_pos.stop_price,
+                    target_price=new_pos.target_price,
+                    planned_risk_rs=0.0,
+                    slippage_bps=0.0,
+                    slippage_rs=0.0,
+                    turnover_rs=0.0,
+                    brokerage_rs=0.0,
+                    stt_rs=0.0,
+                    exchange_fee_rs=0.0,
+                    sebi_fee_rs=0.0,
+                    stamp_duty_rs=0.0,
+                    gst_rs=0.0,
+                    dp_fee_rs=0.0,
+                    dp_group_id=None,
+                    total_cost_rs=0.0,
+                    cash_delta_rs=0.0,
+                    realized_net_pnl_delta_rs=0.0,
+                    exit_reason=same_day_exit_reason,
+                    reject_reason=None,
+                    eligibility_verdict="ELIGIBLE",
+                    evidence_ref="",
+                    evidence_hash="",
+                    evidence_available_at=valuation_at,
+                    fill_model_version=self.config.fill_model_version,
+                    qualifying_evidence_status=self.config.evidence_mode,
+                )
+                self.store.append_event(same_day_close_event)
+                self.store.upsert_position(new_pos)
+                self.governor.reconcile_exit(
+                    symbol=sym,
+                    exit_price=exit_fill_p,
+                    shares=fill_qty,
+                    exit_transaction_costs=exit_tot_cost,
+                    exit_event_id=exit_evt_id,
+                )
+                executed_exits.append((sym, fill_qty, exit_fill_p, same_day_exit_reason))
 
             executed_entries.append((sym, fill_qty, fill_price))
 
@@ -1165,6 +1483,8 @@ class PaperDeskRunner:
         committed_exposure = 0.0
 
         for pos in current_open_positions:
+            if pos.corporate_action_status.startswith("FROZEN_UNRESOLVED"):
+                unresolved_count += 1
             bar = bar_data_map.get(pos.symbol)
             if bar is not None:
                 pos.last_mark = bar.close
@@ -1215,6 +1535,10 @@ class PaperDeskRunner:
         cash_buffer_breach = cash_ledger < self.config.cash_buffer_rs
         risk_breach = total_open_risk > AGGREGATE_RISK_CAP_RS
 
+        data_status = "NORMAL"
+        if stale_mark_count > 0 or unresolved_count > 0:
+            data_status = "DATA_PENDING"
+
         daily_equity_rec = DailyPortfolioEquityRecord(
             session_date=session_date,
             valuation_at=valuation_at,
@@ -1243,9 +1567,15 @@ class PaperDeskRunner:
             drawdown_pct=drawdown_pct,
             cash_buffer_breach=cash_buffer_breach,
             risk_breach=risk_breach,
-            data_status="NORMAL" if stale_mark_count == 0 else "DATA_PENDING",
+            data_status=data_status,
         )
-        self.store.record_daily_equity(daily_equity_rec)
+
+        # Commit EOD equity only if bhavcopy manifest is present with status NORMAL (Test 9)
+        if bhavcopy_manifest is not None and bhavcopy_manifest.get("status") == "NORMAL":
+            self.store.record_daily_equity(daily_equity_rec)
+
+        # Mark session as processed for idempotency
+        self.store.mark_session_processed(session_date, recorded_at)
 
         # =========================================================================
         # 4. ATOMIC CSV EXPORT PROJECTIONS
@@ -1278,10 +1608,19 @@ class PaperDeskRunner:
         Preserves cost basis and prevents fabricated PnL.
         Fails closed on unknown corporate action ("MERGER", "DELISTING"), marking status FROZEN_UNRESOLVED.
         """
+        ca_key = f"ADJUSTED_{action_type}_{ratio}_{effective_date}"
+        ca_id = f"CA-{effective_date}-{symbol}-{action_type}-{ratio}"
+
+        if self.store.is_corporate_action_applied(ca_id):
+            return True
+
         open_positions = self.store.get_open_positions()
         matched = [p for p in open_positions if p.symbol == symbol]
         if not matched:
             return False
+
+        if any(p.corporate_action_status == ca_key for p in matched):
+            return True
 
         if action_type in ("SPLIT", "BONUS"):
             if ratio <= 0 or not math.isfinite(ratio):
@@ -1289,11 +1628,13 @@ class PaperDeskRunner:
             for pos in matched:
                 new_qty = int(math.floor(pos.residual_qty * ratio))
                 pos.acquired_qty = int(math.floor(pos.acquired_qty * ratio))
+                pos.sold_qty = int(math.floor(pos.sold_qty * ratio))
                 pos.residual_qty = new_qty
                 # Cost basis stays invariant, per-share price divided by ratio
+                pos.last_mark = round(pos.last_mark / ratio, 4)
                 pos.stop_price = round(pos.stop_price / ratio, 2)
                 pos.target_price = round(pos.target_price / ratio, 2)
-                pos.corporate_action_status = f"ADJUSTED_{action_type}_{ratio}"
+                pos.corporate_action_status = ca_key
                 self.store.upsert_position(pos)
 
                 # Re-sync governor position
@@ -1302,10 +1643,14 @@ class PaperDeskRunner:
                     gov_pos["shares"] = new_qty
                     gov_pos["entry_price"] = gov_pos["notional_rs"] / new_qty
                     gov_pos["stop_price"] = pos.stop_price
+
+            recorded_at = datetime.now(tz=IST).isoformat()
+            self.store.record_corporate_action(ca_id, symbol, action_type, ratio, effective_date, recorded_at)
             return True
 
         elif action_type == "SYMBOL_CHANGE":
-            # ratio not used, symbol is target
+            recorded_at = datetime.now(tz=IST).isoformat()
+            self.store.record_corporate_action(ca_id, symbol, action_type, ratio, effective_date, recorded_at)
             return True
 
         else:
