@@ -1,0 +1,62 @@
+COMMAND_ARGV: ["C:\\Users\\yashw\\swing trades\\.venv\\Scripts\\python.exe", "-m", "pytest", "shared/trust/artifacts/test_codex_day4_ee58cb3_review.py", "-v", "-p", "no:cacheprovider", "--basetemp", "C:\\Users\\yashw\\swing trades\\shared\\trust\\artifacts\\codex_ee58cb3_probes_tmp"]
+EXIT_CODE: 1
+STDOUT:
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\yashw\swing trades\.venv\Scripts\python.exe
+rootdir: C:\Users\yashw\swing trades
+configfile: pytest.ini
+collecting ... collected 3 items
+
+shared/trust/artifacts/test_codex_day4_ee58cb3_review.py::test_roundtrip_uses_aggregate_session_participation FAILED [ 33%]
+shared/trust/artifacts/test_codex_day4_ee58cb3_review.py::test_held_position_disqualified_on_current_session FAILED [ 66%]
+shared/trust/artifacts/test_codex_day4_ee58cb3_review.py::test_expectancy_threshold_is_strict FAILED [100%]
+
+================================== FAILURES ===================================
+_____________ test_roundtrip_uses_aggregate_session_participation _____________
+
+    def test_roundtrip_uses_aggregate_session_participation():
+        trades, _, _ = case('roundtrip')
+        used = sum(t.shares * (1 + (t.exit_session == t.entry_session)) for t in trades)
+>       assert used <= 150, f'1000-volume session cap=150 but total buy/sell shares={used}'
+E       AssertionError: 1000-volume session cap=150 but total buy/sell shares=300
+E       assert 300 <= 150
+
+shared\trust\artifacts\test_codex_day4_ee58cb3_review.py:24: AssertionError
+---------------------------- Captured stdout call -----------------------------
+
+--- Running Fold [PROBE]: 8 sessions [2023-02-06 to 2023-02-15] ---
+_____________ test_held_position_disqualified_on_current_session ______________
+
+    def test_held_position_disqualified_on_current_session():
+        trades, _, _ = case('held_ineligible')
+>       assert trades[0].exit_session == '2023-02-08', 'held ineligible security not exited on first liquid disqualified session'
+E       AssertionError: held ineligible security not exited on first liquid disqualified session
+E       assert '2023-02-14' == '2023-02-08'
+E         
+E         - 2023-02-08
+E         ?         ^^
+E         + 2023-02-14
+E         ?         ^^
+
+shared\trust\artifacts\test_codex_day4_ee58cb3_review.py:29: AssertionError
+---------------------------- Captured stdout call -----------------------------
+
+--- Running Fold [PROBE]: 8 sessions [2023-02-06 to 2023-02-15] ---
+_____________________ test_expectancy_threshold_is_strict _____________________
+
+    def test_expectancy_threshold_is_strict():
+        t = BacktestTrade('T','TEST','TEST','2023-01-02', shares=1, initial_risk_per_share=100,
+            net_pnl=25, realized_r=.25, status=TradeStatus.CLOSED)
+>       assert not compute_backtest_metrics([t], [DailyEquityPoint('2023-01-02',250000)]).hurdle_passed
+E       AssertionError: assert not True
+E        +  where True = BacktestMetrics(total_trades=1, winning_trades=1, losing_trades=0, breakeven_trades=0, win_rate=1.0, gross_profit=25, gross_loss=0, net_pnl=25, profit_factor=inf, net_expectancy_r=0.25, max_drawdown_rs=0.0, max_drawdown_pct=0.0, max_drawdown_r=0.0, hurdle_passed=True, itemized_costs={}).hurdle_passed
+E        +    where BacktestMetrics(total_trades=1, winning_trades=1, losing_trades=0, breakeven_trades=0, win_rate=1.0, gross_profit=25, gross_loss=0, net_pnl=25, profit_factor=inf, net_expectancy_r=0.25, max_drawdown_rs=0.0, max_drawdown_pct=0.0, max_drawdown_r=0.0, hurdle_passed=True, itemized_costs={}) = compute_backtest_metrics([BacktestTrade(trade_id='T', strategy_id='TEST', symbol='TEST', entry_session='2023-01-02', exit_session=None, entry_price=0.0, exit_price=None, raw_entry_price=0.0, raw_exit_price=None, shares=1, initial_risk_per_share=100, stop_loss=0.0, target=0.0, trailing_stop=None, holding_sessions=0, locked_sessions=0, status=<TradeStatus.CLOSED: 'CLOSED'>, gross_pnl=0.0, entry_costs=0.0, exit_costs=0.0, net_pnl=25, realized_r=0.25, unrealized_pnl=0.0, mtm_value=0.0, exit_reason=None, as_of_session=None)], [DailyEquityPoint(session='2023-01-02', equity=250000, cash=0.0, holdings_value=0.0, open_slots=0, drawdown_rs=0.0, drawdown_pct=0.0)])
+
+shared\trust\artifacts\test_codex_day4_ee58cb3_review.py:35: AssertionError
+=========================== short test summary info ===========================
+FAILED shared/trust/artifacts/test_codex_day4_ee58cb3_review.py::test_roundtrip_uses_aggregate_session_participation
+FAILED shared/trust/artifacts/test_codex_day4_ee58cb3_review.py::test_held_position_disqualified_on_current_session
+FAILED shared/trust/artifacts/test_codex_day4_ee58cb3_review.py::test_expectancy_threshold_is_strict
+============================== 3 failed in 1.30s ==============================
+
+STDERR:

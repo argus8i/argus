@@ -605,7 +605,7 @@ def compute_backtest_metrics(
     hurdle_passed = (
         win_rate >= 0.45
         and profit_factor >= 1.30
-        and net_expectancy_r >= 0.25
+        and net_expectancy_r > 0.250
         and max_dd_pct <= 6.0
     )
 
