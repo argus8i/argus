@@ -112,7 +112,34 @@ def _test_run_pre_open(self, session_date, *args, **kwargs):
 
 def _test_run_post_close(self, session_date, *args, **kwargs):
     if kwargs.get("bhavcopy_manifest") is None and "bhavcopy_manifest" not in kwargs:
-        kwargs["bhavcopy_manifest"] = {"status": "NORMAL", "session_date": session_date}
+        bar_map = args[0] if len(args) > 0 else kwargs.get("bar_data_map", {})
+        if bar_map:
+            import tempfile
+            import hashlib
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline="", encoding="utf-8") as tf:
+                w = csv.DictWriter(tf, fieldnames=["SYMBOL", "SERIES", "OPEN", "HIGH", "LOW", "CLOSE", "VOLUME", "DATE"])
+                w.writeheader()
+                for b in bar_map.values():
+                    w.writerow({
+                        "SYMBOL": b.symbol,
+                        "SERIES": "EQ",
+                        "OPEN": b.open,
+                        "HIGH": b.high,
+                        "LOW": b.low,
+                        "CLOSE": b.close,
+                        "VOLUME": b.volume,
+                        "DATE": session_date,
+                    })
+                tf_path = Path(tf.name)
+            h = hashlib.sha256(tf_path.read_bytes()).hexdigest()
+            kwargs["bhavcopy_manifest"] = {
+                "status": "NORMAL",
+                "session_date": session_date,
+                "source_file": str(tf_path),
+                "source_sha256": h,
+            }
+        else:
+            kwargs["bhavcopy_manifest"] = {"status": "NORMAL", "session_date": session_date}
     return _orig_run_post_close(self, session_date, *args, **kwargs)
 
 @pytest.fixture(autouse=True, scope="module")

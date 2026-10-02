@@ -1,0 +1,15 @@
+{
+  "argv": [
+    "C:\\Users\\yashw\\swing trades\\.venv\\Scripts\\python.exe",
+    "-m",
+    "pytest",
+    "C:\\Users\\yashw\\swing trades\\shared\\trust\\artifacts\\test_codex_day5_369d464_round7.py",
+    "-v",
+    "-p",
+    "no:cacheprovider",
+    "--basetemp",
+    "C:\\Users\\yashw\\swing trades\\shared\\trust\\artifacts\\CODEX-DAY5-PAPER-DESK-369D464-R7-new-tmp"
+  ],
+  "cwd": "C:\\Users\\yashw\\swing trades",
+  "exit_code": 1
+}

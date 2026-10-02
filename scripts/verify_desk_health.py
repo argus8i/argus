@@ -246,22 +246,32 @@ def verify_desk_health(
             if int(r_pos["residual_qty"]) != int(db_p["residual_qty"]):
                 raise AssertionError(f"CRITICAL [H7]: Position {p_id} residual_qty mismatch: CSV {r_pos['residual_qty']} != SQLite {db_p['residual_qty']}")
             for k, expected_v in db_p.items():
-                if k in r_pos and expected_v is not None and k != "status":
-                    actual_str = str(r_pos[k]).strip()
-                    if isinstance(expected_v, float):
-                        try:
-                            act_f = float(actual_str)
-                            if not math.isfinite(act_f) or abs(act_f - expected_v) > 0.01:
-                                raise AssertionError(f"CRITICAL [H7]: Position {p_id} field '{k}' mismatch: CSV {act_f} != SQLite {expected_v}")
-                        except (ValueError, TypeError):
-                            raise AssertionError(f"CRITICAL [H7]: Position {p_id} field '{k}' non-numeric: {actual_str}")
-                    elif isinstance(expected_v, int):
-                        try:
-                            act_i = int(actual_str)
-                            if act_i != expected_v:
-                                raise AssertionError(f"CRITICAL [H7]: Position {p_id} field '{k}' mismatch: CSV {act_i} != SQLite {expected_v}")
-                        except (ValueError, TypeError):
-                            raise AssertionError(f"CRITICAL [H7]: Position {p_id} field '{k}' non-integer: {actual_str}")
+                if k == "status":
+                    continue
+                if k not in r_pos:
+                    raise AssertionError(f"CRITICAL [H7]: Position {p_id} missing required field '{k}' in open_positions.csv")
+                actual_str = str(r_pos[k]).strip()
+                if expected_v is None:
+                    if actual_str != "" and actual_str.lower() != "none":
+                        raise AssertionError(f"CRITICAL [H7]: Position {p_id} field '{k}' expected None, got '{actual_str}'")
+                    continue
+                if isinstance(expected_v, float):
+                    try:
+                        act_f = float(actual_str)
+                        if not math.isfinite(act_f) or abs(act_f - expected_v) > 0.01:
+                            raise AssertionError(f"CRITICAL [H7]: Position {p_id} field '{k}' mismatch: CSV {act_f} != SQLite {expected_v}")
+                    except (ValueError, TypeError):
+                        raise AssertionError(f"CRITICAL [H7]: Position {p_id} field '{k}' non-numeric: {actual_str}")
+                elif isinstance(expected_v, int):
+                    try:
+                        act_i = int(actual_str)
+                        if act_i != expected_v:
+                            raise AssertionError(f"CRITICAL [H7]: Position {p_id} field '{k}' mismatch: CSV {act_i} != SQLite {expected_v}")
+                    except (ValueError, TypeError):
+                        raise AssertionError(f"CRITICAL [H7]: Position {p_id} field '{k}' non-integer: {actual_str}")
+                else:
+                    if actual_str != str(expected_v).strip():
+                        raise AssertionError(f"CRITICAL [H7]: Position {p_id} field '{k}' mismatch: CSV '{actual_str}' != SQLite '{expected_v}'")
 
         # 3. Journal Reconciliation
         with open(p_dir / "canonical_paper_journal.csv", newline="", encoding="utf-8") as f:
@@ -289,35 +299,40 @@ def verify_desk_health(
             # Reconcile complete journal event payload
             payload = json.loads(r_db["payload_json"]) if r_db["payload_json"] else {}
             for pk, expected_v in payload.items():
-                if pk in r_csv and expected_v is not None:
-                    actual_str = str(r_csv[pk]).strip()
-                    if isinstance(expected_v, float):
-                        try:
-                            act_f = float(actual_str)
-                            if not math.isfinite(act_f) or abs(act_f - expected_v) > 0.01:
-                                raise AssertionError(
-                                    f"CRITICAL [H7]: Journal payload '{pk}' mismatch on event {r_db['event_seq']}: CSV {act_f} != SQLite {expected_v}"
-                                )
-                        except (ValueError, TypeError):
+                if pk not in r_csv:
+                    raise AssertionError(f"CRITICAL [H7]: Journal event {r_db['event_seq']} missing required field '{pk}' in canonical_paper_journal.csv")
+                actual_str = str(r_csv[pk]).strip()
+                if expected_v is None:
+                    if actual_str != "" and actual_str.lower() != "none":
+                        raise AssertionError(f"CRITICAL [H7]: Journal payload '{pk}' expected None on event {r_db['event_seq']}, got '{actual_str}'")
+                    continue
+                if isinstance(expected_v, float):
+                    try:
+                        act_f = float(actual_str)
+                        if not math.isfinite(act_f) or abs(act_f - expected_v) > 0.01:
                             raise AssertionError(
-                                f"CRITICAL [H7]: Journal payload '{pk}' non-numeric on event {r_db['event_seq']}: {actual_str}"
+                                f"CRITICAL [H7]: Journal payload '{pk}' mismatch on event {r_db['event_seq']}: CSV {act_f} != SQLite {expected_v}"
                             )
-                    elif isinstance(expected_v, int):
-                        try:
-                            act_i = int(actual_str)
-                            if act_i != expected_v:
-                                raise AssertionError(
-                                    f"CRITICAL [H7]: Journal payload '{pk}' mismatch on event {r_db['event_seq']}: CSV {act_i} != SQLite {expected_v}"
-                                )
-                        except (ValueError, TypeError):
+                    except (ValueError, TypeError):
+                        raise AssertionError(
+                            f"CRITICAL [H7]: Journal payload '{pk}' non-numeric on event {r_db['event_seq']}: {actual_str}"
+                        )
+                elif isinstance(expected_v, int):
+                    try:
+                        act_i = int(actual_str)
+                        if act_i != expected_v:
                             raise AssertionError(
-                                f"CRITICAL [H7]: Journal payload '{pk}' non-integer on event {r_db['event_seq']}: {actual_str}"
+                                f"CRITICAL [H7]: Journal payload '{pk}' mismatch on event {r_db['event_seq']}: CSV {act_i} != SQLite {expected_v}"
                             )
-                    else:
-                        if actual_str != str(expected_v).strip():
-                            raise AssertionError(
-                                f"CRITICAL [H7]: Journal payload '{pk}' mismatch on event {r_db['event_seq']}: CSV '{actual_str}' != SQLite '{expected_v}'"
-                            )
+                    except (ValueError, TypeError):
+                        raise AssertionError(
+                            f"CRITICAL [H7]: Journal payload '{pk}' non-integer on event {r_db['event_seq']}: {actual_str}"
+                        )
+                else:
+                    if actual_str != str(expected_v).strip():
+                        raise AssertionError(
+                            f"CRITICAL [H7]: Journal payload '{pk}' mismatch on event {r_db['event_seq']}: CSV '{actual_str}' != SQLite '{expected_v}'"
+                        )
 
     return {
         "session_date": eq.session_date,

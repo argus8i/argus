@@ -132,6 +132,7 @@ class PaperDeskRunner:
             max_positions_per_sector=config.max_positions_per_sector,
         )
         self.dp_charges_tracker: Set[Tuple[str, str]] = set()  # (session_date, symbol)
+        self._session_bars_count: Dict[str, int] = {}
 
         # Replay / restore state from SQLite store
         self._restore_state_from_store()
@@ -1606,96 +1607,117 @@ class PaperDeskRunner:
                     or bhavcopy_manifest.get("raw_path")
                 )
 
-                if source_file is not None or source_sha is not None:
-                    has_invalid_provenance = False
-                    if not source_sha or not isinstance(source_sha, str) or len(source_sha.strip()) != 64 or set(source_sha.strip()) == {"0"}:
-                        has_invalid_provenance = True
+                if (
+                    source_file
+                    and source_sha
+                    and isinstance(source_sha, str)
+                    and len(source_sha.strip()) == 64
+                    and set(source_sha.strip()) != {"0"}
+                ):
+                    p_file = Path(source_file)
+                    if p_file.exists() and p_file.is_file():
+                        h = hashlib.sha256()
+                        with open(p_file, "rb") as fh:
+                            while chunk := fh.read(65536):
+                                h.update(chunk)
+                        if h.hexdigest().lower() == source_sha.strip().lower():
+                            try:
+                                with open(p_file, "r", encoding="utf-8", errors="replace") as pf:
+                                    reader = csv.DictReader(pf)
+                                    if reader.fieldnames:
+                                        f_upper = {fn.strip().upper(): fn for fn in reader.fieldnames if fn}
+                                        sym_col = next((f_upper[c] for c in ("SYMBOL", "TCKRSYMB", "TKRSYMB") if c in f_upper), None)
+                                        srs_col = next((f_upper[c] for c in ("SERIES", "SCTYSRS") if c in f_upper), None)
+                                        opn_col = next((f_upper[c] for c in ("OPEN", "OPNPRIC", "OPEN_PRICE") if c in f_upper), None)
+                                        hgh_col = next((f_upper[c] for c in ("HIGH", "HGHPRIC", "HIGH_PRICE") if c in f_upper), None)
+                                        low_col = next((f_upper[c] for c in ("LOW", "LWPRIC", "LOW_PRICE") if c in f_upper), None)
+                                        cls_col = next((f_upper[c] for c in ("CLOSE", "CLSPRIC", "CLOSE_PRICE") if c in f_upper), None)
+                                        vol_col = next((f_upper[c] for c in ("VOLUME", "TOTTRDQTY", "TTLTRADGVOL", "TTLTRADQTY") if c in f_upper), None)
+                                        dt_col = next((f_upper[c] for c in ("DATE", "TRADDT", "SESSION_DATE", "BIZDT", "TIMESTAMP") if c in f_upper), None)
 
-                    if not source_file:
-                        has_invalid_provenance = True
-                    else:
-                        p_file = Path(source_file)
-                        if not p_file.exists() or not p_file.is_file():
-                            has_invalid_provenance = True
-                        else:
-                            if not has_invalid_provenance:
-                                h = hashlib.sha256()
-                                with open(p_file, "rb") as fh:
-                                    while chunk := fh.read(65536):
-                                        h.update(chunk)
-                                if h.hexdigest().lower() != source_sha.strip().lower():
-                                    has_invalid_provenance = True
+                                        # Mandatory column groups: date, symbol, series, open, close
+                                        if sym_col and cls_col and opn_col and dt_col:
+                                            source_symbol_map = {}
+                                            for r in reader:
+                                                r_dt = r.get(dt_col, "").strip()
+                                                if r_dt == session_date:
+                                                    s_sym = r.get(sym_col, "").strip().upper()
+                                                    s_srs = r.get(srs_col, "EQ").strip().upper() if srs_col else "EQ"
+                                                    if s_sym and s_srs == "EQ":
+                                                        try:
+                                                            s_o = float(r.get(opn_col, 0))
+                                                            s_c = float(r.get(cls_col, 0))
+                                                            s_h = float(r.get(hgh_col, s_o)) if hgh_col else max(s_o, s_c)
+                                                            s_l = float(r.get(low_col, s_c)) if low_col else min(s_o, s_c)
+                                                            s_v = float(r.get(vol_col, 0)) if vol_col else 0.0
 
-                            if not has_invalid_provenance:
-                                try:
-                                    with open(p_file, "r", encoding="utf-8", errors="replace") as pf:
-                                        reader = csv.DictReader(pf)
-                                        if not reader.fieldnames:
-                                            has_invalid_provenance = True
-                                        else:
-                                            f_upper = {fn.strip().upper(): fn for fn in reader.fieldnames if fn}
-                                            sym_col = next((f_upper[c] for c in ("SYMBOL", "TCKRSYMB", "TKRSYMB") if c in f_upper), None)
-                                            cls_col = next((f_upper[c] for c in ("CLOSE", "CLSPRIC", "CLOSE_PRICE") if c in f_upper), None)
-                                            dt_col = next((f_upper[c] for c in ("DATE", "TRADDT", "SESSION_DATE") if c in f_upper), None)
+                                                            if (
+                                                                math.isfinite(s_o)
+                                                                and math.isfinite(s_c)
+                                                                and math.isfinite(s_h)
+                                                                and math.isfinite(s_l)
+                                                                and math.isfinite(s_v)
+                                                                and s_o > 0
+                                                                and s_c > 0
+                                                                and s_h >= s_l
+                                                                and s_l <= s_o <= s_h
+                                                                and s_l <= s_c <= s_h
+                                                            ):
+                                                                source_symbol_map[s_sym] = {
+                                                                    "open": s_o,
+                                                                    "high": s_h,
+                                                                    "low": s_l,
+                                                                    "close": s_c,
+                                                                    "volume": s_v,
+                                                                }
+                                                        except (ValueError, TypeError):
+                                                            pass
 
-                                            if not (sym_col and cls_col):
-                                                has_invalid_provenance = True
-                                            else:
-                                                source_rows = list(reader)
-                                                if not source_rows:
-                                                    has_invalid_provenance = True
-                                                else:
-                                                    if dt_col:
-                                                        matching_session_rows = [r for r in source_rows if r.get(dt_col, "").strip() == session_date]
-                                                        if not matching_session_rows:
-                                                            has_invalid_provenance = True
-                                                    else:
-                                                        matching_session_rows = source_rows
+                                            # Coverage and price binding: every consumed symbol must be in source and match open & close
+                                            all_bars_bound = bool(source_symbol_map)
+                                            for sym, bar in bar_data_map.items():
+                                                sym_u = sym.strip().upper()
+                                                if sym_u not in source_symbol_map:
+                                                    all_bars_bound = False
+                                                    break
+                                                src_bar = source_symbol_map[sym_u]
+                                                if (
+                                                    abs(bar.open - src_bar["open"]) > 0.01
+                                                    or abs(bar.close - src_bar["close"]) > 0.01
+                                                ):
+                                                    all_bars_bound = False
+                                                    break
 
-                                                    if not has_invalid_provenance:
-                                                        source_symbol_map = {}
-                                                        for r in matching_session_rows:
-                                                            s_sym = r.get(sym_col, "").strip().upper()
-                                                            if s_sym and s_sym not in source_symbol_map:
-                                                                try:
-                                                                    source_symbol_map[s_sym] = float(r.get(cls_col, 0))
-                                                                except (ValueError, TypeError):
-                                                                    pass
+                                            if all_bars_bound:
+                                                is_manifest_valid = True
+                            except Exception:
+                                pass
 
-                                                        for sym, bar in bar_data_map.items():
-                                                            sym_u = sym.strip().upper()
-                                                            if sym_u in source_symbol_map:
-                                                                if abs(bar.close - source_symbol_map[sym_u]) > 0.01:
-                                                                    has_invalid_provenance = True
-                                                                    break
-                                except Exception:
-                                    has_invalid_provenance = True
-
-                    if not has_invalid_provenance:
-                        is_manifest_valid = True
-                else:
-                    # Missing source_file/sha256 in manifest:
-                    # Permitted ONLY if desk has active portfolio activity (fills, positions, or reservations)
-                    # OR if retrying a session that previously completed with missing equity.
-                    has_active_activity = bool(
-                        executed_entries
-                        or executed_exits
-                        or current_open_positions
-                        or self.governor.pending_reservations
-                        or (hasattr(self.store, "get_pending_reservations") and len(self.store.get_pending_reservations()) > 0)
-                    )
-                    is_retry_of_missing = (
-                        self.store.is_session_processed(session_date)
-                        and self.store.get_latest_equity() is None
-                    )
-                    if has_active_activity or is_retry_of_missing:
-                        is_manifest_valid = True
+        # Check for empty-data retry:
+        # Permitted ONLY if retrying a session that previously completed with 0 bars and missing equity,
+        # AND desk has zero active economics (no open positions, no reservations, no fills).
+        prev_bars_cnt = self._session_bars_count.get(session_date)
+        is_empty_retry = (
+            self.store.is_session_processed(session_date)
+            and self.store.get_latest_equity() is None
+            and prev_bars_cnt == 0
+            and has_valid_bars
+            and not executed_entries
+            and not executed_exits
+            and not current_open_positions
+            and not self.governor.pending_reservations
+            and isinstance(bhavcopy_manifest, dict)
+            and bhavcopy_manifest.get("status") == "NORMAL"
+        )
+        if is_empty_retry:
+            is_manifest_valid = True
 
         if is_manifest_valid:
             self.store.record_daily_equity(daily_equity_rec)
 
         # Mark session as processed for idempotency
         self.store.mark_session_processed(session_date, recorded_at)
+        self._session_bars_count[session_date] = len(bar_data_map)
 
         # =========================================================================
         # 4. ATOMIC CSV EXPORT PROJECTIONS

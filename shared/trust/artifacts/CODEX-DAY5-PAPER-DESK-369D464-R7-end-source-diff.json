@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "git",
+    "diff",
+    "HEAD",
+    "--",
+    "antigravity/paper",
+    "scripts",
+    "tests"
+  ],
+  "cwd": "C:\\Users\\yashw\\swing trades",
+  "exit_code": 0
+}

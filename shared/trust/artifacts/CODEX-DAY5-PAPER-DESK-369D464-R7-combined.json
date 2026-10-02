@@ -1,0 +1,31 @@
+{
+  "argv": [
+    "C:\\Users\\yashw\\swing trades\\.venv\\Scripts\\python.exe",
+    "-m",
+    "pytest",
+    "tests/test_day1_data_contracts.py",
+    "tests/test_execution_risk_governor.py",
+    "tests/test_day3_strategies.py",
+    "tests/test_day4_backtest.py",
+    "C:\\Users\\yashw\\swing trades\\shared\\trust\\artifacts\\test_codex_day4_9157a86_review.py",
+    "C:\\Users\\yashw\\swing trades\\shared\\trust\\artifacts\\test_codex_day4_ee58cb3_review.py",
+    "C:\\Users\\yashw\\swing trades\\shared\\trust\\artifacts\\test_codex_day4_7c23f6c_review.py",
+    "C:\\Users\\yashw\\swing trades\\shared\\trust\\artifacts\\test_codex_day4_90255e7_review.py",
+    "C:\\Users\\yashw\\swing trades\\shared\\trust\\artifacts\\test_codex_day4_bf510da_review.py",
+    "tests/test_day5_paper_desk.py",
+    "tests/test_runbook_wiring.py",
+    "C:\\Users\\yashw\\swing trades\\shared\\trust\\artifacts\\test_codex_day5_48cb886_review.py",
+    "C:\\Users\\yashw\\swing trades\\shared\\trust\\artifacts\\test_codex_day5_eaa38ba_round2.py",
+    "C:\\Users\\yashw\\swing trades\\shared\\trust\\artifacts\\test_codex_day5_01d3fbc_round3.py",
+    "C:\\Users\\yashw\\swing trades\\shared\\trust\\artifacts\\test_codex_day5_abce70a_round4.py",
+    "C:\\Users\\yashw\\swing trades\\shared\\trust\\artifacts\\test_codex_day5_cd0b2bf_round5.py",
+    "C:\\Users\\yashw\\swing trades\\shared\\trust\\artifacts\\test_codex_day5_ac6f0be_round6.py",
+    "-v",
+    "-p",
+    "no:cacheprovider",
+    "--basetemp",
+    "C:\\Users\\yashw\\swing trades\\shared\\trust\\artifacts\\CODEX-DAY5-PAPER-DESK-369D464-R7-combined-tmp"
+  ],
+  "cwd": "C:\\Users\\yashw\\swing trades",
+  "exit_code": 0
+}
