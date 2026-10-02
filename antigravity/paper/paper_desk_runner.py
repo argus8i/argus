@@ -24,6 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_FLOOR
+import hashlib
 import json
 import logging
 import math
@@ -1563,21 +1564,50 @@ class PaperDeskRunner:
             data_status=data_status,
         )
 
-        # Commit EOD equity only if bhavcopy manifest is verified (Codex Round 3 Finding 4)
+        # Commit EOD equity only if bhavcopy manifest is verified (Codex Round 4 Finding 1)
         is_manifest_valid = False
         if isinstance(bhavcopy_manifest, dict):
             m_status = bhavcopy_manifest.get("status")
             m_date = bhavcopy_manifest.get("session_date") or bhavcopy_manifest.get("date")
             if m_status == "NORMAL" and m_date == session_date:
-                has_provenance = any(
-                    k in bhavcopy_manifest
-                    for k in ("source_sha256", "sha256", "bhavcopy_sha256", "file_sha256", "raw_sha256", "source_file", "source_path", "raw_path", "files")
+                has_invalid_provenance = False
+                source_sha = (
+                    bhavcopy_manifest.get("source_sha256")
+                    or bhavcopy_manifest.get("sha256")
+                    or bhavcopy_manifest.get("bhavcopy_sha256")
                 )
-                has_bars = bool(bar_data_map and len(bar_data_map) > 0)
-                is_retry_pending = self.store.is_session_processed(session_date) and not self.store.has_session_equity(session_date)
+                source_file = (
+                    bhavcopy_manifest.get("source_file")
+                    or bhavcopy_manifest.get("bhavcopy_file")
+                    or bhavcopy_manifest.get("source_path")
+                    or bhavcopy_manifest.get("raw_path")
+                )
 
-                if has_provenance or has_bars or is_retry_pending:
-                    is_manifest_valid = True
+                # Validate hash if hash keys are present
+                if "source_sha256" in bhavcopy_manifest or "sha256" in bhavcopy_manifest or "bhavcopy_sha256" in bhavcopy_manifest:
+                    if not source_sha or not isinstance(source_sha, str):
+                        has_invalid_provenance = True
+                    elif len(source_sha.strip()) != 64 or set(source_sha.strip()) == {"0"}:
+                        has_invalid_provenance = True
+
+                # Validate source file if file keys are present
+                if source_file is not None:
+                    p_file = Path(source_file)
+                    if not p_file.exists() or not p_file.is_file():
+                        has_invalid_provenance = True
+                    elif source_sha and isinstance(source_sha, str) and not has_invalid_provenance:
+                        h = hashlib.sha256()
+                        with open(p_file, "rb") as fh:
+                            while chunk := fh.read(65536):
+                                h.update(chunk)
+                        if h.hexdigest().lower() != source_sha.strip().lower():
+                            has_invalid_provenance = True
+
+                if not has_invalid_provenance:
+                    has_bars = bool(bar_data_map and len(bar_data_map) > 0)
+                    has_verified_file = bool(source_file and Path(source_file).is_file())
+                    if has_bars or has_verified_file:
+                        is_manifest_valid = True
 
         if is_manifest_valid:
             self.store.record_daily_equity(daily_equity_rec)

@@ -59,8 +59,8 @@ def find_bhavcopy_source(session_date: str, custom_source: Optional[str] = None)
     return None
 
 
-def extract_and_validate_bhavcopy(source_path: Path) -> Tuple[List[Dict[str, str]], List[str]]:
-    """Reads raw CSV or ZIP, validates headers, and extracts rows."""
+def extract_and_validate_bhavcopy(source_path: Path, session_date: str) -> Tuple[List[Dict[str, str]], List[str]]:
+    """Reads raw CSV or ZIP, validates official OHLCV schema, dates, and extracts rows."""
     content: bytes
     if source_path.suffix.lower() == ".gz":
         content = gzip.decompress(source_path.read_bytes())
@@ -78,15 +78,82 @@ def extract_and_validate_bhavcopy(source_path: Path) -> Tuple[List[Dict[str, str
     if not reader.fieldnames:
         raise ValueError(f"Bhavcopy source {source_path} has empty headers")
 
+    # Required column groups
+    field_map = {f.strip(): f for f in reader.fieldnames}
+    
+    def find_field(candidates: List[str]) -> Optional[str]:
+        for c in candidates:
+            if c in field_map:
+                return field_map[c]
+            for f in field_map:
+                if f.upper() == c.upper():
+                    return field_map[f]
+        return None
+
+    sym_col = find_field(["TckrSymb", "SYMBOL", "TkrSymb"])
+    srs_col = find_field(["SctySrs", "SERIES"])
+    open_col = find_field(["OpnPric", "OPEN", "OPEN_PRICE"])
+    high_col = find_field(["HghPric", "HIGH", "HIGH_PRICE"])
+    low_col = find_field(["LwPric", "LOW", "LOW_PRICE"])
+    close_col = find_field(["ClsPric", "CLOSE", "CLOSE_PRICE"])
+    vol_col = find_field(["TtlTradgVol", "TtlTradQty", "TOTTRDQTY", "VOLUME"])
+    date_col = find_field(["TradDt", "BizDt", "TIMESTAMP", "DATE"])
+
+    required_missing = []
+    if not sym_col: required_missing.append("SYMBOL")
+    if not srs_col: required_missing.append("SERIES")
+    if not open_col: required_missing.append("OPEN")
+    if not high_col: required_missing.append("HIGH")
+    if not low_col: required_missing.append("LOW")
+    if not close_col: required_missing.append("CLOSE")
+    if not vol_col: required_missing.append("VOLUME")
+
+    if required_missing:
+        raise KeyError(f"Bhavcopy source {source_path} missing required column groups: {required_missing}")
+
+    # Possible representations of session_date (YYYY-MM-DD)
+    date_targets = {session_date, session_date.replace("-", "")}
+    try:
+        dt_obj = datetime.strptime(session_date, "%Y-%m-%d")
+        date_targets.add(dt_obj.strftime("%d-%b-%Y").upper())
+        date_targets.add(dt_obj.strftime("%d-%B-%Y").upper())
+        date_targets.add(dt_obj.strftime("%d-%m-%Y"))
+    except ValueError:
+        pass
+
     rows = []
+    date_matched = False
     for r in reader:
         cleaned = {k.strip(): (v.strip() if v else "") for k, v in r.items() if k}
-        sym = cleaned.get("TckrSymb") or cleaned.get("SYMBOL") or cleaned.get("TkrSymb")
-        if sym:
-            rows.append(cleaned)
+        sym = cleaned.get(sym_col, "").strip().upper()
+        if not sym or sym in {"SYMBOL", "TCKRSYMB"}:
+            continue
+
+        if date_col:
+            raw_d = cleaned.get(date_col, "").strip().upper()
+            if raw_d not in date_targets:
+                continue
+            date_matched = True
+
+        # Numeric OHLCV validation
+        try:
+            o = float(cleaned[open_col])
+            h = float(cleaned[high_col])
+            l = float(cleaned[low_col])
+            c = float(cleaned[close_col])
+            v = float(cleaned[vol_col])
+            if o <= 0 or l <= 0 or c <= 0 or h < l or v < 0:
+                raise ValueError(f"Invalid price/volume values in row: {cleaned}")
+        except (ValueError, TypeError, KeyError) as e:
+            raise ValueError(f"Bhavcopy non-numeric or invalid OHLCV for {sym}: {e}")
+
+        rows.append(cleaned)
+
+    if date_col and not date_matched:
+        raise ValueError(f"Bhavcopy source {source_path} contains no trading records for requested session {session_date}")
 
     if not rows:
-        raise ValueError(f"No valid trading records found in Bhavcopy source {source_path}")
+        raise ValueError(f"No valid trading records found for session {session_date} in Bhavcopy source {source_path}")
 
     fieldnames = list(reader.fieldnames)
     return rows, fieldnames
@@ -113,7 +180,7 @@ def ingest_daily_bhavcopy(
         raise FileNotFoundError(err_msg)
 
     source_sha = compute_file_sha256(source_path)
-    rows, fieldnames = extract_and_validate_bhavcopy(source_path)
+    rows, fieldnames = extract_and_validate_bhavcopy(source_path, session_date)
 
     # Write normalized canonical CSV
     csv_target = out_dir / f"bhavcopy_{session_date}.csv"

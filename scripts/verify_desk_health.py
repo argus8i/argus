@@ -32,6 +32,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from antigravity.paper.paper_store import PaperStore
 from antigravity.paper.paper_contracts import EVIDENCE_MODE_DEFAULT
+from antigravity.models.track2_portfolio_risk_governor import DEFAULT_SECTOR_MAP
 
 
 def compute_file_sha256(path: Path) -> str:
@@ -80,8 +81,7 @@ def verify_desk_health(
     open_positions = store.get_open_positions()
     sector_counts: Dict[str, int] = {}
     for p in open_positions:
-        # Default sector to sleeve or symbol prefix if unclassified
-        sec = getattr(p, "sector", None) or p.sleeve_id
+        sec = getattr(p, "sector", None) or DEFAULT_SECTOR_MAP.get(str(p.symbol).strip().upper(), "UNKNOWN_SECTOR")
         sector_counts[sec] = sector_counts.get(sec, 0) + 1
 
     max_sector_count = max(sector_counts.values(), default=0)
@@ -106,18 +106,18 @@ def verify_desk_health(
             )
 
     # H6: Evidence Mode
-    # Verified from latest ledger event or schema invariant
     with store._get_connection() as conn:
-        last_evt = conn.execute("SELECT payload_json FROM ledger_events ORDER BY event_seq DESC LIMIT 1").fetchone()
-        if last_evt:
-            p_dict = json.loads(last_evt["payload_json"])
+        all_events = conn.execute("SELECT event_id, payload_json FROM ledger_events").fetchall()
+        for evt_row in all_events:
+            p_dict = json.loads(evt_row["payload_json"]) if evt_row["payload_json"] else {}
             ev_status = p_dict.get("qualifying_evidence_status")
-            if ev_status and ev_status != EVIDENCE_MODE_DEFAULT:
+            if not ev_status or ev_status != EVIDENCE_MODE_DEFAULT:
                 raise AssertionError(
-                    f"CRITICAL [H6]: Evidence mode {ev_status} does not match required watermark {EVIDENCE_MODE_DEFAULT}."
+                    f"CRITICAL [H6]: Event {evt_row['event_id']} has invalid or missing qualifying_evidence_status "
+                    f"'{ev_status}' (expected '{EVIDENCE_MODE_DEFAULT}')."
                 )
 
-    # H7: CSV Reconciliation
+    # H7: CSV Value Reconciliation
     if projections_dir:
         p_dir = Path(projections_dir).resolve()
         manifest_p = p_dir / "generation_manifest.json"
@@ -135,24 +135,54 @@ def verify_desk_health(
                     f"CRITICAL [H7]: Hash mismatch for {item['name']} (actual {actual_sha} != manifest {item['sha256']})."
                 )
 
-        # Reconcile row counts
         with store._get_connection() as conn:
             db_journal_cnt = conn.execute("SELECT COUNT(*) FROM ledger_events").fetchone()[0]
             db_pos_cnt = conn.execute("SELECT COUNT(*) FROM positions WHERE status = 'OPEN'").fetchone()[0]
             db_eq_cnt = conn.execute("SELECT COUNT(*) FROM daily_equity").fetchone()[0]
+            db_equity_rows = {row["session_date"]: dict(row) for row in conn.execute("SELECT * FROM daily_equity").fetchall()}
+            db_pos_rows = {row["position_id"]: dict(row) for row in conn.execute("SELECT * FROM positions WHERE status = 'OPEN'").fetchall()}
 
-        with open(p_dir / "canonical_paper_journal.csv", newline="", encoding="utf-8") as f:
-            csv_journal_cnt = sum(1 for _ in csv.DictReader(f))
-        with open(p_dir / "open_positions.csv", newline="", encoding="utf-8") as f:
-            csv_pos_cnt = sum(1 for _ in csv.DictReader(f))
+        # 1. Equity Value Reconciliation
         with open(p_dir / "daily_portfolio_equity.csv", newline="", encoding="utf-8") as f:
-            csv_eq_cnt = sum(1 for _ in csv.DictReader(f))
+            csv_eq_rows = list(csv.DictReader(f))
+        if len(csv_eq_rows) != db_eq_cnt:
+            raise AssertionError(f"CRITICAL [H7]: Row count mismatch on daily_portfolio_equity.csv: {len(csv_eq_rows)} != {db_eq_cnt}")
+        for r_eq in csv_eq_rows:
+            s_date = r_eq["session_date"]
+            if s_date not in db_equity_rows:
+                raise AssertionError(f"CRITICAL [H7]: Equity CSV contains session {s_date} missing in SQLite.")
+            db_r = db_equity_rows[s_date]
+            if abs(float(r_eq["cash_ledger_rs"]) - float(db_r["cash_ledger_rs"])) > 0.01:
+                raise AssertionError(
+                    f"CRITICAL [H7]: Cash mismatch for {s_date}: CSV has {r_eq['cash_ledger_rs']} != SQLite has {db_r['cash_ledger_rs']}"
+                )
+            if abs(float(r_eq["equity_rs"]) - float(db_r["equity_rs"])) > 0.01:
+                raise AssertionError(
+                    f"CRITICAL [H7]: Equity mismatch for {s_date}: CSV has {r_eq['equity_rs']} != SQLite has {db_r['equity_rs']}"
+                )
+            if r_eq.get("data_status") != db_r["data_status"]:
+                raise AssertionError(
+                    f"CRITICAL [H7]: Data status mismatch for {s_date}: CSV has {r_eq.get('data_status')} != SQLite has {db_r['data_status']}"
+                )
 
-        if csv_journal_cnt != db_journal_cnt or csv_pos_cnt != db_pos_cnt or csv_eq_cnt != db_eq_cnt:
-            raise AssertionError(
-                f"CRITICAL [H7]: Row count mismatch between CSV and SQLite "
-                f"(Journal: {csv_journal_cnt} vs {db_journal_cnt}, Pos: {csv_pos_cnt} vs {db_pos_cnt}, Eq: {csv_eq_cnt} vs {db_eq_cnt})."
-            )
+        # 2. Positions Value Reconciliation
+        with open(p_dir / "open_positions.csv", newline="", encoding="utf-8") as f:
+            csv_pos_rows = list(csv.DictReader(f))
+        if len(csv_pos_rows) != db_pos_cnt:
+            raise AssertionError(f"CRITICAL [H7]: Row count mismatch on open_positions.csv: {len(csv_pos_rows)} != {db_pos_cnt}")
+        for r_pos in csv_pos_rows:
+            p_id = r_pos["position_id"]
+            if p_id not in db_pos_rows:
+                raise AssertionError(f"CRITICAL [H7]: Position {p_id} in open_positions.csv missing or not OPEN in SQLite.")
+            db_p = db_pos_rows[p_id]
+            if int(r_pos["residual_qty"]) != int(db_p["residual_qty"]):
+                raise AssertionError(f"CRITICAL [H7]: Position {p_id} residual_qty mismatch: CSV {r_pos['residual_qty']} != SQLite {db_p['residual_qty']}")
+
+        # 3. Journal Reconciliation
+        with open(p_dir / "canonical_paper_journal.csv", newline="", encoding="utf-8") as f:
+            csv_journal_rows = list(csv.DictReader(f))
+        if len(csv_journal_rows) != db_journal_cnt:
+            raise AssertionError(f"CRITICAL [H7]: Row count mismatch on canonical_paper_journal.csv: {len(csv_journal_rows)} != {db_journal_cnt}")
 
     return {
         "session_date": eq.session_date,

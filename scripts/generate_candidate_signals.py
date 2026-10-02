@@ -46,19 +46,47 @@ def generate_candidate_signals(
 
     signals: List[Dict[str, Any]] = []
 
-    if source_signals_file and Path(source_signals_file).exists():
-        raw = json.loads(Path(source_signals_file).read_text(encoding="utf-8"))
+    if source_signals_file is not None:
+        src = Path(source_signals_file)
+        if not src.exists() or not src.is_file():
+            raise FileNotFoundError(f"FAIL_CLOSED: Source signals file does not exist: {source_signals_file}")
+        raw = json.loads(src.read_text(encoding="utf-8"))
+        if not isinstance(raw, list):
+            raise ValueError(f"Source signals file must contain a list of signals, got {type(raw).__name__}")
+        cutoff_dt = datetime.fromisoformat(f"{session_date}T08:45:00+05:30")
         for item in raw:
             sig = SignalEvent(**item)
+            if sig.entry_session != session_date:
+                raise ValueError(f"Signal for {sig.symbol} has entry_session {sig.entry_session} != {session_date}")
+            try:
+                sig_dt = datetime.fromisoformat(sig.created_at)
+                if sig_dt >= cutoff_dt:
+                    raise ValueError(f"Signal for {sig.symbol} timestamp {sig.created_at} is after 08:45:00 IST cutoff")
+            except Exception as e:
+                if "after 08:45:00 IST cutoff" in str(e):
+                    raise
+                raise ValueError(f"Signal for {sig.symbol} has invalid timestamp format: {sig.created_at}")
             signals.append(sig.to_dict() if hasattr(sig, "to_dict") else item)
     elif target_file.exists():
-        # Validate existing signals file
         raw = json.loads(target_file.read_text(encoding="utf-8"))
+        if not isinstance(raw, list):
+            raise ValueError(f"Existing target signals file must contain a list, got {type(raw).__name__}")
+        cutoff_dt = datetime.fromisoformat(f"{session_date}T08:45:00+05:30")
         for item in raw:
             sig = SignalEvent(**item)
+            if sig.entry_session != session_date:
+                raise ValueError(f"Signal for {sig.symbol} has entry_session {sig.entry_session} != {session_date}")
+            try:
+                sig_dt = datetime.fromisoformat(sig.created_at)
+                if sig_dt >= cutoff_dt:
+                    raise ValueError(f"Signal for {sig.symbol} timestamp {sig.created_at} is after 08:45:00 IST cutoff")
+            except Exception as e:
+                if "after 08:45:00 IST cutoff" in str(e):
+                    raise
+                raise ValueError(f"Signal for {sig.symbol} has invalid timestamp format: {sig.created_at}")
             signals.append(sig.to_dict() if hasattr(sig, "to_dict") else item)
     else:
-        # No external signals provided; default to verified empty candidate set
+        # Default verified empty candidate set when no candidate setups qualify
         signals = []
 
     # Write validated signals

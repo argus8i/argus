@@ -115,14 +115,21 @@ def parse_surveillance_source(source_path: Path) -> Dict[str, List[str]]:
         if not isinstance(data, dict) or not data:
             raise ValueError(f"Surveillance source {source_path} is empty or not a valid dictionary")
         required_keys = {"asm_long_term", "asm_short_term", "gsm"}
-        if not any(k in data for k in required_keys):
-            raise KeyError(f"Surveillance source {source_path} missing required surveillance keys: {required_keys}")
+        for k in required_keys:
+            if k not in data:
+                raise KeyError(f"Surveillance source {source_path} missing required surveillance key: '{k}'")
+        for k, val in data.items():
+            if isinstance(val, str) or not isinstance(val, (list, tuple, set)):
+                raise TypeError(f"Surveillance category '{k}' must be a list/set/tuple of symbols, got {type(val).__name__}")
+            for item in val:
+                if not isinstance(item, str):
+                    raise TypeError(f"Surveillance symbol in category '{k}' must be a string, got {type(item).__name__}")
         return {
-            "asm_long_term": sorted(list(set(data.get("asm_long_term", [])))),
-            "asm_short_term": sorted(list(set(data.get("asm_short_term", [])))),
-            "gsm": sorted(list(set(data.get("gsm", [])))),
-            "esm": sorted(list(set(data.get("esm", [])))),
-            "t2t": sorted(list(set(data.get("t2t", [])))),
+            "asm_long_term": sorted(list(set(str(s).strip().upper() for s in data.get("asm_long_term", [])))),
+            "asm_short_term": sorted(list(set(str(s).strip().upper() for s in data.get("asm_short_term", [])))),
+            "gsm": sorted(list(set(str(s).strip().upper() for s in data.get("gsm", [])))),
+            "esm": sorted(list(set(str(s).strip().upper() for s in data.get("esm", [])))),
+            "t2t": sorted(list(set(str(s).strip().upper() for s in data.get("t2t", [])))),
         }
     
     # CSV parser

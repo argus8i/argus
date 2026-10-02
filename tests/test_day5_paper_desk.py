@@ -115,8 +115,15 @@ def _test_run_post_close(self, session_date, *args, **kwargs):
         kwargs["bhavcopy_manifest"] = {"status": "NORMAL", "session_date": session_date}
     return _orig_run_post_close(self, session_date, *args, **kwargs)
 
-PaperDeskRunner.run_pre_open = _test_run_pre_open
-PaperDeskRunner.run_post_close = _test_run_post_close
+@pytest.fixture(autouse=True, scope="module")
+def patch_paper_desk_defaults():
+    orig_pre = PaperDeskRunner.run_pre_open
+    orig_post = PaperDeskRunner.run_post_close
+    PaperDeskRunner.run_pre_open = _test_run_pre_open
+    PaperDeskRunner.run_post_close = _test_run_post_close
+    yield
+    PaperDeskRunner.run_pre_open = orig_pre
+    PaperDeskRunner.run_post_close = orig_post
 
 
 def make_signal(

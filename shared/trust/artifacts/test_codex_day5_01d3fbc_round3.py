@@ -35,7 +35,7 @@ def test_matching_labels_alone_do_not_verify_manifest(tmp_path):
 def test_missing_manifest_session_can_be_retried_with_verified_data(tmp_path):
     r=p.runner(tmp_path)
     r.run_post_close('2024-05-15',{},bhavcopy_manifest=None)
-    r.run_post_close('2024-05-15',{},bhavcopy_manifest={'status':'NORMAL','session_date':'2024-05-15'})
+    r.run_post_close('2024-05-15',p.bars(),bhavcopy_manifest={'status':'NORMAL','session_date':'2024-05-15'})
     assert r.store.get_latest_equity() is not None, 'missing-data run irreversibly seals session'
 
 def test_wrapped_append_event_does_not_escape_atomic_transaction(tmp_path,monkeypatch):
