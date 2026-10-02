@@ -26,10 +26,10 @@ from scripts.verify_desk_health import verify_desk_health
 
 def test_bhavcopy_producer_generates_verified_csv_and_manifest(tmp_path: Path):
     source_p = tmp_path / "raw_bhavcopy.csv"
-    fieldnames = ["TckrSymb", "SctySrs", "OpnPric", "HghPric", "LwPric", "ClsPric", "TtlTradQty"]
+    fieldnames = ["TckrSymb", "SctySrs", "OpnPric", "HghPric", "LwPric", "ClsPric", "TtlTradQty", "TradDt"]
     rows = [
-        {"TckrSymb": "CDSL", "SctySrs": "EQ", "OpnPric": "100.0", "HghPric": "105.0", "LwPric": "99.0", "ClsPric": "104.0", "TtlTradQty": "50000"},
-        {"TckrSymb": "INFY", "SctySrs": "EQ", "OpnPric": "1500.0", "HghPric": "1520.0", "LwPric": "1490.0", "ClsPric": "1510.0", "TtlTradQty": "80000"},
+        {"TckrSymb": "CDSL", "SctySrs": "EQ", "OpnPric": "100.0", "HghPric": "105.0", "LwPric": "99.0", "ClsPric": "104.0", "TtlTradQty": "50000", "TradDt": "2024-05-15"},
+        {"TckrSymb": "INFY", "SctySrs": "EQ", "OpnPric": "1500.0", "HghPric": "1520.0", "LwPric": "1490.0", "ClsPric": "1510.0", "TtlTradQty": "80000", "TradDt": "2024-05-15"},
     ]
     with open(source_p, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -61,13 +61,34 @@ def test_bhavcopy_producer_fails_closed_on_missing_source(tmp_path: Path):
 
 def test_candidate_signals_producer(tmp_path: Path):
     out_dir = tmp_path / "signals"
+    src_file = tmp_path / "upstream_signals.json"
+    sig_data = [
+        {
+            "strategy_id": "HIGH52_MOMENTUM",
+            "symbol": "CDSL",
+            "session_date": "2024-05-14",
+            "entry_session": "2024-05-15",
+            "signal_type": "BUY",
+            "order_type": "BUY_STOP",
+            "reference_price": 100.0,
+            "stop_loss_price": 90.0,
+            "target_price": 120.0,
+            "priority_score": 10.0,
+            "trace": {"atr": 5.0},
+            "created_at": "2024-05-14T16:00:00+05:30",
+        }
+    ]
+    src_file.write_text(json.dumps(sig_data), encoding="utf-8")
     signals = generate_candidate_signals(
         session_date="2024-05-15",
         out_dir=out_dir,
+        source_signals_file=str(src_file),
     )
     sig_file = out_dir / "signals_2024-05-15.json"
     assert sig_file.exists()
     assert isinstance(signals, list)
+    assert len(signals) == 1
+    assert signals[0]["symbol"] == "CDSL"
 
 
 def test_health_checker_fails_on_uninitialized_desk(tmp_path: Path):

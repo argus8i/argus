@@ -86,8 +86,10 @@ def generate_candidate_signals(
                 raise ValueError(f"Signal for {sig.symbol} has invalid timestamp format: {sig.created_at}")
             signals.append(sig.to_dict() if hasattr(sig, "to_dict") else item)
     else:
-        # Default verified empty candidate set when no candidate setups qualify
-        signals = []
+        raise FileNotFoundError(
+            f"FAIL_CLOSED: Absent signal source and no screening inputs available for session {session_date}. "
+            "Unavailable input must not claim a completed screen."
+        )
 
     # Write validated signals
     target_file.write_text(json.dumps(signals, indent=2), encoding="utf-8")

@@ -24,7 +24,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_FLOOR
+import csv
 import hashlib
+import io
 import json
 import logging
 import math
@@ -1595,18 +1597,48 @@ class PaperDeskRunner:
                     p_file = Path(source_file)
                     if not p_file.exists() or not p_file.is_file():
                         has_invalid_provenance = True
-                    elif source_sha and isinstance(source_sha, str) and not has_invalid_provenance:
-                        h = hashlib.sha256()
-                        with open(p_file, "rb") as fh:
-                            while chunk := fh.read(65536):
-                                h.update(chunk)
-                        if h.hexdigest().lower() != source_sha.strip().lower():
+                    else:
+                        if source_sha and isinstance(source_sha, str) and not has_invalid_provenance:
+                            h = hashlib.sha256()
+                            with open(p_file, "rb") as fh:
+                                while chunk := fh.read(65536):
+                                    h.update(chunk)
+                            if h.hexdigest().lower() != source_sha.strip().lower():
+                                has_invalid_provenance = True
+                        try:
+                            sample = p_file.read_bytes()[:4096].decode("utf-8", errors="replace")
+                            sample_reader = csv.DictReader(io.StringIO(sample))
+                            if not sample_reader.fieldnames:
+                                has_invalid_provenance = True
+                            else:
+                                f_upper = {fn.strip().upper() for fn in sample_reader.fieldnames if fn}
+                                has_sym = any(c in f_upper for c in ("SYMBOL", "TCKRSYMB", "TKRSYMB"))
+                                has_srs = any(c in f_upper for c in ("SERIES", "SCTYSRS"))
+                                has_cls = any(c in f_upper for c in ("CLOSE", "CLSPRIC", "CLOSE_PRICE"))
+                                has_vol = any(c in f_upper for c in ("VOLUME", "TOTTRDQTY", "TTLTRADGVOL", "TTLTRADQTY"))
+                                if not (has_sym and has_srs and has_cls and has_vol):
+                                    has_invalid_provenance = True
+                        except Exception:
                             has_invalid_provenance = True
 
                 if not has_invalid_provenance:
-                    has_bars = bool(bar_data_map and len(bar_data_map) > 0)
-                    has_verified_file = bool(source_file and Path(source_file).is_file())
-                    if has_bars or has_verified_file:
+                    has_valid_bars = bool(
+                        bar_data_map
+                        and len(bar_data_map) > 0
+                        and all(
+                            b.open > 0
+                            and b.low > 0
+                            and b.close > 0
+                            and b.high >= b.low
+                            and math.isfinite(b.close)
+                            and math.isfinite(b.open)
+                            and math.isfinite(b.high)
+                            and math.isfinite(b.low)
+                            and math.isfinite(b.volume)
+                            for b in bar_data_map.values()
+                        )
+                    )
+                    if has_valid_bars:
                         is_manifest_valid = True
 
         if is_manifest_valid:

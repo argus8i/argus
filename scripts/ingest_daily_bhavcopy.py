@@ -19,6 +19,7 @@ import gzip
 import hashlib
 import io
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -107,6 +108,7 @@ def extract_and_validate_bhavcopy(source_path: Path, session_date: str) -> Tuple
     if not low_col: required_missing.append("LOW")
     if not close_col: required_missing.append("CLOSE")
     if not vol_col: required_missing.append("VOLUME")
+    if not date_col: required_missing.append("DATE")
 
     if required_missing:
         raise KeyError(f"Bhavcopy source {source_path} missing required column groups: {required_missing}")
@@ -129,11 +131,14 @@ def extract_and_validate_bhavcopy(source_path: Path, session_date: str) -> Tuple
         if not sym or sym in {"SYMBOL", "TCKRSYMB"}:
             continue
 
-        if date_col:
-            raw_d = cleaned.get(date_col, "").strip().upper()
-            if raw_d not in date_targets:
-                continue
-            date_matched = True
+        srs = cleaned.get(srs_col, "").strip().upper()
+        if not srs:
+            raise ValueError(f"Bhavcopy row for {sym} has empty series")
+
+        raw_d = cleaned.get(date_col, "").strip().upper()
+        if raw_d not in date_targets:
+            continue
+        date_matched = True
 
         # Numeric OHLCV validation
         try:
@@ -142,14 +147,18 @@ def extract_and_validate_bhavcopy(source_path: Path, session_date: str) -> Tuple
             l = float(cleaned[low_col])
             c = float(cleaned[close_col])
             v = float(cleaned[vol_col])
+            if not (math.isfinite(o) and math.isfinite(h) and math.isfinite(l) and math.isfinite(c) and math.isfinite(v)):
+                raise ValueError(f"Bhavcopy non-finite OHLCV values for {sym}: O={o}, H={h}, L={l}, C={c}, V={v}")
             if o <= 0 or l <= 0 or c <= 0 or h < l or v < 0:
-                raise ValueError(f"Invalid price/volume values in row: {cleaned}")
+                raise ValueError(f"Bhavcopy non-positive or invalid price values for {sym}: O={o}, H={h}, L={l}, C={c}")
+            if not (l <= o <= h and l <= c <= h):
+                raise ValueError(f"Bhavcopy inconsistent OHLC bounds for {sym}: O={o}, H={h}, L={l}, C={c}")
         except (ValueError, TypeError, KeyError) as e:
-            raise ValueError(f"Bhavcopy non-numeric or invalid OHLCV for {sym}: {e}")
+            raise ValueError(f"Bhavcopy invalid OHLCV for {sym}: {e}")
 
         rows.append(cleaned)
 
-    if date_col and not date_matched:
+    if not date_matched:
         raise ValueError(f"Bhavcopy source {source_path} contains no trading records for requested session {session_date}")
 
     if not rows:

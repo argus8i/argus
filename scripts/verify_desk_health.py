@@ -20,6 +20,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import sqlite3
@@ -136,7 +137,8 @@ def verify_desk_health(
                 )
 
         with store._get_connection() as conn:
-            db_journal_cnt = conn.execute("SELECT COUNT(*) FROM ledger_events").fetchone()[0]
+            db_journal_events = conn.execute("SELECT * FROM ledger_events ORDER BY event_seq ASC").fetchall()
+            db_journal_cnt = len(db_journal_events)
             db_pos_cnt = conn.execute("SELECT COUNT(*) FROM positions WHERE status = 'OPEN'").fetchone()[0]
             db_eq_cnt = conn.execute("SELECT COUNT(*) FROM daily_equity").fetchone()[0]
             db_equity_rows = {row["session_date"]: dict(row) for row in conn.execute("SELECT * FROM daily_equity").fetchall()}
@@ -152,14 +154,30 @@ def verify_desk_health(
             if s_date not in db_equity_rows:
                 raise AssertionError(f"CRITICAL [H7]: Equity CSV contains session {s_date} missing in SQLite.")
             db_r = db_equity_rows[s_date]
-            if abs(float(r_eq["cash_ledger_rs"]) - float(db_r["cash_ledger_rs"])) > 0.01:
+
+            try:
+                csv_cash = float(r_eq["cash_ledger_rs"])
+            except (ValueError, TypeError):
+                raise AssertionError(f"CRITICAL [H7]: Non-numeric cash value for {s_date}: {r_eq.get('cash_ledger_rs')}")
+            if not math.isfinite(csv_cash) or abs(csv_cash - float(db_r["cash_ledger_rs"])) > 0.01:
                 raise AssertionError(
-                    f"CRITICAL [H7]: Cash mismatch for {s_date}: CSV has {r_eq['cash_ledger_rs']} != SQLite has {db_r['cash_ledger_rs']}"
+                    f"CRITICAL [H7]: Cash mismatch/non-finite for {s_date}: CSV has {r_eq['cash_ledger_rs']} != SQLite has {db_r['cash_ledger_rs']}"
                 )
-            if abs(float(r_eq["equity_rs"]) - float(db_r["equity_rs"])) > 0.01:
+
+            try:
+                csv_eq_val = float(r_eq["equity_rs"])
+            except (ValueError, TypeError):
+                raise AssertionError(f"CRITICAL [H7]: Non-numeric equity value for {s_date}: {r_eq.get('equity_rs')}")
+            if not math.isfinite(csv_eq_val) or abs(csv_eq_val - float(db_r["equity_rs"])) > 0.01:
                 raise AssertionError(
-                    f"CRITICAL [H7]: Equity mismatch for {s_date}: CSV has {r_eq['equity_rs']} != SQLite has {db_r['equity_rs']}"
+                    f"CRITICAL [H7]: Equity mismatch/non-finite for {s_date}: CSV has {r_eq['equity_rs']} != SQLite has {db_r['equity_rs']}"
                 )
+
+            if "occupied_slots" in r_eq and int(r_eq["occupied_slots"]) != int(db_r["occupied_slots"]):
+                raise AssertionError(
+                    f"CRITICAL [H7]: Occupied slots mismatch for {s_date}: CSV has {r_eq['occupied_slots']} != SQLite has {db_r['occupied_slots']}"
+                )
+
             if r_eq.get("data_status") != db_r["data_status"]:
                 raise AssertionError(
                     f"CRITICAL [H7]: Data status mismatch for {s_date}: CSV has {r_eq.get('data_status')} != SQLite has {db_r['data_status']}"
@@ -183,6 +201,19 @@ def verify_desk_health(
             csv_journal_rows = list(csv.DictReader(f))
         if len(csv_journal_rows) != db_journal_cnt:
             raise AssertionError(f"CRITICAL [H7]: Row count mismatch on canonical_paper_journal.csv: {len(csv_journal_rows)} != {db_journal_cnt}")
+        for r_csv, r_db in zip(csv_journal_rows, db_journal_events):
+            if int(r_csv["event_seq"]) != int(r_db["event_seq"]):
+                raise AssertionError(
+                    f"CRITICAL [H7]: Event sequence mismatch: CSV has {r_csv['event_seq']} != SQLite has {r_db['event_seq']}"
+                )
+            if r_csv.get("event_id") != r_db["event_id"]:
+                raise AssertionError(
+                    f"CRITICAL [H7]: Event ID mismatch: CSV has {r_csv.get('event_id')} != SQLite has {r_db['event_id']}"
+                )
+            if r_csv.get("event_type") != r_db["event_type"]:
+                raise AssertionError(
+                    f"CRITICAL [H7]: Event type mismatch: CSV has {r_csv.get('event_type')} != SQLite has {r_db['event_type']}"
+                )
 
     return {
         "session_date": eq.session_date,
