@@ -1,6 +1,6 @@
 # Synthetic Component Adversarial Regime Stress-Testing Report
 
-**Date of Execution:** 2026-10-02 11:03:22 IST  
+**Date of Execution:** 2026-10-02 11:26:21 IST  
 **Evaluator:** Antigravity (Quantitative Modeling & Infrastructure Orchestrator)  
 **Governing Authority:** ARGUS 8i Track 2 Liquid Desk (Sprint Day 4 Verification)  
 **Execution Environment:** Python 3.14.7 | Commit Head: `feature/day4-backtest-and-stress-testing`  
@@ -17,7 +17,7 @@ This report documents synthetic component stress scenarios evaluated dynamically
 | **2024 Election Volatility Shock** (04-Jun-2024) | Simultaneous 3-slot crash, gap slippage + full friction | **₹4,675.10 (1.87%)** | $\le 6.00\%$ | **PASS** |
 | **2022 Global Bear Market Grind** (Rate Hikes) | 8 consecutive 1R stopped-out trades + full friction | **₹12,999.48 (5.20%)** | $\le 6.00\%$ | **PASS** |
 | **Rule 5 10-Day Lower Circuit Lockout** | Unbroken -40.1% descent on full slot (Track 1 calibration) | **₹15,323.01 (6.13%)** | $\le 6.00\%$ | **FAIL (Exceeds 6.00% Cap)** |
-| **Cash Buffer Inviolability** | Protected unencumbered liquid cash reserve across all probes | **₹138,484.39 min cash** | $\ge ₹1,36,000.00$ | **PASS** |
+| **Cash Buffer Inviolability** | Protected unencumbered liquid cash reserve across all probes | **₹138,325.73 min cash** | $\ge ₹1,36,000.00$ | **PASS** |
 
 ---
 
@@ -34,7 +34,7 @@ This report documents synthetic component stress scenarios evaluated dynamically
   - `RELIANCE` opened gap-down at ₹2,880.00 (< ₹2,920.00 stop loss). Simulator filled at open minus 25 bps gap slippage (₹2,872.80), realizing >1.5R loss.
   - `SBIN` and `INFY` breached stop-loss prices intraday; simulator filled at stop-loss minus normal slippage.
   - Total realized net loss across all 3 simultaneous stopped-out slots: **₹4,675.10 (1.87% of corpus / 3.12R aggregate)**.
-  - Drawdown stayed well below the 6.0% portfolio cap. Minimum liquid cash observed across holding and liquidation was **₹138,484.39**.
+  - Drawdown stayed well below the 6.0% portfolio cap. Minimum liquid cash observed across holding and liquidation was **₹138,325.73**.
 
 ---
 

@@ -15,10 +15,11 @@ Core Capabilities:
    - Tier 2: Realistic Itemized Friction (STT, NSE, SEBI, GST, Stamp Duty, flat DP charges + 7.5 bps normal / 25 bps gap slippage).
    - Tier 3: Severe Stress Friction (statutory + 20 bps normal / 50 bps gap slippage).
    - Proves monotonic PnL degradation in paired repricing.
-3. Shared Multi-Sleeve Portfolio Risk Governance:
-   - Integrates PortfolioRiskGovernor with Adjusted A1 limits: 3 concurrent slots, Rs 38,000 slot cap, Rs 1,500 trade risk.
+3. Standalone Execution & Slot Allocation Diagnostics:
+   - Evaluates fixed-strategy candidate signals against discrete slot limits (3 concurrent slots), Rs 38,000 slot cap, and Rs 1,500 trade risk.
    - Deterministic priority ranking and tie-breaking across Sleeves A, B, and C.
    - Enforces 15% volume participation cap aggregately per symbol per session.
+   - Note: Standalone fixed-strategy diagnostics; does not invoke live shared PortfolioRiskGovernor reservation lifecycle or dynamic sector-concentration controls.
 4. Conservative Daily Bar Execution:
    - Stop-loss checked before target on same-bar touches (conservative path invariant).
    - Gap-down openings below stop loss filled at open minus adverse gap slippage (>1R realized loss).
@@ -145,6 +146,7 @@ class BacktestTrade:
     raw_entry_price: float = 0.0
     raw_exit_price: Optional[float] = None
     shares: int = 0
+    initial_shares: int = 0
     initial_risk_per_share: float = 0.0
     stop_loss: float = 0.0
     target: float = 0.0
@@ -160,11 +162,19 @@ class BacktestTrade:
     unrealized_pnl: float = 0.0
     mtm_value: float = 0.0
     exit_reason: Optional[str] = None
+    pending_exit_reason: Optional[str] = None
+    total_exit_proceeds: float = 0.0
+    total_sold_shares: int = 0
     as_of_session: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if self.initial_shares == 0 and self.shares > 0:
+            self.initial_shares = self.shares
 
     @property
     def initial_risk_rs(self) -> float:
-        return self.initial_risk_per_share * self.shares
+        tot_shares = self.initial_shares if self.initial_shares > 0 else self.shares
+        return self.initial_risk_per_share * tot_shares
 
     def mark_to_market(self, last_close: float, as_of_session: str) -> None:
         self.mtm_value = last_close * self.shares
@@ -172,6 +182,20 @@ class BacktestTrade:
         self.as_of_session = as_of_session
         if self.status == TradeStatus.OPEN:
             self.status = TradeStatus.UNRESOLVED
+
+    def record_partial_exit(
+        self,
+        sell_shares: int,
+        sell_price: float,
+        sell_costs: float,
+        reason: str,
+    ) -> None:
+        """Records a partial (or single) fill without closing the trade completely."""
+        self.total_exit_proceeds += sell_price * sell_shares
+        self.total_sold_shares += sell_shares
+        self.exit_costs += sell_costs
+        self.shares -= sell_shares
+        self.pending_exit_reason = reason
 
     def close(
         self,
@@ -185,14 +209,19 @@ class BacktestTrade:
         self.exit_price = exit_price
         self.raw_exit_price = raw_exit_price if raw_exit_price is not None else exit_price
         self.exit_reason = exit_reason
-        self.exit_costs = exit_costs
-        self.gross_pnl = (self.exit_price - self.entry_price) * self.shares
+        self.exit_costs += exit_costs
+        tot_shares = self.initial_shares if self.initial_shares > 0 else self.shares
+        if self.total_exit_proceeds <= 0:
+            self.total_exit_proceeds = self.exit_price * tot_shares
+        self.gross_pnl = self.total_exit_proceeds - (self.entry_price * tot_shares)
         self.net_pnl = self.gross_pnl - (self.entry_costs + self.exit_costs)
         if self.initial_risk_rs > 0:
             self.realized_r = self.net_pnl / self.initial_risk_rs
         else:
             self.realized_r = 0.0
+        self.shares = 0
         self.status = TradeStatus.CLOSED
+        self.pending_exit_reason = None
 
 
 @dataclass(frozen=True)
@@ -297,10 +326,12 @@ class BacktestSimulation:
         self, signals: List[SignalEvent]
     ) -> Tuple[List[SignalEvent], List[RejectedSignal]]:
         """
-        Arbitrates candidate signals against the shared PortfolioRiskGovernor.
+        Arbitrates candidate signals against available slot capacity.
         - Deduplicates multiple signals for the same symbol (highest priority wins).
         - Ranks candidates by priority_score descending, then symbol ascending.
-        - Sizes and allocates against shared 3-slot cap and Rs 38,000 slot cap.
+        - Filters candidates against discrete 3-slot cap.
+        Note: Performs standalone deduplication and capacity filtering; does not invoke
+        live PortfolioRiskGovernor reservation lifecycle or dynamic sector limits.
         """
         accepted: List[SignalEvent] = []
         rejected: List[RejectedSignal] = []
@@ -490,10 +521,11 @@ class BacktestSimulation:
             entry_p_slipped = raw_entry * (1.0 + policy.normal_slippage_bps / 10000.0)
             exit_p_slipped = raw_exit * (1.0 - exit_slip_bps / 10000.0)
 
-            gross = (exit_p_slipped - entry_p_slipped) * t.shares
+            trade_shares = t.initial_shares if t.initial_shares > 0 else t.shares
+            gross = (exit_p_slipped - entry_p_slipped) * trade_shares
 
             if policy.include_statutory_costs:
-                buy_cost = calculate_statutory_costs(entry_p_slipped, t.shares, "BUY", True)["total_cost"]
+                buy_cost = calculate_statutory_costs(entry_p_slipped, trade_shares, "BUY", True)["total_cost"]
 
                 # DP grouping check
                 dp_key = (t.symbol, t.exit_session)
@@ -502,7 +534,7 @@ class BacktestSimulation:
                     dp_seen.add(dp_key)
                     apply_dp = True
 
-                sell_cost_dict = calculate_statutory_costs(exit_p_slipped, t.shares, "SELL", True)
+                sell_cost_dict = calculate_statutory_costs(exit_p_slipped, trade_shares, "SELL", True)
                 sell_cost = sell_cost_dict["total_cost"]
                 if not apply_dp:
                     sell_cost = round(sell_cost - sell_cost_dict["dp_charges"], 2)
@@ -601,12 +633,15 @@ def compute_backtest_metrics(
     max_dd_r = (max_dd_rs / risk_per_trade_rs) if risk_per_trade_rs > 0 else 0.0
 
     # 3. Hurdle Verification (Tier 2 baseline criteria)
-    # Win rate >= 45%, Profit factor >= 1.30, Net expectancy > 0.25R, Max Drawdown <= 6.0%
+    # Win rate >= 45%, Profit factor >= 1.30, Net expectancy > 0.25R, Max Drawdown <= 6.0%, Cash buffer >= Rs 136,000
+    min_cash = min((pt.cash for pt in equity_curve), default=corpus_rs) if equity_curve else corpus_rs
+    cash_passed = (min_cash >= CASH_BUFFER_RS)
     hurdle_passed = (
         win_rate >= 0.45
         and profit_factor >= 1.30
         and net_expectancy_r > 0.250
         and max_dd_pct <= 6.0
+        and cash_passed
     )
 
     return BacktestMetrics(

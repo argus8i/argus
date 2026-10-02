@@ -166,55 +166,90 @@ def run_fold_simulation(
             u_info_today = univ_map.get((session, sym))
             is_eligible_today = bool(u_info_today and u_info_today.get("eligible", False))
 
-            if not is_eligible_today:
-                # Rule 6 & 11: Security lost eligibility or entered surveillance; immediate exit attempt at market open
+            exit_event = None
+
+            # PRIORITY 1: Persistent pending mandatory exit from previous session (Findings 1 & 2)
+            if trade.pending_exit_reason is not None:
                 if not is_locked and bar.volume > 0:
                     exit_price = bar.open * (1.0 - policy.normal_slippage_bps / 10000.0)
-                    exit_event = BarExitEvent(reason="DISQUALIFIED", exit_price=exit_price, raw_exit_price=bar.open)
+                    exit_event = BarExitEvent(
+                        reason=trade.pending_exit_reason,
+                        exit_price=exit_price,
+                        raw_exit_price=bar.open,
+                    )
                 else:
-                    exit_event = None
                     trade.locked_sessions += 1
                     trade.holding_sessions += 1
-            else:
-                # Evaluate exit conditions (handles holding_sessions, locked_sessions, gaps, stops, targets)
-                exit_event = sim.evaluate_bar_exit(trade, bar, policy=policy)
 
-                # Check maximum holding period (e.g. 10 sessions for Sleeve B, 5 for Sleeve C)
+            # PRIORITY 2: Security lost eligibility or entered surveillance (Rule 6 & 11)
+            elif not is_eligible_today:
+                trade.pending_exit_reason = "DISQUALIFIED"
+                if not is_locked and bar.volume > 0:
+                    exit_price = bar.open * (1.0 - policy.normal_slippage_bps / 10000.0)
+                    exit_event = BarExitEvent(
+                        reason="DISQUALIFIED",
+                        exit_price=exit_price,
+                        raw_exit_price=bar.open,
+                    )
+                else:
+                    trade.locked_sessions += 1
+                    trade.holding_sessions += 1
+
+            # PRIORITY 3: Standard bar exit evaluation
+            else:
+                exit_event = sim.evaluate_bar_exit(trade, bar, policy=policy)
                 max_holding = 10 if trade.strategy_id == "HIGH52_MOMENTUM" else 5
                 if exit_event is None and trade.holding_sessions >= max_holding and bar.volume > 0 and not is_locked:
                     exit_price = bar.close * (1.0 - policy.normal_slippage_bps / 10000.0)
                     exit_event = BarExitEvent(reason="TIME_STOP", exit_price=exit_price, raw_exit_price=bar.close)
 
+            # PROCESS EXIT (FULL OR PARTIAL)
             if exit_event is not None:
-                # Claude Rule 9: 15% volume participation cap on EXIT with accumulated session volume
                 rem_exit_cap = max(0, session_cap - session_volume_used[sym])
-                if rem_exit_cap < trade.shares:
-                    # Thin liquidity: cannot exit fully today; preserves holding
+                sell_shares = min(trade.shares, rem_exit_cap)
+
+                if sell_shares <= 0:
+                    # Liquidity exhausted or zero volume: retain pending exit for next session
+                    trade.pending_exit_reason = exit_event.reason
                     continue
 
-                # Execute exit fill
                 exit_costs = 0.0
                 if policy.include_statutory_costs:
                     friction = sim.calculate_sell_friction(
                         symbol=sym,
-                        fills=[(exit_event.exit_price, trade.shares)],
+                        fills=[(exit_event.exit_price, sell_shares)],
                         sell_date=session,
                         policy=policy,
                     )
                     exit_costs = friction["total_cost"]
 
                 raw_exit_p = getattr(exit_event, "raw_exit_price", exit_event.exit_price)
-                trade.close(
-                    exit_session=session,
-                    exit_price=exit_event.exit_price,
-                    exit_reason=exit_event.reason,
-                    exit_costs=exit_costs,
-                    raw_exit_price=raw_exit_p,
+                sim.cash += (exit_event.exit_price * sell_shares) - exit_costs
+                session_volume_used[sym] += sell_shares
+
+                trade.record_partial_exit(
+                    sell_shares=sell_shares,
+                    sell_price=exit_event.exit_price,
+                    sell_costs=exit_costs,
+                    reason=exit_event.reason,
                 )
-                sim.cash += (trade.exit_price * trade.shares) - exit_costs
-                session_volume_used[sym] += trade.shares
-                closed_trades.append(trade)
-                closed_today_keys.append(sym)
+
+                if trade.shares <= 0:
+                    # Position completely liquidated
+                    tot_shares = trade.initial_shares or sell_shares
+                    weighted_exit_price = trade.total_exit_proceeds / tot_shares
+                    trade.close(
+                        exit_session=session,
+                        exit_price=weighted_exit_price,
+                        exit_reason=trade.pending_exit_reason or exit_event.reason,
+                        exit_costs=0.0,
+                        raw_exit_price=raw_exit_p,
+                    )
+                    closed_trades.append(trade)
+                    closed_today_keys.append(sym)
+                else:
+                    # Residual inventory remains open with persistent exit intent
+                    trade.pending_exit_reason = exit_event.reason
 
         for sym in closed_today_keys:
             del open_trades[sym]
@@ -314,33 +349,50 @@ def run_fold_simulation(
             # Conservative path check: Did today's bar breach the stop loss on the entry session itself?
             if bar.low <= new_trade.stop_loss:
                 rem_exit_cap = max(0, session_cap - session_volume_used[sym])
-                if rem_exit_cap >= new_trade.shares:
-                    # Ample remaining volume capacity on this session: execute same-session exit
+                sell_shares = min(new_trade.shares, rem_exit_cap)
+
+                if sell_shares <= 0:
+                    # Participation cap reached on this session: retain pending exit for next session
+                    new_trade.pending_exit_reason = "STOP_LOSS"
+                    open_trades[sym] = new_trade
+                    sim.open_positions[sym] = new_trade
+                else:
                     exit_costs = 0.0
                     sl_exit_price = new_trade.stop_loss * (1.0 - policy.normal_slippage_bps / 10000.0)
                     if policy.include_statutory_costs:
                         friction = sim.calculate_sell_friction(
                             symbol=sym,
-                            fills=[(sl_exit_price, new_trade.shares)],
+                            fills=[(sl_exit_price, sell_shares)],
                             sell_date=session,
                             policy=policy,
                         )
                         exit_costs = friction["total_cost"]
 
-                    new_trade.close(
-                        exit_session=session,
-                        exit_price=sl_exit_price,
-                        exit_reason="STOP_LOSS",
-                        exit_costs=exit_costs,
-                        raw_exit_price=new_trade.stop_loss,
+                    sim.cash += (sl_exit_price * sell_shares) - exit_costs
+                    session_volume_used[sym] += sell_shares
+
+                    new_trade.record_partial_exit(
+                        sell_shares=sell_shares,
+                        sell_price=sl_exit_price,
+                        sell_costs=exit_costs,
+                        reason="STOP_LOSS",
                     )
-                    sim.cash += (new_trade.exit_price * new_trade.shares) - exit_costs
-                    session_volume_used[sym] += new_trade.shares
-                    closed_trades.append(new_trade)
-                else:
-                    # Participation cap reached on this session: cannot sell today, preserve holding for next session
-                    open_trades[sym] = new_trade
-                    sim.open_positions[sym] = new_trade
+
+                    if new_trade.shares <= 0:
+                        tot_shares = new_trade.initial_shares or sell_shares
+                        weighted_exit_price = new_trade.total_exit_proceeds / tot_shares
+                        new_trade.close(
+                            exit_session=session,
+                            exit_price=weighted_exit_price,
+                            exit_reason="STOP_LOSS",
+                            exit_costs=0.0,
+                            raw_exit_price=new_trade.stop_loss,
+                        )
+                        closed_trades.append(new_trade)
+                    else:
+                        new_trade.pending_exit_reason = "STOP_LOSS"
+                        open_trades[sym] = new_trade
+                        sim.open_positions[sym] = new_trade
             else:
                 open_trades[sym] = new_trade
                 sim.open_positions[sym] = new_trade
@@ -819,8 +871,8 @@ This report documents synthetic component stress scenarios evaluated dynamically
 ---
 
 ## 5. Verification Commands & Cryptographic Artifacts
-- **Reproduction Command:** `.venv\\Scripts\\python.exe -m pytest tests/test_day1_data_contracts.py tests/test_execution_risk_governor.py tests/test_day3_strategies.py tests/test_day4_backtest.py shared/trust/artifacts/test_codex_day4_9157a86_review.py shared/trust/artifacts/test_codex_day4_ee58cb3_review.py -v`
-- **Unit, Strategy & Reviewer Probes:** 125 passed across all Day 1–Day 4 contracts (Exit code: 0)
+- **Reproduction Command:** `.venv\\Scripts\\python.exe -m pytest tests/test_day1_data_contracts.py tests/test_execution_risk_governor.py tests/test_day3_strategies.py tests/test_day4_backtest.py shared/trust/artifacts/test_codex_day4_9157a86_review.py shared/trust/artifacts/test_codex_day4_ee58cb3_review.py shared/trust/artifacts/test_codex_day4_7c23f6c_review.py -v`
+- **Unit, Strategy & Reviewer Probes:** 129 passed across all Day 1–Day 4 contracts (Exit code: 0)
 - **Suite Log & Cryptographic Seal:** `shared/trust/artifacts/DAY4-BACKTEST-STRESS-TESTS.log`
 """
 
