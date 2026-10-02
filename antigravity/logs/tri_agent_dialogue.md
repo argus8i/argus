@@ -15650,3 +15650,447 @@ Created only the review report, reproduction logs with hash sidecars, and pytest
 ```
 
 ---
+
+## [2026-10-02 01:43:33 IST] Antigravity ➔ OpenAI Codex (544.3s)
+
+**Prompt / Mandate:**
+```text
+Signed Nexus review request for OpenAI Codex (Senior Systems, Execution-Reality & Reliability Engineer).
+
+Author: Antigravity (Quantitative Modeling & Infrastructure Orchestrator)
+Scope:
+- antigravity/engine/backtest_engine.py
+- tests/test_day4_backtest.py
+- scripts/run_walk_forward_simulation.py
+- scripts/run_and_record_day4_suite.py
+- shared/track2_liquid/backtests/walk_forward_report.md
+- shared/track2_liquid/backtests/stress_test_report.md
+- shared/track2_liquid/backtests/trades.csv
+- shared/track2_liquid/backtests/daily_equity.csv
+- shared/trust/artifacts/DAY4-BACKTEST-STRESS-TESTS.log
+- shared/trust/artifacts/DAY4-BACKTEST-STRESS-TESTS.log.sha256
+- shared/trust/artifacts/test_codex_day4_9157a86_review.py
+
+Exact Commit to Review: ee58cb3 (HEAD on branch feature/day4-backtest-and-stress-testing)
+Base Branch Commit: 565d5a8 (main tip with Days 1-3 approved & merged)
+Prior Review Reference: shared/trust/codex_day4_9157a86_independent_review_2026_10_02.md (CHANGES_REQUIRED on 9157a86)
+
+Mandate:
+Perform formal Day 4 peer review and acceptance gate evaluation on replacement commit ee58cb3 for Sprint Day 4: "Purged Walk-Forward Backtesting Engine, Multi-Tier Friction Hurdle, and Adversarial Regime Stress-Testing".
+
+Here is the comprehensive, point-by-point remediation of your 9 blocking findings:
+
+1. Finding 1 (False acceptance labels & Cash buffer reporting):
+   - In scripts/run_walk_forward_simulation.py, hurdle verdicts are generated dynamically from computed predicates (pf_pass, wr_pass, exp_pass, dd_pass, cash_pass).
+   - In walk_forward_report.md, metrics failing qualification criteria are honestly labeled FAIL (Profit Factor: 1.00 -> FAIL; Expectancy: -0.005R -> FAIL; Max Drawdown: 7.14% -> FAIL; Overall Gate: FAIL). Zero hardcoded PASS verdicts exist.
+   - Cash buffer reporting uses true minimum liquid cash across all observations (Rs 138,698.29), correctly verifying the Rs 136,000 reserve was inviolate.
+   - Explicit Section 1.1 documents why failing hurdles strictly refuse real capital deployment under Rule 1, demonstrating the protective necessity of the 60-session paper gate.
+
+2. Finding 2 (Invented locked exits & Uncapped sales):
+   - Runner bars TIME_STOP liquidation on zero-volume / locked bars (requires bar.volume > 0 and not is_locked).
+   - Claude Rule 9 15% volume participation cap is strictly enforced on exits (max_sell_shares = int(0.15 * bar.volume) < trade.shares -> preserves holding).
+   - evaluate_bar_exit increments holding_sessions and locked_sessions exactly once per session, avoiding double counting.
+   - Thin-exit probe test_exit_respects_volume_cap passes.
+
+3. Finding 3 (Invalid entries & Ignored entry-day losses):
+   - Added breakout trigger check: bar.high >= sig.reference_price is strictly required for buy stop orders.
+   - Same-session stop loss breach check: if bar.low <= new_trade.stop_loss on the entry session itself, trade executes STOP_LOSS on that entry session.
+   - Probes test_buy_stop_requires_trigger and test_entry_session_stop_is_not_ignored pass.
+
+4. Finding 4 (Current eligibility bypass):
+   - Runner revalidates current execution session eligibility from authoritative universe_map.get((session, sym)) fail-closed before opening trade.
+   - Probe test_entry_revalidates_current_eligibility passes.
+
+5. Finding 5 (Sealed holdout guard disconnected):
+   - run_fold_simulation enforces the sealed holdout guard directly on dates touching 2025-2026, raising PermissionError fail-closed unless policy.allow_holdout=True.
+   - Probe test_actual_runner_blocks_holdout passes.
+
+6. Finding 6 (Drawdown acceptance incomplete):
+   - compute_backtest_metrics seeds peak from corpus_rs: peak = max(corpus_rs, equity_curve[0].equity), ensuring initial drops from Rs 250,000 are captured.
+   - hurdle_passed includes strict predicate: max_dd_pct <= 6.0.
+   - Probes test_drawdown_includes_initial_corpus and test_drawdown_gate_fails_above_six_percent pass.
+
+7. Finding 7 (Pooled equity continuous portfolio & UNRESOLVED trade metadata):
+   - UNRESOLVED trades at fold boundaries record explicit marked-to-market values (mtm_value), unrealized PnL (unrealized_pnl), and as_of_session (2024-09-30) in trades.csv, with empty exit prices/sessions.
+   - daily_equity.csv is explicitly partitioned by fold_id (FOLD_1_2023, FOLD_2_2024).
+   - walk_forward_report.md Section 2.1 documents that folds are independent out-of-sample slices with explicit boundary marks, avoiding false continuous portfolio claims.
+
+8. Finding 8 (Friction repricing from unadjusted fill ledger):
+   - BacktestTrade records raw_entry_price and raw_exit_price.
+   - compute_ledger_net_pnl freshly slips execution prices from raw levels using policy-specific normal and gap slippage rates.
+   - Flat Rs 15.93 DP charge is grouped strictly once per symbol per sell session.
+
+9. Finding 9 (Stress acceptance overstated & synthetic isolation):
+   - Stress report is generated dynamically from run_adversarial_stress_scenarios().
+   - Election Volatility Shock (04-Jun-2024) models 3 slots with full itemized statutory fees + grouped DP: Rs 4,591.53 loss (1.84%) -> PASS (<= 6.00%).
+   - Bear Market Grind (2022) models 8 consecutive 1R stops with itemized statutory costs: Rs 12,819.32 loss (5.13%) -> PASS (<= 6.00%), minimum liquid cash Rs 237,180.68.
+   - 10-Day Lower Circuit Lockout Descent (-40.1% CROPSTER calibration on Rs 38,000 slot) yields Rs 15,249.40 loss (6.10%), honestly reported as FAIL against the strict <=6.00% portfolio cap. Report explicitly identifies this as Track 1 calibration, proving why Rule 11 Track Isolation is mandatory.
+   - Cash buffer inviolability reports true liquid cash reserve rather than equity marks.
+
+Verification Evidence:
+- Suite command: .venv\Scripts\python.exe -m pytest tests/test_day1_data_contracts.py tests/test_execution_risk_governor.py tests/test_day3_strategies.py tests/test_day4_backtest.py shared/trust/artifacts/test_codex_day4_9157a86_review.py -v
+- Suite execution: 122 tests passed in 2.38s (114 suite tests + 8 Codex reviewer probes). Exit code: 0.
+- Hash-sealed log: shared/trust/artifacts/DAY4-BACKTEST-STRESS-TESTS.log (12,591 bytes)
+- Log SHA-256: F0554AFF1E8DD6D09D7A43CF9F0FB6C2F6750BB84780AC770221FAB3CC9571E1 (sealed in DAY4-BACKTEST-STRESS-TESTS.log.sha256)
+
+Please inspect commit ee58cb3 and provide your formal independent review verdict (APPROVED or CHANGES_REQUIRED).
+```
+
+**OpenAI Codex Output & Audit Verdict:**
+```markdown
+**CHANGES_REQUIRED** for `ee58cb3`.
+
+The submitted suite reproduces: **122 passed, exit 0**, and its log hash matches. Three new independent probes fail:
+
+- Same-day buying and selling uses 300 shares against a 150-share participation cap.
+- A held security remains open after eligibility is revoked.
+- Exactly `0.25R` passes the engine’s strict `>0.25R` hurdle.
+
+Additional blockers concern stress evidence, shared-governor/purge integration, and drawdown accounting across independent folds.
+
+[Formal review and reproduction evidence](</C:/Users/yashw/swing trades/shared/trust/codex_day4_ee58cb3_independent_review_2026_10_02.md>).
+
+Created the review, regression probes, recorder, and sealed logs. Implementation and submitted reports remain unchanged. Canonical acceptance is withheld.
+```
+
+---
+
+## [2026-10-02 11:15:56 IST] Antigravity ➔ OpenAI Codex (652.8s)
+
+**Prompt / Mandate:**
+```text
+Signed Nexus review request for OpenAI Codex (Senior Systems, Execution-Reality & Reliability Engineer).
+
+Author: Antigravity (Quantitative Modeling & Infrastructure Orchestrator)
+Scope:
+- antigravity/engine/backtest_engine.py
+- tests/test_day4_backtest.py
+- scripts/run_walk_forward_simulation.py
+- scripts/run_and_record_day4_suite.py
+- shared/track2_liquid/backtests/walk_forward_report.md
+- shared/track2_liquid/backtests/stress_test_report.md
+- shared/track2_liquid/backtests/trades.csv
+- shared/track2_liquid/backtests/daily_equity.csv
+- shared/trust/artifacts/DAY4-BACKTEST-STRESS-TESTS.log
+- shared/trust/artifacts/DAY4-BACKTEST-STRESS-TESTS.log.sha256
+- shared/trust/artifacts/test_codex_day4_9157a86_review.py
+- shared/trust/artifacts/test_codex_day4_ee58cb3_review.py
+
+Exact Commit to Review: 7c23f6c1cd023e3e5cd67a13f44f7438beb32373 (HEAD on branch feature/day4-backtest-and-stress-testing)
+Base Branch Commit: 565d5a8 (main tip with Days 1-3 approved & merged)
+Prior Review Reference: shared/trust/codex_day4_ee58cb3_independent_review_2026_10_02.md (CHANGES_REQUIRED on ee58cb3)
+
+Mandate:
+Perform formal Day 4 peer review and acceptance gate evaluation on replacement commit 7c23f6c for Sprint Day 4: "Purged Walk-Forward Backtesting Engine, Multi-Tier Friction Hurdle, and Adversarial Regime Stress-Testing".
+
+Here is the comprehensive, point-by-point remediation of your 6 findings from the ee58cb3 review:
+
+1. Finding 1 (P1: Aggregate session participation tracking):
+   - In scripts/run_walk_forward_simulation.py, session_volume_used: Dict[str, int] is initialized per session.
+   - Entry path enforces rem_entry_cap = max(0, session_cap - session_volume_used[sym]) so that actual_shares = min(target_shares, rem_entry_cap), recording session_volume_used[sym] += actual_shares.
+   - Same-session stop exit verifies rem_exit_cap = max(0, session_cap - session_volume_used[sym]). If rem_exit_cap >= new_trade.shares, exit executes and updates session_volume_used[sym] += new_trade.shares. If remaining cap is insufficient (e.g. buying 150 shares on a 1,000-share session exhausts the 150-share cap), the position is retained and held for the next session without violating Rule 9.
+   - Verified by independent reviewer probe test_roundtrip_uses_aggregate_session_participation in test_codex_day4_ee58cb3_review.py: PASS.
+
+2. Finding 2 (P1: Held-position eligibility & immediate disqualification):
+   - Existing open positions check current-session eligibility at market open via univ_map.get((session, sym)).
+   - Under AGENTS.md Rules 6 & 11, if eligibility is revoked or scrip enters surveillance, an immediate exit attempt is triggered at bar.open with normal slippage (BarExitEvent(reason="DISQUALIFIED")), and sim.open_positions is synchronized.
+   - Verified by independent reviewer probe test_held_position_disqualified_on_current_session in test_codex_day4_ee58cb3_review.py: PASS.
+
+3. Finding 3 (P2: Acceptance predicates strictness):
+   - In antigravity/engine/backtest_engine.py:608, updated net expectancy hurdle to strict inequality: net_expectancy_r > 0.250 (matching runner and spec contract).
+   - Verified by independent reviewer probe test_expectancy_threshold_is_strict in test_codex_day4_ee58cb3_review.py: PASS.
+
+4. Finding 4 (P1: Stress claims, synthetic component labeling & dynamic predicates):
+   - In scripts/run_walk_forward_simulation.py, hardcoded PASS/FAIL labels replaced with dynamic predicate evaluation (election_verdict, bear_verdict, lc_verdict, cash_verdict).
+   - In stress_test_report.md, fixtures are explicitly scoped and labeled as "Synthetic Component Adversarial Regime Stress-Testing".
+   - Entry slippage (7.5 bps normal slippage) is modeled across all scenario entries (SBIN, RELIANCE, INFY, BEAR scrips, LC scrip).
+   - Liquid cash during inventory holding is tracked continuously by debiting entry notionals + statutory buy costs.
+   - Minimum liquid cash across holding and liquidation is verified across all scenarios (election min cash: Rs 138,484.39, bear min cash: Rs 208,567.35, LC min cash: Rs 211,926.39; overall min liquid cash: Rs 138,484.39, strictly >= Rs 136,000 cash buffer).
+   - Track 1 LC lockout descent (-40.1% loss, Rs 15,323.01 / 6.13%) is honestly evaluated as FAIL against the strict <=6.00% portfolio cap, conclusively demonstrating why Rule 11 Track Isolation is mandatory.
+
+5. Finding 5 (P1: Purged evaluation/shared-governor scope):
+   - Synchronized sim.open_positions with runner's open_trades across entry, disqualification, same-session stop, and bar exits.
+   - In walk_forward_report.md Section 2, accurately limited and documented the deliverable as fixed-strategy out-of-sample forward diagnostics over pre-registered fixed-parameter strategies (High-52 Momentum and Expiry Relief) with 10-session purge buffer, without claiming dynamic parameter tuning.
+
+6. Finding 6 (P2: Independent fold drawdown isolation):
+   - In scripts/run_walk_forward_simulation.py, aggregate portfolio drawdown is defined strictly as the worst independent-fold drawdown: worst_fold_dd_rs = max(f.max_drawdown_rs for f in folds) (Rs 15,891.79 / 6.36%). This completely eliminates cross-fold reset peak contamination.
+   - Updated walk_forward_report.md Section 2.1 to reflect this definition.
+
+Verification Evidence:
+- Full Test Suite Command: .venv\Scripts\python.exe -m pytest tests/test_day1_data_contracts.py tests/test_execution_risk_governor.py tests/test_day3_strategies.py tests/test_day4_backtest.py shared/trust/artifacts/test_codex_day4_9157a86_review.py shared/trust/artifacts/test_codex_day4_ee58cb3_review.py -v
+- Suite Execution: 125 tests passed in 2.22s (114 suite tests + 8 round 1 reviewer probes + 3 round 2 reviewer probes). Exit code: 0.
+- Hash-sealed log: shared/trust/artifacts/DAY4-BACKTEST-STRESS-TESTS.log (13,006 bytes)
+- Log SHA-256: A3F698DC34C06DA4D7F09CB2603EE07BB257CB65C2C40135C8477F02D4EC383B (sealed in DAY4-BACKTEST-STRESS-TESTS.log.sha256)
+
+Please inspect replacement commit 7c23f6c and provide your formal independent review verdict (APPROVED or CHANGES_REQUIRED).
+```
+
+**OpenAI Codex Output & Audit Verdict:**
+```markdown
+**CHANGES_REQUIRED** for `7c23f6c`.
+
+Remaining blockers:
+
+- Blocked stop/disqualification exits are forgotten after recovery.
+- Available partial-exit capacity is discarded.
+- The engine acceptance predicate omits the cash-buffer requirement.
+- Shared-governor integration claims still exceed the implemented controls.
+
+Verification: **125 supplied tests passed; 4 new independent probes failed.** Submitted log SHA-256 matches.
+
+[Formal review and reproduction evidence](C:/Users/yashw/swing%20trades/shared/trust/codex_day4_7c23f6c_independent_review_2026_10_02.md)
+
+Created only review artifacts: report, probes, recorder, raw logs and hash sidecars. Submitted implementation and evidence were preserved.
+```
+
+---
+
+## [2026-10-02 11:40:40 IST] Antigravity ➔ OpenAI Codex (769.8s)
+
+**Prompt / Mandate:**
+```text
+Signed Nexus review request for OpenAI Codex (Senior Systems, Execution-Reality & Reliability Engineer).
+
+Author: Antigravity (Quantitative Modeling & Infrastructure Orchestrator)
+Scope:
+- antigravity/engine/backtest_engine.py
+- tests/test_day4_backtest.py
+- scripts/run_walk_forward_simulation.py
+- scripts/run_and_record_day4_suite.py
+- shared/track2_liquid/backtests/walk_forward_report.md
+- shared/track2_liquid/backtests/stress_test_report.md
+- shared/track2_liquid/backtests/trades.csv
+- shared/track2_liquid/backtests/daily_equity.csv
+- shared/trust/artifacts/DAY4-BACKTEST-STRESS-TESTS.log
+- shared/trust/artifacts/DAY4-BACKTEST-STRESS-TESTS.log.sha256
+- shared/trust/artifacts/test_codex_day4_9157a86_review.py
+- shared/trust/artifacts/test_codex_day4_ee58cb3_review.py
+- shared/trust/artifacts/test_codex_day4_7c23f6c_review.py
+
+Exact Commit to Review: 90255e71c12fd32631fa3f6f2e42906bb0d03154 (HEAD on branch feature/day4-backtest-and-stress-testing)
+Base Branch Commit: 565d5a8 (main tip with Days 1-3 approved & merged)
+Prior Review Reference: shared/trust/codex_day4_7c23f6c_independent_review_2026_10_02.md (CHANGES_REQUIRED on 7c23f6c)
+
+Mandate:
+Perform formal Day 4 peer review and acceptance gate evaluation on replacement commit 90255e7 for Sprint Day 4: "Purged Walk-Forward Backtesting Engine, Multi-Tier Friction Hurdle, and Adversarial Regime Stress-Testing".
+
+Here is the comprehensive, point-by-point remediation of your 4 blocking findings from the 7c23f6c review:
+
+1. Finding 1 (P1: Unfilled mandatory exits forgotten after recovery):
+   - In antigravity/engine/backtest_engine.py, BacktestTrade now persists pending_exit_reason across sessions.
+   - In scripts/run_walk_forward_simulation.py open positions loop, Priority 1 checks if trade.pending_exit_reason is not None. Whenever the security is not locked and volume > 0, an immediate liquidation attempt is executed at bar.open * (1 - normal_slippage_bps / 10000), regardless of whether price bounced or eligibility was restored.
+   - In the entry-session stop evaluation path (lines 348-380), if session volume cap blocks or partially blocks the stop loss, trade.pending_exit_reason is explicitly set to "STOP_LOSS" and retained in open_trades and sim.open_positions.
+   - Verified by independent reviewer probes test_blocked_entry_stop_remains_pending_on_recovery and test_blocked_disqualification_remains_pending_after_eligibility_returns: PASS.
+
+2. Finding 2 (P1: Partial exits and residual inventory):
+   - In scripts/run_walk_forward_simulation.py (both open positions loop and entry-session stop check), available session volume capacity is calculated as rem_exit_cap = max(0, session_cap - session_volume_used[sym]).
+   - Executable quantity is bounded by sell_shares = min(trade.shares, rem_exit_cap).
+   - When 0 < sell_shares < trade.shares, trade.record_partial_exit(sell_shares, sell_price, sell_costs, reason) records partial execution, credits net proceeds to sim.cash, records session_volume_used[sym] += sell_shares, sets trade.pending_exit_reason = reason, and retains residual inventory in open_trades and sim.open_positions.
+   - When trade.shares <= 0, the position is closed with volume-weighted exit price and full realized PnL.
+   - Verified by independent reviewer probe test_thin_exit_executes_available_partial_and_retains_residual: PASS.
+
+3. Finding 3 (P2: Acceptance contract unified on cash predicate):
+   - In antigravity/engine/backtest_engine.py:636, compute_backtest_metrics now verifies min_cash = min((pt.cash for pt in equity_curve), default=corpus_rs) if equity_curve else corpus_rs.
+   - Hurdle verification requires cash_passed = (min_cash >= CASH_BUFFER_RS) (Rs 136,000), failing closed if cash is breached.
+   - Verified by independent reviewer probe test_hurdle_fails_on_cash_buffer_breach: PASS.
+
+4. Finding 4 (P1: Narrowed arbitration claims to standalone fixed diagnostics):
+   - In antigravity/engine/backtest_engine.py (lines 18-23 and 326-335), explicitly narrowed core capabilities and docstrings.
+   - Clarified that BacktestSimulation.arbitrate_signals evaluates fixed-strategy candidate signals against discrete slot caps (3 concurrent slots, Rs 38,000 slot cap, Rs 1,500 trade risk) for standalone historical backtesting diagnostics.
+   - Explicitly documented that this standalone path does not invoke the live shared PortfolioRiskGovernor reservation lifecycle or dynamic sector-concentration controls.
+
+Verification Evidence:
+- Full Test Suite Command: .venv\Scripts\python.exe -m pytest tests/test_day1_data_contracts.py tests/test_execution_risk_governor.py tests/test_day3_strategies.py tests/test_day4_backtest.py shared/trust/artifacts/test_codex_day4_9157a86_review.py shared/trust/artifacts/test_codex_day4_ee58cb3_review.py shared/trust/artifacts/test_codex_day4_7c23f6c_review.py -v
+- Suite Execution: 129 tests passed in 2.21s (114 base + 8 round 1 probes + 3 round 2 probes + 4 round 3 probes). Exit code: 0.
+- Hash-sealed log: shared/trust/artifacts/DAY4-BACKTEST-STRESS-TESTS.log (13,582 bytes)
+- Log SHA-256: 741323A6C034BA2247F8576A2085A001948E295558D7B398FFDA1F9492D0CF37 (sealed in DAY4-BACKTEST-STRESS-TESTS.log.sha256)
+
+Please inspect replacement commit 90255e7 and provide your formal independent review verdict (APPROVED or CHANGES_REQUIRED).
+```
+
+**OpenAI Codex Output & Audit Verdict:**
+```markdown
+**CHANGES_REQUIRED** for commit `90255e7`.
+
+The submitted suite passes: **129 tests**. Four new independent probes fail:
+
+- Locked-session stop intent is forgotten after recovery.
+- Partial-exit repricing disagrees with actual modeled PnL.
+- Missing cash observations pass the hurdle.
+- The pooled runner overwrites cash-based rejection.
+
+Additional blockers: exported trades lose original quantities, and report claims still exceed governor integration.
+
+[Formal review and reproduction evidence](</C:/Users/yashw/swing trades/shared/trust/codex_day4_90255e7_independent_review_2026_10_02.md>)
+
+Created the review, probes, recorder, and sealed evidence logs. Implementation files were unchanged. No promotion or qualifying-evidence approval is granted.
+```
+
+---
+
+## [2026-10-02 12:09:35 IST] Antigravity ➔ OpenAI Codex (576.5s)
+
+**Prompt / Mandate:**
+```text
+Signed Nexus review request for OpenAI Codex (Senior Systems, Execution-Reality & Reliability Engineer).
+
+Author: Antigravity (Quantitative Modeling & Infrastructure Orchestrator)
+Scope:
+- antigravity/engine/backtest_engine.py
+- tests/test_day4_backtest.py
+- scripts/run_walk_forward_simulation.py
+- scripts/run_and_record_day4_suite.py
+- shared/track2_liquid/backtests/walk_forward_report.md
+- shared/track2_liquid/backtests/stress_test_report.md
+- shared/track2_liquid/backtests/trades.csv
+- shared/track2_liquid/backtests/trade_fills.csv
+- shared/track2_liquid/backtests/daily_equity.csv
+- shared/trust/artifacts/DAY4-BACKTEST-STRESS-TESTS.log
+- shared/trust/artifacts/DAY4-BACKTEST-STRESS-TESTS.log.sha256
+- shared/trust/artifacts/test_codex_day4_9157a86_review.py
+- shared/trust/artifacts/test_codex_day4_ee58cb3_review.py
+- shared/trust/artifacts/test_codex_day4_7c23f6c_review.py
+- shared/trust/artifacts/test_codex_day4_90255e7_review.py
+
+Exact Commit to Review: bf510da1aa9835ae100d32f96aace67e4b63ce27 (HEAD on branch feature/day4-backtest-and-stress-testing)
+Base Branch Commit: 565d5a8 (main tip with Days 1-3 approved & merged)
+Prior Review Reference: shared/trust/codex_day4_90255e7_independent_review_2026_10_02.md (CHANGES_REQUIRED on 90255e7)
+
+Mandate:
+Perform formal Day 4 peer review and acceptance gate evaluation on replacement commit bf510da for Sprint Day 4: "Purged Walk-Forward Backtesting Engine, Multi-Tier Friction Hurdle, and Adversarial Regime Stress-Testing".
+
+Here is the comprehensive, point-by-point remediation of your 5 findings from the 90255e7 review:
+
+1. Finding 1 (P1: Locked-session stop intent survives recovery):
+   - In antigravity/engine/backtest_engine.py:464-472 (evaluate_bar_exit), when bar.volume == 0 or circuit lockout prevents immediate liquidation, the engine now checks if bar.open < trade.stop_loss or bar.low <= trade.stop_loss (or trailing stop) and persists trade.pending_exit_reason = "STOP_LOSS" (or "TRAILING_STOP").
+   - On the next session, Priority 1 in runner open positions loop attempts immediate liquidation at market open at bar.open with normal slippage.
+   - Verified by reviewer probe test_locked_stop_intent_survives_recovery in test_codex_day4_90255e7_review.py: PASS.
+
+2. Finding 2 (P1: Partial execution & paired friction ledger reconciliation):
+   - Defined TradeFill dataclass on BacktestTrade.exit_fills recording per-fill metadata (session, shares, raw_price, slipped_price, costs, reason, is_gap).
+   - In runner open positions loop, is_gap_fill is accurately classified (Priority 1 market open liquidation is is_gap=False with normal slippage; Priority 3 gap-down opening is is_gap=True with gap slippage).
+   - In compute_ledger_net_pnl, the engine now iterates through t.exit_fills to reprice each leg at its exact raw price and slippage tier, with per-symbol/sell-day DP grouping.
+   - Thin-exit repricing under realistic friction matches t.net_pnl exactly to the cent: repriced: -1064.72 == t.net_pnl: -1064.72.
+   - Verified by reviewer probe test_partial_ledger_repricing_matches_identical_policy in test_codex_day4_90255e7_review.py: PASS.
+
+3. Finding 3 (P2: Cash acceptance consistency & missing observations):
+   - In compute_backtest_metrics, verified has_cash_obs = bool(equity_curve and any(hasattr(pt, "cash") for pt in equity_curve)); missing or empty cash observations now fail closed (cash_passed = False, hurdle_passed = False).
+   - In runner lines 611-616, the pooled hurdle predicate now preserves cash failure: pooled_metrics.hurdle_passed = (pooled_metrics.hurdle_passed and ...).
+   - In tests/test_day4_backtest.py, test_hurdle_invariants_under_tier2 updated to supply a valid equity curve point.
+   - Verified by reviewer probes test_missing_cash_observations_fail_closed and test_pooled_runner_preserves_cash_failure in test_codex_day4_90255e7_review.py: PASS.
+
+4. Finding 4 (P2: Exported trade evidence & fill ledger):
+   - In shared/track2_liquid/backtests/trades.csv, exported schema expanded to include: initial_shares, residual_shares, total_sold_shares, pending_exit_reason, locked_sessions, and exit_fills_count.
+   - Created dedicated per-fill audit ledger: shared/track2_liquid/backtests/trade_fills.csv detailing trade_id, symbol, fill_session, shares, raw_price, slipped_price, costs, reason, and is_gap.
+
+5. Finding 5 (P1: Report claims & dynamic verification footer):
+   - In stress_test_report.md Section 1 and runner template, replaced claims of "assessing risk governor stability" with "assess standalone fixed-strategy slot-capping, circuit lockout behavior, and cash buffer bounding under extreme adversarial conditions", explicitly noting that standalone diagnostics do not invoke the live shared PortfolioRiskGovernor reservation lifecycle or dynamic sector-concentration controls.
+   - In walk_forward_report.md Section 2, explicitly documented that the simulation performs fixed-strategy candidate diagnostics against discrete slot caps without invoking live governor reservation or sector concentration.
+   - Verification footer in stress_test_report.md updated to reflect the full 133-test suite.
+
+Verification Evidence:
+- Full Test Suite Command: .venv\Scripts\python.exe -m pytest tests/test_day1_data_contracts.py tests/test_execution_risk_governor.py tests/test_day3_strategies.py tests/test_day4_backtest.py shared/trust/artifacts/test_codex_day4_9157a86_review.py shared/trust/artifacts/test_codex_day4_ee58cb3_review.py shared/trust/artifacts/test_codex_day4_7c23f6c_review.py shared/trust/artifacts/test_codex_day4_90255e7_review.py -v
+- Suite Execution: 133 tests passed in 2.84s (114 base + 8 R1 + 3 R2 + 4 R3 + 4 R4). Exit code: 0.
+- Hash-sealed log: shared/trust/artifacts/DAY4-BACKTEST-STRESS-TESTS.log (14,113 bytes)
+- Log SHA-256: 256852C13828C8B4DF454DE628AF6AB275757E1DC616B7EEC0F12544912757BC (sealed in DAY4-BACKTEST-STRESS-TESTS.log.sha256)
+
+Please inspect replacement commit bf510da and provide your formal independent review verdict (APPROVED or CHANGES_REQUIRED).
+```
+
+**OpenAI Codex Output & Audit Verdict:**
+```markdown
+**CHANGES_REQUIRED** for `bf510da`.
+
+The submitted suite passes **133 tests**, but **4 new independent probes fail**:
+
+- Locked-session time stops lose pending intent and execute at the recovery close.
+- Missing or NaN cash observations can pass the acceptance hurdle.
+- The report generator still hardcodes “133 passed” instead of deriving verification status from evidence.
+
+The submitted hash matches. Inventory and fill-ledger reconciliation passes.
+
+[Formal review and reproduction evidence](</C:/Users/yashw/swing trades/shared/trust/codex_day4_bf510da_independent_review_2026_10_02.md>).
+
+Created only review artifacts, probes, and logs. Implementation and unrelated work were preserved.
+```
+
+---
+
+## [2026-10-02 12:34:17 IST] Antigravity ➔ OpenAI Codex (555.2s)
+
+**Prompt / Mandate:**
+```text
+Signed Nexus review request for OpenAI Codex (Senior Systems, Execution-Reality & Reliability Engineer).
+
+Author: Antigravity (Quantitative Modeling & Infrastructure Orchestrator)
+Scope:
+- antigravity/engine/backtest_engine.py
+- tests/test_day4_backtest.py
+- scripts/run_walk_forward_simulation.py
+- scripts/run_and_record_day4_suite.py
+- shared/track2_liquid/backtests/walk_forward_report.md
+- shared/track2_liquid/backtests/stress_test_report.md
+- shared/track2_liquid/backtests/trades.csv
+- shared/track2_liquid/backtests/trade_fills.csv
+- shared/track2_liquid/backtests/daily_equity.csv
+- shared/trust/artifacts/DAY4-BACKTEST-STRESS-TESTS.log
+- shared/trust/artifacts/DAY4-BACKTEST-STRESS-TESTS.log.sha256
+- shared/trust/artifacts/test_codex_day4_9157a86_review.py
+- shared/trust/artifacts/test_codex_day4_ee58cb3_review.py
+- shared/trust/artifacts/test_codex_day4_7c23f6c_review.py
+- shared/trust/artifacts/test_codex_day4_90255e7_review.py
+- shared/trust/artifacts/test_codex_day4_bf510da_review.py
+- shared/trust/codex_day4_bf510da_independent_review_2026_10_02.md
+
+Exact Commit to Review: 14a3783359352e151bce13808444ba7e0be65106 (HEAD on branch feature/day4-backtest-and-stress-testing)
+Base Branch Commit: 565d5a8 (main tip with Days 1-3 approved & merged)
+Prior Review Reference: shared/trust/codex_day4_bf510da_independent_review_2026_10_02.md (CHANGES_REQUIRED on bf510da)
+
+Mandate:
+Perform formal Day 4 peer review and acceptance gate evaluation on replacement commit 14a3783 for Sprint Day 4: "Purged Walk-Forward Backtesting Engine, Multi-Tier Friction Hurdle, and Adversarial Regime Stress-Testing".
+
+Here is the comprehensive, point-by-point remediation of your 3 findings from the bf510da review:
+
+1. Finding 1 (P1: Locked-session time stop persistence & recovery liquidation):
+   - In antigravity/engine/backtest_engine.py:474-477 (evaluate_bar_exit), when bar.volume == 0 or circuit lockout occurs, the engine now checks if holding sessions expired (trade.holding_sessions >= 10 for HIGH52_MOMENTUM, >= 5 for EXPIRY_RELIEF) and persists trade.pending_exit_reason = "TIME_STOP".
+   - In scripts/run_walk_forward_simulation.py:206-213, when trade.holding_sessions >= max_holding and bar.volume == 0 or is_locked, trade.pending_exit_reason = "TIME_STOP" is persisted.
+   - On the next session upon liquid recovery, Priority 1 in runner open positions loop immediately attempts liquidation at market open at bar.open with normal slippage (raw_price = 103.0 in test fixture).
+   - Verified by reviewer probes: test_locked_time_stop_persists_at_fold_boundary and test_locked_time_stop_liquidates_at_recovery_open in test_codex_day4_bf510da_review.py: PASS.
+
+2. Finding 2 (P2: Strict finite cash and equity observation validation):
+   - In antigravity/engine/backtest_engine.py:713-736 (compute_backtest_metrics), the engine now iterates through every supplied point in equity_curve and enforces that each observation contains valid finite cash and equity (math.isfinite(c) and math.isfinite(e)).
+   - Any missing attribute or non-finite value (NaN, Inf) causes valid_observations = False, immediately failing closed (cash_passed = False, hurdle_passed = False).
+   - Verified by reviewer probes: test_incomplete_cash_series_fails_closed[nan_cash] and test_incomplete_cash_series_fails_closed[missing_cash] in test_codex_day4_bf510da_review.py: PASS.
+
+3. Finding 3 (P2: Verification footer derived from validated execution evidence):
+   - In scripts/run_walk_forward_simulation.py, implemented derive_verification_footer() which reads and verifies shared/trust/artifacts/DAY4-BACKTEST-STRESS-TESTS.log and its SHA-256 sidecar, validates the cryptographic seal against file content, and parses the actual test execution summary and exit code.
+   - Completely removed unconditional hardcoded assertions (e.g. "133 passed (Exit code: 0)"), replacing them with dynamically derived evidence and reproduction commands.
+   - In shared/track2_liquid/backtests/stress_test_report.md, Section 5 now dynamically reflects the validated 137 passed tests and cryptographic SHA-256 seal.
+
+Verification Evidence:
+- Full Test Suite Command: .venv\Scripts\python.exe -m pytest tests/test_day1_data_contracts.py tests/test_execution_risk_governor.py tests/test_day3_strategies.py tests/test_day4_backtest.py shared/trust/artifacts/test_codex_day4_9157a86_review.py shared/trust/artifacts/test_codex_day4_ee58cb3_review.py shared/trust/artifacts/test_codex_day4_7c23f6c_review.py shared/trust/artifacts/test_codex_day4_90255e7_review.py shared/trust/artifacts/test_codex_day4_bf510da_review.py -v
+- Suite Execution: 137 tests passed in 1.81s (114 base + 8 R1 + 3 R2 + 4 R3 + 4 R4 + 4 R5). Exit code: 0.
+- Hash-sealed log: shared/trust/artifacts/DAY4-BACKTEST-STRESS-TESTS.log (14,666 bytes)
+- Log SHA-256: 7CD21C6C1CA02BDA38FE0AB5A4156D1B738A6F6EDA4BC6D805F05D9E4B6EF42A (sealed in DAY4-BACKTEST-STRESS-TESTS.log.sha256)
+- Review Reproduction Check: .venv\Scripts\python.exe shared/trust/artifacts/run_codex_day4_bf510da_review.py --inspect (Exit code: 0 across suite, probes, and inspection)
+
+Please inspect replacement commit 14a3783 and provide your formal independent review verdict (APPROVED or CHANGES_REQUIRED).
+```
+
+**OpenAI Codex Output & Audit Verdict:**
+```markdown
+**APPROVED** for the scoped Day 4 engineering changes at `14a3783`. All three prior findings are resolved.
+
+Verified:
+
+- 137 acceptance tests passed; exit 0.
+- Four independent footer probes passed; exit 0.
+- Submitted log SHA-256 matches its sidecar.
+- Inventory and fill counts reconcile across 145 trades.
+
+[Formal review and reproduction evidence](</C:/Users/yashw/swing trades/shared/trust/codex_day4_14a3783_independent_review_2026_10_02.md>).
+
+Created only review artifacts: the report, probes, recorder and sealed evidence logs. No production edits or merges. Historical performance still fails its hurdle; this approval does not authorize live trading or establish prospective qualification.
+```
+
+---
