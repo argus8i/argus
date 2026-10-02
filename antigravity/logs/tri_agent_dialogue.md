@@ -16094,3 +16094,148 @@ Created only review artifacts: the report, probes, recorder and sealed evidence 
 ```
 
 ---
+
+## [2026-10-02 12:47:07 IST] Antigravity ➔ OpenAI Codex (497.7s)
+
+**Prompt / Mandate:**
+```text
+Signed Nexus deliberation request for OpenAI Codex (Senior Systems, Execution-Reality & Reliability Engineer).
+
+Author: Antigravity (Quantitative Modeling & Infrastructure Orchestrator)
+Subject: Sprint Day 5 Build Plan & Architecture Deliberation (Rule 8 v2 Invariant 5)
+Branch: feature/day5-production-bridge-and-dossier
+Commit Base: 8d144ff (main tip with Days 1-4 approved & merged, tagged sprint-day4-complete)
+
+Codex, per Rule 8 v2 Invariant 5 (Mandatory Bus Deliberation Invariant), Antigravity is proactively initiating cross-agent deliberation on the proposed architecture, data contracts, and verification methodology for Sprint Day 5: "Canonical Paper Desk, Autonomous Operation & Master Trust Dossier".
+
+Sprint Day 4 has been formally approved by Codex (commit 14a3783, verified by 137 passing tests and 4 footer probes), recorded in shared/trust/reviews.jsonl, and merged to main.
+
+Here is the proposed design for Sprint Day 5:
+
+1. ARCHITECTURAL SCOPE & MODULE DESIGN:
+   - Module: `antigravity/paper/paper_desk_runner.py`
+   - Test Suite: `tests/test_day5_paper_desk.py`
+   - Complete production bridge uniting Days 1-4:
+     * Day 1: Daily universe, Bhavcopy + MTO ingestion, and fail-closed surveillance/F&O filters (`PreOpenEligibilityValidator`).
+     * Day 2: `PortfolioRiskGovernor` with Adjusted A1 3-slot cap, Rs 38,000 slot cap, Rs 114,000 exposure ceiling, Rs 1,500 trade risk, and Rs 136,000 unencumbered cash buffer; `ExecutionSimulator` with discrete fill states and 15% volume participation cap.
+     * Day 3: Quantitative Alpha Strategy Engine running Sleeves A (`DeliveryAccumulationStrategy`), B (`High52MomentumStrategy`), and C (`ExpiryReliefStrategy`) with deterministic tie-breaking.
+     * Day 4: Realistic friction accounting (statutory costs, DP charges grouped per symbol/sell session, conservative bar resolution, locked bar intent persistence, and recovery open liquidation).
+
+2. CANONICAL PAPER TRADING DESK SPECIFICATION:
+   - Journal Storage:
+     * Orders & Fills Ledger: `shared/track2_liquid/paper/canonical_paper_journal.csv`
+     * Open Position Ledger: `shared/track2_liquid/paper/open_positions.csv`
+     * Daily Portfolio Equity Ledger: `shared/track2_liquid/paper/daily_portfolio_equity.csv`
+   - Operating Invariants:
+     * Real capital deployment strictly disabled (`allow_live_broker = False`, Rule 1 observation gate).
+     * Exploratory/diagnostic paper status clearly watermarked until 60 prospective sessions and 20 fillable entries pass with positive net expectancy per Rule 1.
+     * Open inventory carried forward session-to-session; unresolved trades marked-to-market daily.
+     * Daily pre-open eligibility checks: if scrip enters ASM/GSM or exits F&O, immediate exit attempt queued at next session open with normal slippage per Rules 6 & 11.
+     * Volume participation cap strictly enforced at <=15% of actual daily session volume (Rule 9).
+
+3. SCHEDULED TIMING & ORCHESTRATION:
+   - 08:45 IST (Pre-Open): Reads verified previous-day EOD data, checks current surveillance lists, generates next-session candidate orders.
+   - 15:45 IST (Post-Close): Ingests new Bhavcopy + MTO, executes fill simulation and position exit checks, reconciles cash and portfolio equity, appends to paper journal.
+
+4. MASTER SYSTEM ARCHITECTURE SPECIFICATION & RUNBOOK ("Putting a Full Stop"):
+   - `shared/docs/ARGUS_SYSTEM_ARCHITECTURE_SPECIFICATION.md`:
+     * Complete system architecture diagram, module contracts, and data flows.
+     * Formal mathematical definitions of all 4 alpha sleeves (including Sleeve D PEAD holdout).
+     * Risk governor mathematical proofs and divisor formulas.
+     * Full regression test matrix and reproduction artifacts across Days 1-5.
+   - `shared/docs/YASHU_OPERATOR_RUNBOOK.md`:
+     * Plain-language operator manual for Yashu.
+     * 2-minute daily routine: how to inspect pre-open signals, verify EOD paper journals, monitor cash buffer, and verify system health.
+
+5. QUESTIONS FOR CODEX DELIBERATION:
+   a) What specific data-contract columns and schemas do you require for `canonical_paper_journal.csv` and `daily_portfolio_equity.csv` to ensure seamless downstream auditing?
+   b) Are there specific edge cases in paper desk position persistence (e.g. corporate actions, weekend gap opens, unexpected exchange holidays) that you want codified in `tests/test_day5_paper_desk.py`?
+   c) What specific acceptance tests or fail-closed invariants would you like to see formalized as failing-first regression tests for Day 5?
+
+Please provide your technical feedback, architectural recommendations, and required acceptance constraints for Sprint Day 5.
+```
+
+**OpenAI Codex Output & Audit Verdict:**
+```markdown
+Day 5 can proceed as a **non-qualifying paper implementation**, subject to independent review before canonical promotion. I recorded the detailed [architecture constraints and acceptance matrix](/C:/Users/yashw/swing%20trades/shared/trust/codex_day5_architecture_deliberation_2026_10_02.md) and submitted them to Claude and Antigravity through Nexus. Peer agreement is pending.
+
+The required corrections are:
+
+- **Persistence:** use one transactional event store; export the three CSVs from a common committed sequence. Persist reservations, partial fills, consumed volume and exit intents across restarts.
+- **Auditing schemas:** journal immutable events with strategy/version, order/position/fill identifiers, evidence references, itemized costs and cash deltas. Equity records must separate ledger, settled, reserved and free cash, and identify stale marks and reconciliation failures.
+- **Timing:** an 08:45 decision cannot use evidence available only by 09:08. Treat 15:45 as a polling trigger; commit EOD only after verifying complete session data.
+- **Execution evidence:** daily OHLCV fills remain labelled scenarios and non-qualifying. The 60-session/20-entry milestone must never automatically enable live trading.
+- **Risk integration:** exercise the actual shared governor lifecycle, including pending reservations and sector caps. Reserve entry fees as well as principal to protect the ₹136,000 cash buffer.
+- **Acceptance tests:** require crash/restart equivalence, concurrent-run protection, aggregate participation limits, partial-fill accounting, persistent locked exits, holiday calendars, corporate actions, settlement, stale evidence and qualification isolation.
+
+Created the deliberation document and its Nexus dispatch script. Checks performed: Git branch/history/status and source inspection; dispatch exited **0**. No tests were run, core code changed, commits or merges made. Existing work was preserved.
+```
+
+---
+
+## [2026-10-02 12:49:51 IST] Antigravity ➔ Claude Code (190.7s)
+
+**Prompt / Mandate:**
+```text
+Signed Nexus message from CODEX to CLAUDE. This dispatch is for discussion/review only: do not edit files, place orders, or dispatch other agents.
+Subject: Day 5 architecture constraints: peer deliberation, review only
+Body: Read-only deliberation. Do not implement or dispatch recursive peer requests. Please review the following constraints and report dissent/data-contract corrections. This is not approval.
+
+# Codex Day 5 architecture deliberation — 2026-10-02
+
+Status: engineering recommendations; no implementation approval, consensus claim, prospective qualification, or live-capital authorization.
+Verified branch: feature/day5-production-bridge-and-dossier. HEAD: 8d144ff.
+
+## Required architecture corrections
+
+1. Keep the runner thin: use antigravity/engine/risk_governor.py and its real reservation/partial-fill/exit lifecycle, not the standalone Day 4 allocation approximation or the separate legacy models governor. The Day 4 approval explicitly excluded shared reservation and sector-control integration. Persist reservations, residual quantities, occupied slots, sector counts and duplicate-event identifiers across restart. Existing holdings plus pending reservations compete for the same caps.
+2. Use one transactional event store (project-local SQLite is a suitable choice); export the three requested CSVs as deterministic projections of one committed sequence. Three independently appended files cannot guarantee crash consistency. Commit events, inventory, cash, charges and processed-session markers together. Protect against concurrent scheduled/manual invocations; replay must produce identical projections and no duplicate economics. CSV exports need a common generation/sequence identifier and atomic replacement, with readers rejecting mixed generations.
+3. Separate entry permissions from exit processing. Missing eligibility evidence freezes entries; it does not prove surveillance/F&O removal or erase holdings. Confirmed disqualification persists an exit intent. Locks, halts, absent bars and partial fills preserve residual inventory and exit priority; liquidation resumes at the first executable recovery open under the reviewed model.
+4. An 08:45 decision must only use evidence available by 08:45. The existing eligibility validator permits evidence through 09:08 and defaults to four calendar days of age despite narrower prose. Bind validation to actual decision time and evidence effective session, publication and ingestion times; do not use filesystem mtime as regulatory provenance. Test empty/malformed snapshots rather than treating missing list keys as proof of no surveillance. Track 2 requires EQ, DTV >= Rs 30 Cr, active F&O and ASM/GSM screening; do not import Track 1 ESM or 10-day LC sizing.
+5. 15:45 is a polling trigger, not proof Bhavcopy/MTO are final or available. Verify completeness, session, hashes and revision before committing EOD; retry missing releases and report DATA_PENDING without advancing the session. Exchange session calendars, including special sessions, govern scheduling. Do not substitute calendar-day arithmetic.
+6. Daily OHLCV fills remain BAR_SCENARIO, non-qualifying by default. Qualifying evidence needs the reviewed strategy version's post-arrival execution evidence. Sixty sessions and twenty entries are a milestone for considering live trading, never an automatic mode switch. Code must have no live order adapter; reject allow_live_broker=True rather than silently accepting it. Qualification is version-specific and excludes scenario, backtest, holdout and diagnostic records.
+7. Enforce the proposed participation ceiling cumulatively per instrument/session across orders, sleeves and both sides, using floor(0.15 * validated volume); it is scenario capacity, not proof of available counterparties at open. Persist consumption across reruns. Freeze orders before that session's bar is known; never select new entries using T-day EOD data and backfill them at T open.
+8. Cash sizing must reserve adverse execution and entry costs: Rs 114,000 principal plus fees would breach a Rs 136,000 buffer from Rs 250,000. Distinguish ledger cash, settled cash, reserved cash and free cash; proceeds awaiting settlement must not fund entries. Existing losses or MTM gains cannot justify fictitious buffer restoration. Risk limits are planned constraints, not guarantees that gap losses or marked exposure remain under caps; report breaches and block incremental risk while allowing exits.
+
+## Minimum data contracts
+
+All files: schema_version, desk_id, track=TRACK_2, run_id, generation_id, last_event_seq, code_commit, config_hash, strategy_manifest_hash, evidence_mode, review_status. ISO dates; timezone-aware event timestamps; integer shares; INR amounts with an explicit paise rounding policy; finite values only. Reject unknown schemas and conflicting identifiers.
+
+canonical_paper_journal.csv: append-only event grain, not one mutable row per trade. Fields: event_id, event_seq, event_type, event_at, recorded_at, session_date, decision_at, signal_session, intended_execution_session, sleeve_id, strategy_version, signal_id, order_id, reservation_id, position_id, fill_id, exchange, ISIN, symbol, series, side, order_type, state_before, state_after, requested_qty, fill_qty_delta, cumulative_fill_qty, remaining_order_qty, benchmark_price, limit_price, fill_price, stop_price, target_price, planned_risk_rs, slippage_bps, slippage_rs, turnover_rs, brokerage_rs, stt_rs, exchange_fee_rs, sebi_fee_rs, stamp_duty_rs, gst_rs, dp_fee_rs, dp_group_id, total_cost_rs, cash_delta_rs, realized_net_pnl_delta_rs, exit_reason, reject_reason, eligibility_verdict, evidence_ref, evidence_hash, evidence_available_at, fill_model_version, qualifying_evidence_status. No-fill events have zero economics and nullable fill prices. Preserve eligibility and input manifests by reference; hashes alone do not authenticate authors.
+
+open_positions.csv: position_id, ISIN, symbol, series, sleeve_id, strategy_version, entry_session, acquired_qty, sold_qty, residual_qty, residual_cost_basis_rs, entry_cost_allocation_rs, stop_price, target_price, planned_open_risk_rs, exit_intent, exit_intent_created_at, pending_exit_order_id, last_mark, mark_session, mark_source_hash, mark_status, corporate_action_status, settlement_status. Unfilled orders/reservations must also be persisted, even though they are not positions.
+
+daily_portfolio_equity.csv: session_date, valuation_at, cash_ledger_rs, cash_settled_rs, receivable_rs, payable_rs, reserved_cash_rs, free_cash_rs, inventory_mtm_rs, equity_rs, external_flow_rs, realized_net_pnl_cumulative_rs, unrealized_pnl_rs, costs_cumulative_rs, occupied_slots, pending_slots, committed_exposure_rs, marked_exposure_rs, planned_open_risk_rs, reserved_risk_rs, pending_exit_count, unresolved_position_count, stale_mark_count, drawdown_rs, drawdown_pct, cash_buffer_breach, risk_breach, data_status. Define equity from ledger cash plus marked inventory with separately defined receivables/payables; never add settlement receivables twice. Reconcile delta cash to event cash deltas and external flows, inventory to acquisitions less dispositions plus explicit corporate actions, and equity change to net PnL plus flows. Stale marks remain labelled and cannot support a clean health assertion.
+
+## Failing-first acceptance matrix
+
+- Restart after reservation, partial entry, locked exit and partial exit: replay equals uninterrupted run; no freed slot or lost intent.
+- Crash injection before/after transaction commit and between CSV exports; concurrent runner race; duplicate run/order/fill; malformed/truncated CSV: no double fills, cash or fees; fail closed on incoherent generation.
+- Three slots reserved across sleeves; fourth order rejected; third same-sector position rejected; pending plus filled exposure/risk included; fee-inclusive cash boundary at Rs 136,000; gap execution above reserved bounds resizes/rejects before cash mutation. Invalid NaN/infinite/bool/negative/fractional inputs rejected.
+- Multiple orders/sleeves share one 15% budget; zero volume; partial entry followed by exit; retry preserves consumed volume; unfilled buys incur no costs.
+- Same-symbol sell legs/sleeves on one session incur one DP group charge; next session incurs a new charge; entry costs allocated once; partial and final net PnL reconcile without double deduction.
+- Locked stop/time-stop/disqualification persists over weekend and holiday, missing bar and halt; recovery exits at executable open with adverse slippage; gap through stop may exceed 1R; stop/target ambiguity uses reviewed conservative policy.
+- Monday after long holiday, special weekend session and unexpected closure: valid next-session mapping, no phantom fills/holding-day increments. Delayed or revised Bhavcopy/MTO: no premature commit and no silent rewriting of prior evidence.
+- Surveillance/F&O evidence missing, empty, stale, future, post-decision or wrong effective session; EQ/DTV failure; unknown sector; manifest tampering; sleeve D holdout accidentally enabled: entries blocked and explicit reason logged.
+- Split/bonus/symbol change keyed by ISIN: explicit versioned action adjusts inventory, basis, orders, stops and reference data consistently; no fabricated PnL. Unknown action/merger/delisting freezes affected entries, preserves inventory and raises unresolved valuation. Dividend entitlement/payment and settlement holidays handled as separate economic events.
+- Missing/stale closing price preserves labelled valuation; every equity/cash reconciliation tested; bar scenario never increments qualifying counters; reaching 60/20 never enables live trading; Track 1 paths cannot be written by this desk.
+
+Before fixes are accepted, record each reviewer probe's baseline failure (or passing baseline when already supported), then candidate success. Retain exact argv, absolute cwd, commit and relevant dirty-tree hashes, exit codes, raw stdout/stderr and artifact hashes. Run Days 1–4 regressions plus Day 5 integration tests against a fixed input manifest. Compare multi-session uninterrupted versus crash/restart replay through the actual runner, not mocked private helpers alone.
+
+## Dossier and operating contract
+
+Document actual dependency paths and ownership; versioned A/B/C contracts; D as disabled holdout; capital/fee/reservation inequalities and their assumptions; observed execution versus scenarios; corporate-action and settlement policy; failure/recovery procedures. Do not call a sizing inequality a proof of bounded realized loss. Carry forward Day 4's failing historical performance and review limits. Runbook health must show data freshness, committed session, pending exits, stale marks, cash reservations/buffer, reconciliation status and non-qualifying status, with concrete commands and expected failure output.
+
+Implementation ownership remains Antigravity's. Codex provides independent acceptance review; Claude provides microstructure/red-team review. Promotion requires recorded reviews on the dedicated branch; no self-approval or majority-vote consensus.
+
+Checks performed for this deliberation: git branch/log/status and source inspection only. No tests run, core code edited, commits or merges performed. Pre-existing tracked changes were preserved.
+
+Track: TRACK_2
+```
+
+**Claude Code Output & Audit Verdict:**
+```markdown
+API Error: Connection refused — a firewall or proxy may be blocking it (ECONNREFUSED)
+```
+
+---
