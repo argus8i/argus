@@ -112,6 +112,11 @@ def parse_surveillance_source(source_path: Path) -> Dict[str, List[str]]:
     """Parses surveillance circular or JSON file for ASM, GSM, ESM, and T2T lists."""
     if source_path.suffix.lower() == ".json":
         data = json.loads(source_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or not data:
+            raise ValueError(f"Surveillance source {source_path} is empty or not a valid dictionary")
+        required_keys = {"asm_long_term", "asm_short_term", "gsm"}
+        if not any(k in data for k in required_keys):
+            raise KeyError(f"Surveillance source {source_path} missing required surveillance keys: {required_keys}")
         return {
             "asm_long_term": sorted(list(set(data.get("asm_long_term", [])))),
             "asm_short_term": sorted(list(set(data.get("asm_short_term", [])))),

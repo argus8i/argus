@@ -1,6 +1,6 @@
 COMMAND: C:\Users\yashw\swing trades\.venv\Scripts\python.exe -m pytest tests/test_day1_data_contracts.py tests/test_execution_risk_governor.py tests/test_day3_strategies.py tests/test_day4_backtest.py shared/trust/artifacts/test_codex_day4_9157a86_review.py shared/trust/artifacts/test_codex_day4_ee58cb3_review.py shared/trust/artifacts/test_codex_day4_7c23f6c_review.py shared/trust/artifacts/test_codex_day4_90255e7_review.py shared/trust/artifacts/test_codex_day4_bf510da_review.py tests/test_day5_paper_desk.py -v
 EXIT_CODE: 0
-ELAPSED_SECONDS: 16.51
+ELAPSED_SECONDS: 24.18
 ================================================================================
 STDOUT:
 ============================= test session starts =============================
@@ -164,6 +164,6 @@ tests/test_day5_paper_desk.py::test_invalid_nan_inf_negative_inputs_fail_closed 
 tests/test_day5_paper_desk.py::test_missing_bar_preserves_holdings_and_reports_data_pending PASSED [ 99%]
 tests/test_day5_paper_desk.py::test_unknown_corporate_action_freezes_position PASSED [100%]
 
-============================ 153 passed in 15.03s =============================
+============================ 153 passed in 22.45s =============================
 ================================================================================
 STDERR:

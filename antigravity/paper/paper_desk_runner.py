@@ -973,24 +973,7 @@ class PaperDeskRunner:
                     qualifying_evidence_status=self.config.evidence_mode,
                 )
 
-                # Commit atomic execution transition: position, volume, and exit fill event
-                self.store.commit_execution_transition(
-                    position=pos,
-                    consumed_volume_update=(session_date, sym, fill_qty),
-                    event=event,
-                )
-
-                # Update PortfolioRiskGovernor (atomic idempotent reconciliation)
-                evt_id = f"EVT-EXIT-{session_date}-{sym}-{fill_qty}"
-                if sym in self.governor.active_positions:
-                    self.governor.reconcile_exit(
-                        symbol=sym,
-                        exit_price=fill_price,
-                        shares=fill_qty,
-                        exit_transaction_costs=total_cost,
-                        exit_event_id=evt_id,
-                    )
-
+                close_event = None
                 if pos.residual_qty == 0:
                     # Also record POSITION_CLOSED event
                     close_event = PaperJournalEvent(
@@ -1051,7 +1034,27 @@ class PaperDeskRunner:
                         fill_model_version=self.config.fill_model_version,
                         qualifying_evidence_status=self.config.evidence_mode,
                     )
-                    self.store.append_event(close_event)
+
+                # Commit atomic execution transition: position, volume, and exit fill events
+                transition_events = [event]
+                if close_event:
+                    transition_events.append(close_event)
+                self.store.commit_execution_transition(
+                    position=pos,
+                    consumed_volume_update=(session_date, sym, fill_qty),
+                    events=transition_events,
+                )
+
+                # Update PortfolioRiskGovernor (atomic idempotent reconciliation)
+                evt_id = f"EVT-EXIT-{session_date}-{sym}-{fill_qty}"
+                if sym in self.governor.active_positions:
+                    self.governor.reconcile_exit(
+                        symbol=sym,
+                        exit_price=fill_price,
+                        shares=fill_qty,
+                        exit_transaction_costs=total_cost,
+                        exit_event_id=evt_id,
+                    )
 
                 executed_exits.append((sym, fill_qty, fill_price, exit_reason))
 
@@ -1284,16 +1287,15 @@ class PaperDeskRunner:
                 res_residual = None
                 res_status = "FILLED"
 
-            # 2. Commit atomic execution transition for position, reservation, consumed volume, and fill event
+            # 2. Commit atomic execution transition for position, reservation, consumed volume, and fill events
             self.store.commit_execution_transition(
                 position=new_pos,
                 reservation_id=res["reservation_id"],
                 reservation_status=res_status,
                 reservation_residual=res_residual,
                 consumed_volume_update=(session_date, sym, fill_qty),
-                event=fill_event,
+                events=[fill_event, pos_open_event],
             )
-            self.store.append_event(pos_open_event)
 
             # 4. Confirm in risk governor
             self.governor.confirm_fill_from_reservation(
@@ -1391,8 +1393,6 @@ class PaperDeskRunner:
                     fill_model_version=self.config.fill_model_version,
                     qualifying_evidence_status=self.config.evidence_mode,
                 )
-                self.store.append_event(exit_event)
-
                 same_day_close_event = PaperJournalEvent(
                     event_id=f"EVT-CLOSE-{session_date}-{sym}-SAMEDAY",
                     event_seq=0,
@@ -1451,8 +1451,11 @@ class PaperDeskRunner:
                     fill_model_version=self.config.fill_model_version,
                     qualifying_evidence_status=self.config.evidence_mode,
                 )
-                self.store.append_event(same_day_close_event)
-                self.store.upsert_position(new_pos)
+                self.store.commit_execution_transition(
+                    position=new_pos,
+                    consumed_volume_update=(session_date, sym, fill_qty),
+                    events=[exit_event, same_day_close_event],
+                )
                 self.governor.reconcile_exit(
                     symbol=sym,
                     exit_price=exit_fill_p,
@@ -1560,13 +1563,21 @@ class PaperDeskRunner:
             data_status=data_status,
         )
 
-        # Commit EOD equity only if bhavcopy manifest is present, matches session_date, and has status NORMAL (Codex Finding 5)
+        # Commit EOD equity only if bhavcopy manifest is verified (Codex Round 3 Finding 4)
         is_manifest_valid = False
         if isinstance(bhavcopy_manifest, dict):
             m_status = bhavcopy_manifest.get("status")
             m_date = bhavcopy_manifest.get("session_date") or bhavcopy_manifest.get("date")
             if m_status == "NORMAL" and m_date == session_date:
-                is_manifest_valid = True
+                has_provenance = any(
+                    k in bhavcopy_manifest
+                    for k in ("source_sha256", "sha256", "bhavcopy_sha256", "file_sha256", "raw_sha256", "source_file", "source_path", "raw_path", "files")
+                )
+                has_bars = bool(bar_data_map and len(bar_data_map) > 0)
+                is_retry_pending = self.store.is_session_processed(session_date) and not self.store.has_session_equity(session_date)
+
+                if has_provenance or has_bars or is_retry_pending:
+                    is_manifest_valid = True
 
         if is_manifest_valid:
             self.store.record_daily_equity(daily_equity_rec)

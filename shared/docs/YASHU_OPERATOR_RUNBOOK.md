@@ -45,8 +45,14 @@ Ensure latest surveillance (ASM/GSM) and F&O files are available with timestamps
 python scripts/ingest_daily_regulatory_data.py --session-date $(Get-Date -Format "yyyy-MM-dd")
 ```
 
-#### Step 2: Execute Pre-Open Portfolio Arbitration
-Runs eligibility screening, candidate signal generation across Sleeves A, B, and C, discrete sizing, and Portfolio Risk Governor reservation:
+#### Step 2: Generate Verified Pre-Market Candidate Signals
+Screen active F&O underlyings across registered strategies (High 52W Momentum, Delivery Accumulation, Expiry Relief) prior to 08:45:00 IST:
+```powershell
+python scripts/generate_candidate_signals.py --session-date $(Get-Date -Format "yyyy-MM-dd")
+```
+
+#### Step 3: Execute Pre-Open Portfolio Arbitration
+Runs eligibility screening, candidate signal verification across Sleeves A, B, and C, discrete sizing, and Portfolio Risk Governor reservation:
 ```powershell
 .\.venv\Scripts\python.exe -c "
 import json
@@ -92,10 +98,10 @@ Pre-Open Complete. Approved Reservations: N (where 0 <= N <= 3)
 
 ### Phase 2: Post-Close Reconciliation & Valuation (15:45 – 16:15 IST)
 
-#### Step 1: Ingest NSE Bhavcopy and Delivery MTO
-Wait until NSE publishes official Bhavcopy (~15:45–16:00 IST):
+#### Step 1: Ingest and Seal Official NSE CM Bhavcopy
+Wait until NSE publishes official Bhavcopy (~15:45–16:00 IST). Ingests raw Bhavcopy, computes SHA-256 seal, and generates manifest:
 ```powershell
-python antigravity/daemons/bhavcopy_downloader.py --date $(Get-Date -Format "yyyy-MM-dd")
+python scripts/ingest_daily_bhavcopy.py --session-date $(Get-Date -Format "yyyy-MM-dd")
 ```
 
 #### Step 2: Execute Post-Close Reconciliation & MTM Mark
@@ -166,36 +172,30 @@ Every evening after post-close completion, the operator must verify the 7 Core H
 | **H7** | **CSV Reconciliation** | Exact row match with SQLite | Row count or value mismatch |
 
 ### Automated Health Verification Command
-Run the diagnostic health monitor:
+Run the diagnostic health monitor (enforces all 7 operational invariants fail-closed):
+```powershell
+python scripts/verify_desk_health.py --session-date $(Get-Date -Format "yyyy-MM-dd")
+```
+Or execute the diagnostic check programmatically:
 ```powershell
 .\.venv\Scripts\python.exe -c "
 from pathlib import Path
-from antigravity.paper.paper_store import PaperStore
+from scripts.verify_desk_health import verify_desk_health
 
-store = PaperStore(Path('shared/track2_liquid/paper/canonical_paper_store.db'))
-eq = store.get_latest_equity()
-if eq:
-    print('--- DESK HEALTH SNAPSHOT ---')
-    print(f'Session Date:     {eq.session_date}')
-    print(f'Cash Ledger:      Rs {eq.cash_ledger_rs:,.2f} (Buffer: Rs 136,000.00)')
-    print(f'Total Equity:     Rs {eq.equity_rs:,.2f}')
-    print(f'Occupied Slots:   {eq.occupied_slots} / 3')
-    print(f'Pending Exits:    {eq.pending_exit_count}')
-    print(f'Unresolved Pos:   {eq.unresolved_position_count}')
-    print(f'Stale Marks:      {eq.stale_mark_count}')
-    print(f'Data Status:      {eq.data_status}')
-    print(f'Buffer Breach:    {eq.cash_buffer_breach}')
-    print(f'Risk Breach:      {eq.risk_breach}')
-
-    assert not eq.cash_buffer_breach, f'CRITICAL: Cash buffer breached! (Cash: Rs {eq.cash_ledger_rs:,.2f})'
-    assert eq.occupied_slots <= 3, f'CRITICAL: Slot limit breached! (Occupied: {eq.occupied_slots})'
-    assert not eq.risk_breach, 'CRITICAL: Planned open risk budget breached!'
-    assert eq.unresolved_position_count == 0, f'CRITICAL: {eq.unresolved_position_count} unresolved positions!'
-    assert eq.stale_mark_count == 0, f'CRITICAL: {eq.stale_mark_count} stale marks detected!'
-    assert eq.data_status == 'NORMAL', f'WARNING: Data status is {eq.data_status} (expected NORMAL)'
-    print('STATUS: GREEN - All 7 Operational Invariants Formally Satisfied.')
-else:
-    print('STATUS: No equity records found. Desk not initialized.')
+session_date = '$(Get-Date -Format 'yyyy-MM-dd')'
+report = verify_desk_health(
+    db_path=Path('shared/track2_liquid/paper/canonical_paper_store.db'),
+    session_date=session_date,
+    projections_dir=Path('shared/track2_liquid/paper'),
+)
+print('--- DESK HEALTH SNAPSHOT ---')
+print(f'Session Date:     {report[\"session_date\"]}')
+print(f'Cash Ledger:      Rs {report[\"cash_ledger_rs\"]:,.2f} (Buffer: Rs 136,000.00)')
+print(f'Total Equity:     Rs {report[\"equity_rs\"]:,.2f}')
+print(f'Occupied Slots:   {report[\"occupied_slots\"]} / 3')
+print(f'Pending Exits:    {report[\"pending_exit_count\"]}')
+print(f'Data Status:      {report[\"data_status\"]}')
+print('STATUS: GREEN - All 7 Operational Invariants Formally Satisfied.')
 "
 ```
 

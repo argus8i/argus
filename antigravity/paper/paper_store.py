@@ -71,6 +71,7 @@ class PaperStore:
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._active_conn: Optional[sqlite3.Connection] = None
         self._init_db()
 
     def _get_connection(self) -> sqlite3.Connection:
@@ -258,6 +259,9 @@ class PaperStore:
         Appends an immutable event to the ledger in a transaction.
         Returns the assigned event_seq.
         """
+        if getattr(self, "_active_conn", None) is not None:
+            return self._insert_event_to_conn(self._active_conn, event)
+
         with self._get_connection() as conn:
             conn.execute("BEGIN IMMEDIATE;")
             seq = self._insert_event_to_conn(conn, event)
@@ -461,20 +465,25 @@ class PaperStore:
         reservation_residual: Optional[Tuple[int, float, float]] = None,
         consumed_volume_update: Optional[Tuple[str, str, int]] = None,
         event: Optional[PaperJournalEvent] = None,
+        events: Optional[Sequence[PaperJournalEvent]] = None,
     ) -> Optional[int]:
         """
         Commits position mutation, reservation update/clear, volume consumption,
-        and ledger event in a single immediate SQLite transaction.
+        and ledger events in a single immediate SQLite transaction.
         """
-        monkeypatched = getattr(self.append_event, "__code__", None) != PaperStore.append_event.__code__
-        if event is not None and monkeypatched:
-            self.append_event(event)
+        all_events: List[PaperJournalEvent] = []
+        if event is not None:
+            all_events.append(event)
+        if events is not None:
+            all_events.extend(events)
 
-        with self._get_connection() as conn:
-            conn.execute("BEGIN IMMEDIATE;")
+        conn = self._get_connection()
+        conn.execute("BEGIN IMMEDIATE;")
+        self._active_conn = conn
+        try:
             seq = None
-            if event is not None and not monkeypatched:
-                seq = self._insert_event_to_conn(conn, event)
+            for evt in all_events:
+                seq = self.append_event(evt)
 
             if consumed_volume_update:
                 s_date, s_sym, add_qty = consumed_volume_update
@@ -541,6 +550,15 @@ class PaperStore:
 
             conn.execute("COMMIT;")
             return seq
+        except Exception:
+            try:
+                conn.execute("ROLLBACK;")
+            except Exception:
+                pass
+            raise
+        finally:
+            self._active_conn = None
+            conn.close()
 
     def apply_corporate_action_atomic(
         self,
