@@ -48,6 +48,13 @@ def main():
         "shared/trust/artifacts/test_codex_day4_90255e7_review.py",
         "shared/trust/artifacts/test_codex_day4_bf510da_review.py",
         "tests/test_day5_paper_desk.py",
+        "tests/test_runbook_wiring.py",
+        "shared/trust/artifacts/test_codex_day5_48cb886_review.py",
+        "shared/trust/artifacts/test_codex_day5_eaa38ba_round2.py",
+        "shared/trust/artifacts/test_codex_day5_01d3fbc_round3.py",
+        "shared/trust/artifacts/test_codex_day5_abce70a_round4.py",
+        "shared/trust/artifacts/test_codex_day5_cd0b2bf_round5.py",
+        "shared/trust/artifacts/test_codex_day5_ac6f0be_round6.py",
     ]
 
     cmd = [python_exe, "-m", "pytest", *test_files, "-v"]

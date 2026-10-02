@@ -760,7 +760,12 @@ class PaperStore:
                 data_status=row["data_status"],
             )
 
-    def export_csv_projections(self, out_dir: Path, generation_id: str) -> Tuple[Path, Path, Path]:
+    def export_csv_projections(
+        self,
+        out_dir: Path,
+        generation_id: str,
+        uncommitted_equity: Optional[DailyPortfolioEquityRecord] = None,
+    ) -> Tuple[Path, Path, Path]:
         """
         Atomically exports canonical_paper_journal.csv, open_positions.csv, and
         daily_portfolio_equity.csv as deterministic projections of the SQLite store.
@@ -864,6 +869,16 @@ class PaperStore:
                         d = dict(r)
                         d.update(base_meta)
                         writer.writerow(d)
+                elif uncommitted_equity is not None:
+                    d = uncommitted_equity.to_dict()
+                    d["cash_buffer_breach"] = 1 if d.get("cash_buffer_breach") else 0
+                    d["risk_breach"] = 1 if d.get("risk_breach") else 0
+                    other_keys = [c for c in d.keys() if c not in meta_keys]
+                    fieldnames = meta_keys + other_keys
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer.writeheader()
+                    d.update(base_meta)
+                    writer.writerow(d)
                 else:
                     fieldnames = meta_keys + [
                         "session_date", "valuation_at", "cash_ledger_rs", "cash_settled_rs",

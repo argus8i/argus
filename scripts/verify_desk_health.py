@@ -53,6 +53,13 @@ def verify_desk_health(
     if not db_path.exists():
         raise AssertionError(f"CRITICAL: Paper database does not exist: {db_path}")
 
+    if projections_dir is None:
+        default_cand = db_path.parent / "csv"
+        if (default_cand / "generation_manifest.json").exists():
+            projections_dir = default_cand
+        elif (ROOT_DIR / "shared" / "track2_liquid" / "paper" / "generation_manifest.json").exists():
+            projections_dir = ROOT_DIR / "shared" / "track2_liquid" / "paper"
+
     store = PaperStore(db_path)
     eq = store.get_latest_equity()
 
@@ -126,6 +133,10 @@ def verify_desk_health(
             raise AssertionError(f"CRITICAL [H7]: Generation manifest missing: {manifest_p}")
 
         m_data = json.loads(manifest_p.read_text(encoding="utf-8"))
+        m_gen_id = m_data.get("generation_id")
+        if not m_gen_id:
+            raise AssertionError("CRITICAL [H7]: generation_manifest.json missing generation_id")
+
         for fkey, item in m_data.get("files", {}).items():
             f_path = p_dir / item["name"]
             if not f_path.exists():
@@ -149,7 +160,18 @@ def verify_desk_health(
             csv_eq_rows = list(csv.DictReader(f))
         if len(csv_eq_rows) != db_eq_cnt:
             raise AssertionError(f"CRITICAL [H7]: Row count mismatch on daily_portfolio_equity.csv: {len(csv_eq_rows)} != {db_eq_cnt}")
+        
+        mandatory_eq_cols = ["generation_id", "session_date", "cash_ledger_rs", "equity_rs", "occupied_slots", "pending_exit_count", "data_status"]
         for r_eq in csv_eq_rows:
+            for col in mandatory_eq_cols:
+                if col not in r_eq:
+                    raise AssertionError(f"CRITICAL [H7]: Missing mandatory column '{col}' in daily_portfolio_equity.csv")
+            
+            if r_eq.get("generation_id") != m_gen_id:
+                raise AssertionError(
+                    f"CRITICAL [H7]: Generation ID mismatch on daily_portfolio_equity.csv: CSV has '{r_eq.get('generation_id')}' != Manifest has '{m_gen_id}'"
+                )
+
             s_date = r_eq["session_date"]
             if s_date not in db_equity_rows:
                 raise AssertionError(f"CRITICAL [H7]: Equity CSV contains session {s_date} missing in SQLite.")
@@ -173,9 +195,14 @@ def verify_desk_health(
                     f"CRITICAL [H7]: Equity mismatch/non-finite for {s_date}: CSV has {r_eq['equity_rs']} != SQLite has {db_r['equity_rs']}"
                 )
 
-            if "occupied_slots" in r_eq and int(r_eq["occupied_slots"]) != int(db_r["occupied_slots"]):
+            if int(r_eq["occupied_slots"]) != int(db_r["occupied_slots"]):
                 raise AssertionError(
                     f"CRITICAL [H7]: Occupied slots mismatch for {s_date}: CSV has {r_eq['occupied_slots']} != SQLite has {db_r['occupied_slots']}"
+                )
+
+            if int(r_eq["pending_exit_count"]) != int(db_r["pending_exit_count"]):
+                raise AssertionError(
+                    f"CRITICAL [H7]: Pending exit count mismatch for {s_date}: CSV has {r_eq['pending_exit_count']} != SQLite has {db_r['pending_exit_count']}"
                 )
 
             if r_eq.get("data_status") != db_r["data_status"]:
@@ -183,18 +210,58 @@ def verify_desk_health(
                     f"CRITICAL [H7]: Data status mismatch for {s_date}: CSV has {r_eq.get('data_status')} != SQLite has {db_r['data_status']}"
                 )
 
+            # Check all authoritative columns present in db_r
+            for k, expected_v in db_r.items():
+                if k in r_eq and expected_v is not None:
+                    actual_str = str(r_eq[k]).strip()
+                    if isinstance(expected_v, float):
+                        try:
+                            act_f = float(actual_str)
+                            if not math.isfinite(act_f) or abs(act_f - expected_v) > 0.01:
+                                raise AssertionError(f"CRITICAL [H7]: Field '{k}' mismatch for {s_date}: CSV {act_f} != SQLite {expected_v}")
+                        except (ValueError, TypeError):
+                            raise AssertionError(f"CRITICAL [H7]: Field '{k}' non-numeric for {s_date}: {actual_str}")
+                    elif isinstance(expected_v, int):
+                        try:
+                            act_i = int(actual_str)
+                            if act_i != expected_v:
+                                raise AssertionError(f"CRITICAL [H7]: Field '{k}' mismatch for {s_date}: CSV {act_i} != SQLite {expected_v}")
+                        except (ValueError, TypeError):
+                            raise AssertionError(f"CRITICAL [H7]: Field '{k}' non-integer for {s_date}: {actual_str}")
+
         # 2. Positions Value Reconciliation
         with open(p_dir / "open_positions.csv", newline="", encoding="utf-8") as f:
             csv_pos_rows = list(csv.DictReader(f))
         if len(csv_pos_rows) != db_pos_cnt:
             raise AssertionError(f"CRITICAL [H7]: Row count mismatch on open_positions.csv: {len(csv_pos_rows)} != {db_pos_cnt}")
         for r_pos in csv_pos_rows:
+            if r_pos.get("generation_id") != m_gen_id:
+                raise AssertionError(
+                    f"CRITICAL [H7]: Generation ID mismatch on open_positions.csv: CSV has '{r_pos.get('generation_id')}' != Manifest has '{m_gen_id}'"
+                )
             p_id = r_pos["position_id"]
             if p_id not in db_pos_rows:
                 raise AssertionError(f"CRITICAL [H7]: Position {p_id} in open_positions.csv missing or not OPEN in SQLite.")
             db_p = db_pos_rows[p_id]
             if int(r_pos["residual_qty"]) != int(db_p["residual_qty"]):
                 raise AssertionError(f"CRITICAL [H7]: Position {p_id} residual_qty mismatch: CSV {r_pos['residual_qty']} != SQLite {db_p['residual_qty']}")
+            for k, expected_v in db_p.items():
+                if k in r_pos and expected_v is not None and k != "status":
+                    actual_str = str(r_pos[k]).strip()
+                    if isinstance(expected_v, float):
+                        try:
+                            act_f = float(actual_str)
+                            if not math.isfinite(act_f) or abs(act_f - expected_v) > 0.01:
+                                raise AssertionError(f"CRITICAL [H7]: Position {p_id} field '{k}' mismatch: CSV {act_f} != SQLite {expected_v}")
+                        except (ValueError, TypeError):
+                            raise AssertionError(f"CRITICAL [H7]: Position {p_id} field '{k}' non-numeric: {actual_str}")
+                    elif isinstance(expected_v, int):
+                        try:
+                            act_i = int(actual_str)
+                            if act_i != expected_v:
+                                raise AssertionError(f"CRITICAL [H7]: Position {p_id} field '{k}' mismatch: CSV {act_i} != SQLite {expected_v}")
+                        except (ValueError, TypeError):
+                            raise AssertionError(f"CRITICAL [H7]: Position {p_id} field '{k}' non-integer: {actual_str}")
 
         # 3. Journal Reconciliation
         with open(p_dir / "canonical_paper_journal.csv", newline="", encoding="utf-8") as f:
@@ -202,6 +269,10 @@ def verify_desk_health(
         if len(csv_journal_rows) != db_journal_cnt:
             raise AssertionError(f"CRITICAL [H7]: Row count mismatch on canonical_paper_journal.csv: {len(csv_journal_rows)} != {db_journal_cnt}")
         for r_csv, r_db in zip(csv_journal_rows, db_journal_events):
+            if r_csv.get("generation_id") != m_gen_id:
+                raise AssertionError(
+                    f"CRITICAL [H7]: Generation ID mismatch on canonical_paper_journal.csv: CSV has '{r_csv.get('generation_id')}' != Manifest has '{m_gen_id}'"
+                )
             if int(r_csv["event_seq"]) != int(r_db["event_seq"]):
                 raise AssertionError(
                     f"CRITICAL [H7]: Event sequence mismatch: CSV has {r_csv['event_seq']} != SQLite has {r_db['event_seq']}"
@@ -214,6 +285,39 @@ def verify_desk_health(
                 raise AssertionError(
                     f"CRITICAL [H7]: Event type mismatch: CSV has {r_csv.get('event_type')} != SQLite has {r_db['event_type']}"
                 )
+
+            # Reconcile complete journal event payload
+            payload = json.loads(r_db["payload_json"]) if r_db["payload_json"] else {}
+            for pk, expected_v in payload.items():
+                if pk in r_csv and expected_v is not None:
+                    actual_str = str(r_csv[pk]).strip()
+                    if isinstance(expected_v, float):
+                        try:
+                            act_f = float(actual_str)
+                            if not math.isfinite(act_f) or abs(act_f - expected_v) > 0.01:
+                                raise AssertionError(
+                                    f"CRITICAL [H7]: Journal payload '{pk}' mismatch on event {r_db['event_seq']}: CSV {act_f} != SQLite {expected_v}"
+                                )
+                        except (ValueError, TypeError):
+                            raise AssertionError(
+                                f"CRITICAL [H7]: Journal payload '{pk}' non-numeric on event {r_db['event_seq']}: {actual_str}"
+                            )
+                    elif isinstance(expected_v, int):
+                        try:
+                            act_i = int(actual_str)
+                            if act_i != expected_v:
+                                raise AssertionError(
+                                    f"CRITICAL [H7]: Journal payload '{pk}' mismatch on event {r_db['event_seq']}: CSV {act_i} != SQLite {expected_v}"
+                                )
+                        except (ValueError, TypeError):
+                            raise AssertionError(
+                                f"CRITICAL [H7]: Journal payload '{pk}' non-integer on event {r_db['event_seq']}: {actual_str}"
+                            )
+                    else:
+                        if actual_str != str(expected_v).strip():
+                            raise AssertionError(
+                                f"CRITICAL [H7]: Journal payload '{pk}' mismatch on event {r_db['event_seq']}: CSV '{actual_str}' != SQLite '{expected_v}'"
+                            )
 
     return {
         "session_date": eq.session_date,

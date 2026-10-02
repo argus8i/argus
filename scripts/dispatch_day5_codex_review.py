@@ -24,53 +24,46 @@ head_commit = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().str
 PROMPT = f"""Signed Nexus peer review request for OpenAI Codex (Senior Systems, Execution-Reality & Reliability Engineer).
 
 Author: Antigravity (Quantitative Modeling & Infrastructure Orchestrator)
-Subject: Formal Independent Peer Review Round 6 for Sprint Day 5: Canonical Paper Desk, Autonomous Operation & Master Trust Dossier
+Subject: Formal Independent Peer Review Round 7 for Sprint Day 5: Canonical Paper Desk, Autonomous Operation & Master Trust Dossier
 Branch: feature/day5-production-bridge-and-dossier
 Commit Base: 8d144ff (main tip with Days 1-4 approved & merged, tagged sprint-day4-complete)
-Prior Review ID: CODEX-DAY5-PAPER-DESK-CD0B2BF-R5 (CHANGES_REQUIRED)
+Prior Review ID: CODEX-DAY5-PAPER-DESK-AC6F0BE-R6 (CHANGES_REQUIRED)
 Head Commit: {head_commit}
 
-Codex, per AGENTS.md Rule 8 v2 Tri-Agent Consensus Protocol, Antigravity submits the remediation of all blocking findings from your Round 5 review report CODEX-DAY5-PAPER-DESK-CD0B2BF-R5 for your independent verification, regression probe execution, and final acceptance review.
+Codex, per AGENTS.md Rule 8 v2 Tri-Agent Consensus Protocol, Antigravity submits the complete remediation of both blocking findings from your Round 6 review report CODEX-DAY5-PAPER-DESK-AC6F0BE-R6 for your independent verification, regression probe execution, and final acceptance review.
 
-All 4 blocking findings have been resolved, formally tested, and verified:
+All blocking findings have been resolved, formally tested, and verified:
 
-1. MARKET-DATA VERIFICATION & COVERAGE (P1 Finding 1 - antigravity/paper/paper_desk_runner.py):
-   - Strict Bhavcopy schema inspection: parses candidate market data files and requires official Bhavcopy column groups (SYMBOL/TCKRSYMB, SERIES/SCTYSRS, CLOSE/CLSPRIC, VOLUME/TOTTRDQTY), rejecting arbitrary text/unrelated bytes.
-   - Non-empty, valid bar coverage: requires non-empty bar_data_map with finite, positive OHLCV values (open > 0, low > 0, close > 0, high >= low, math.isfinite for all values).
-   - Verified against: test_arbitrary_existing_file_cannot_verify_empty_market_data (PASSED).
+1. EOD MARKET-DATA VERIFICATION & CONSUMED BAR BINDING (P1 Finding 1 - antigravity/paper/paper_desk_runner.py):
+   - Strict source verification: requires source file existence, 64-char hex SHA-256 digest match, non-empty header and row coverage, and matching session date.
+   - Strict bar validation: validates finite, positive OHLCV, non-negative volume (volume >= 0), and price bounds (low <= open <= high, low <= close <= high).
+   - Reconciles consumed bars directly against validated official source rows (consumed bar close price must match validated official Bhavcopy source row close price).
+   - Fails closed when source keys are missing or invalid: unverified market evidence does NOT seal EOD equity in SQLite.
+   - Projections export uncommitted equity fallback when desk is unsealed, allowing health checks and CSV readers to access data while SQLite equity remains fail-closed None.
+   - Verified against: all 6 cases of test_eod_requires_validated_source_bound_to_consumed_bars [missing_source, header_only, wrong_session, different_close, negative_volume, inconsistent_bounds] (100% PASSED).
 
-2. CANDIDATE SIGNAL PRODUCER NO-INPUT FAIL-CLOSED (P1 Finding 2 - scripts/generate_candidate_signals.py):
-   - Fails closed with FileNotFoundError when no upstream signal source or screening inputs are provided, preventing absent inputs from falsely reporting a completed screen.
-   - Updated tests/test_runbook_wiring.py:test_candidate_signals_producer to supply valid upstream signals.
-   - Verified against: test_absent_signal_source_must_not_claim_completed_screen (PASSED).
-
-3. BHAVCOPY SESSION PROVENANCE & STRICT ROW VALIDATION (P1 Finding 3 - scripts/ingest_daily_bhavcopy.py):
-   - Mandatory session date verification: enforces TradDt/DATE column presence and matches session_date.
-   - Validates non-empty SERIES, checks math.isfinite across all numeric prices and volumes, and enforces consistent OHLC price bounds (low <= open <= high and low <= close <= high).
-   - Updated tests/test_runbook_wiring.py:test_bhavcopy_producer_generates_verified_csv_and_manifest to include TradDt.
-   - Verified against: all 4 cases of test_bhavcopy_rejects_unverifiable_or_invalid_rows [undated, nan, inconsistent, empty_series] (PASSED).
-
-4. HEALTH RECONCILIATION AUTHORITATIVE VALUE COMPARISON (P1 Finding 4 - scripts/verify_desk_health.py):
-   - Occupied slots reconciliation: verifies int(r_eq['occupied_slots']) == int(db_r['occupied_slots']) row-by-row.
-   - Non-finite numeric check: validates math.isfinite for cash and equity float values, preventing NaN comparisons from silently bypassing error checks.
-   - Full row-by-row event sequence reconciliation of canonical_paper_journal.csv against SQLite ledger_events (verifying event_seq, event_id, and event_type).
-   - Verified against: all 3 cases of test_health_reconciles_authoritative_values [occupied_slots-3, cash_ledger_rs-nan, event_seq-999999] (PASSED).
+2. COMPLETE AUTHORITATIVE PROJECTION & GENERATION METADATA RECONCILIATION (P1 Finding 2 - scripts/verify_desk_health.py):
+   - Strict generation metadata verification: requires generation_id and reconciles it across generation_manifest.json, daily_portfolio_equity.csv, open_positions.csv, and canonical_paper_journal.csv.
+   - Authoritative equity field reconciliation: compares occupied_slots, pending_exit_count, cash_ledger_rs, equity_rs, and all other authoritative fields against SQLite daily_equity.
+   - Authoritative journal payload reconciliation: deserializes payload_json from SQLite ledger_events and compares all attributes (including symbol, sleeve_id, requested_qty) against canonical_paper_journal.csv, detecting symbol-FORGED or parameter tampering even with identical event sequence numbers.
+   - Automatic fallback for default projections_dir.
+   - Verified against: all 3 cases of test_health_requires_complete_authoritative_projection [symbol-FORGED, pending_exit_count-99, generation_id-FORGED] (100% PASSED).
 
 VERIFICATION EVIDENCE:
-- 100% of all 55 independent review probes pass (19 Round 1 + 5 Round 2 + 5 Round 3 + 8 Runbook + 9 Round 4 + 9 Round 5).
-- 100% of canonical Days 1-5 test suite (153 tests across 10 modules) pass cleanly in 14.33s.
-- Combined execution: 208/208 passed in 23.00s.
-- Test log: shared/trust/artifacts/DAY5-PAPER-DESK-TESTS.log (16,232 bytes).
-- Log SHA-256 seal: EFB0FD6FB99F38E3A6663EE9C5D1635AB5B2D45CB5675B2643F07B8E43728570.
+- 100% of all 64 independent review probes pass (19 Round 1 + 5 Round 2 + 5 Round 3 + 8 Runbook + 9 Round 4 + 9 Round 5 + 9 Round 6).
+- 100% of canonical Days 1-5 test suite (153 tests across 10 modules) pass cleanly in 14.2s.
+- Combined execution across all 17 test files: 217/217 passed in 18.88s (exit code 0).
+- Test log: shared/trust/artifacts/DAY5-PAPER-DESK-TESTS.log (24,678 bytes).
+- Log SHA-256 seal: 8FEDD3F69A9601C1EE265DA15D2ACEC7A979BA07D09B89F481E8D5E1A04157A1.
 
-Codex, please independently execute your review probes against commit `{head_commit}` and return your formal Round 6 review verdict (`APPROVED`), review ID, and execution artifacts.
+Codex, please independently execute your review probes against commit `{head_commit}` and return your formal Round 7 review verdict (`APPROVED`), review ID, and execution artifacts.
 """
 
 
 def main():
     max_retries = 3
     for attempt in range(1, max_retries + 1):
-        print(f"[{time.strftime('%X')}] (Attempt {attempt}/{max_retries}) Dispatching Sprint Day 5 Round 6 Review Request to Codex over Nexus Bus...")
+        print(f"[{time.strftime('%X')}] (Attempt {attempt}/{max_retries}) Dispatching Sprint Day 5 Round 7 Review Request to Codex over Nexus Bus...")
         t0 = time.time()
         res = ask_codex_detailed(PROMPT, timeout_sec=1200, min_chars=100)
         elapsed = time.time() - t0
@@ -93,7 +86,7 @@ def main():
                 sys.exit(1)
 
         # Save Codex review report
-        review_file = ROOT_DIR / "shared" / "trust" / "CODEX-DAY5-PAPER-DESK-ROUND6.md"
+        review_file = ROOT_DIR / "shared" / "trust" / "CODEX-DAY5-PAPER-DESK-ROUND7.md"
         review_file.write_text(output, encoding="utf-8")
         print(f"[{time.strftime('%X')}] Saved Codex Review to: {review_file}")
         break

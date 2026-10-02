@@ -98,15 +98,29 @@ def test_health_checker_fails_on_uninitialized_desk(tmp_path: Path):
         verify_desk_health(db_path=db_path, session_date="2024-05-15")
 
 
+def make_verified_bhavcopy(tmp_path: Path, session_date: str) -> Dict[str, Any]:
+    source_p = tmp_path / f"raw_bhavcopy_{session_date}.csv"
+    fieldnames = ["TckrSymb", "SctySrs", "OpnPric", "HghPric", "LwPric", "ClsPric", "TtlTradQty", "TradDt"]
+    rows = [
+        {"TckrSymb": "CDSL", "SctySrs": "EQ", "OpnPric": "100.0", "HghPric": "105.0", "LwPric": "99.0", "ClsPric": "103.0", "TtlTradQty": "50000", "TradDt": session_date},
+    ]
+    with open(source_p, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    return ingest_daily_bhavcopy(session_date=session_date, out_dir=tmp_path / f"bhav_{session_date}", bhavcopy_source=str(source_p))
+
+
 def test_health_checker_fails_on_stale_equity(tmp_path: Path):
     db_path = tmp_path / "store.db"
     proj_dir = tmp_path / "projections"
     config = PaperDeskConfig(db_path=db_path, projections_dir=proj_dir)
     runner = PaperDeskRunner(config)
+    manifest = make_verified_bhavcopy(tmp_path, "2024-05-14")
     runner.run_post_close(
         "2024-05-14",
         {"CDSL": DailyBar(symbol="CDSL", open=100.0, high=105.0, low=99.0, close=103.0, volume=50000)},
-        bhavcopy_manifest={"status": "NORMAL", "session_date": "2024-05-14"},
+        bhavcopy_manifest=manifest,
     )
     with pytest.raises(AssertionError, match="Stale equity snapshot for session 2024-05-14"):
         verify_desk_health(db_path=db_path, session_date="2024-05-15")
@@ -117,10 +131,11 @@ def test_health_checker_fails_on_cash_buffer_breach(tmp_path: Path):
     proj_dir = tmp_path / "projections"
     config = PaperDeskConfig(db_path=db_path, projections_dir=proj_dir)
     runner = PaperDeskRunner(config)
+    manifest = make_verified_bhavcopy(tmp_path, "2024-05-15")
     runner.run_post_close(
         "2024-05-15",
         {"CDSL": DailyBar(symbol="CDSL", open=100.0, high=105.0, low=99.0, close=103.0, volume=50000)},
-        bhavcopy_manifest={"status": "NORMAL", "session_date": "2024-05-15"},
+        bhavcopy_manifest=manifest,
     )
     # Tamper cash to simulate breach
     with runner.store._get_connection() as conn:
@@ -135,10 +150,11 @@ def test_health_checker_fails_on_slot_breach(tmp_path: Path):
     proj_dir = tmp_path / "projections"
     config = PaperDeskConfig(db_path=db_path, projections_dir=proj_dir)
     runner = PaperDeskRunner(config)
+    manifest = make_verified_bhavcopy(tmp_path, "2024-05-15")
     runner.run_post_close(
         "2024-05-15",
         {"CDSL": DailyBar(symbol="CDSL", open=100.0, high=105.0, low=99.0, close=103.0, volume=50000)},
-        bhavcopy_manifest={"status": "NORMAL", "session_date": "2024-05-15"},
+        bhavcopy_manifest=manifest,
     )
     with runner.store._get_connection() as conn:
         conn.execute("UPDATE daily_equity SET occupied_slots = 4 WHERE session_date = '2024-05-15'")
@@ -152,10 +168,11 @@ def test_health_checker_passes_on_healthy_session(tmp_path: Path):
     proj_dir = tmp_path / "projections"
     config = PaperDeskConfig(db_path=db_path, projections_dir=proj_dir)
     runner = PaperDeskRunner(config)
+    manifest = make_verified_bhavcopy(tmp_path, "2024-05-15")
     res = runner.run_post_close(
         "2024-05-15",
         {"CDSL": DailyBar(symbol="CDSL", open=100.0, high=105.0, low=99.0, close=103.0, volume=50000)},
-        bhavcopy_manifest={"status": "NORMAL", "session_date": "2024-05-15"},
+        bhavcopy_manifest=manifest,
     )
     report = verify_desk_health(db_path=db_path, session_date="2024-05-15", projections_dir=proj_dir)
     assert report["status"] == "GREEN"
