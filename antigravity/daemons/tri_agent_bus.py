@@ -317,6 +317,7 @@ REVIEWER_FAILURE_SIGNATURES = (
     "rate limit",
     "stream error",
     "overloaded",
+    "at capacity",
     "503 service",
     # Antigravity's headless runner may exit 0 after a tool permission denial.
     # A signed envelope authenticates the sender, not successful execution.

@@ -82,26 +82,40 @@ VERIFICATION EVIDENCE:
 - Cryptographic test log: `shared/trust/artifacts/DAY5-PAPER-DESK-TESTS.log` (16,231 bytes).
 - Log SHA-256 seal: `653DA6255DFB1240DFD3E1ABE0233E93BBE61EC212ADBA40F9D169EB1FB17EA0`.
 
-Codex, please independently execute your review probes against commit `3e169f21b240422e1f0436ab1e6d28128340b444` and return your formal Round 2 review verdict (`APPROVED`), review ID, and execution artifacts.
+Codex, please independently execute your review probes against commit `{head_commit}` and return your formal Round 2 review verdict (`APPROVED`), review ID, and execution artifacts.
 """
 
 
 def main():
-    print(f"[{time.strftime('%X')}] Dispatching Sprint Day 5 Round 2 Review Request to Codex over Nexus Bus...")
-    t0 = time.time()
-    res = ask_codex_detailed(PROMPT, timeout_sec=1200, min_chars=100)
-    elapsed = time.time() - t0
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        print(f"[{time.strftime('%X')}] (Attempt {attempt}/{max_retries}) Dispatching Sprint Day 5 Round 2 Review Request to Codex over Nexus Bus...")
+        t0 = time.time()
+        res = ask_codex_detailed(PROMPT, timeout_sec=1200, min_chars=100)
+        elapsed = time.time() - t0
 
-    print(f"[{time.strftime('%X')}] Codex Response Received (success={res.get('success')}, rc={res.get('returncode')}, elapsed={elapsed:.1f}s):")
-    output = res.get("output", "")
-    print("=" * 80)
-    print(output)
-    print("=" * 80)
+        print(f"[{time.strftime('%X')}] Codex Response Received (success={res.get('success')}, rc={res.get('returncode')}, elapsed={elapsed:.1f}s):")
+        output = res.get("output", "")
+        print("=" * 80)
+        print(output[:1000] + ("..." if len(output) > 1000 else ""))
+        print("=" * 80)
 
-    # Save Codex review report
-    review_file = ROOT_DIR / "shared" / "trust" / "CODEX-DAY5-PAPER-DESK-ROUND2.md"
-    review_file.write_text(output, encoding="utf-8")
-    print(f"[{time.strftime('%X')}] Saved Codex Review to: {review_file}")
+        if not res.get("success"):
+            err = res.get("error", "Unknown error")
+            print(f"[{time.strftime('%X')}] Attempt {attempt} failed: {err}")
+            if attempt < max_retries:
+                wait_sec = 20 * attempt
+                print(f"[{time.strftime('%X')}] Waiting {wait_sec}s before retrying...")
+                time.sleep(wait_sec)
+                continue
+            else:
+                sys.exit(1)
+
+        # Save Codex review report
+        review_file = ROOT_DIR / "shared" / "trust" / "CODEX-DAY5-PAPER-DESK-ROUND2.md"
+        review_file.write_text(output, encoding="utf-8")
+        print(f"[{time.strftime('%X')}] Saved Codex Review to: {review_file}")
+        break
 
 
 if __name__ == "__main__":
