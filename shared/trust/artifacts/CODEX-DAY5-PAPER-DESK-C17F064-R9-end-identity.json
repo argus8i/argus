@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "git",
+    "rev-parse",
+    "HEAD"
+  ],
+  "cwd": "C:\\Users\\yashw\\swing trades",
+  "exit_code": 0
+}
