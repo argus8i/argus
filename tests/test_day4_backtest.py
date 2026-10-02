@@ -868,7 +868,8 @@ def test_hurdle_invariants_under_tier2():
     ]
     # Win rate = 50% (>= 45%), Gross win = 7000, Gross loss = 3250 -> PF = 2.15 (>= 1.30)
     # Mean net PnL per trade = 375. Initial risk = 600 -> Mean R = 0.625R (> 0.25R)
-    m = compute_backtest_metrics(trades, [], corpus_rs=250000.0, risk_per_trade_rs=1500.0)
+    equity_curve = [DailyEquityPoint("2023-01-10", 253750.0, cash=250000.0)]
+    m = compute_backtest_metrics(trades, equity_curve, corpus_rs=250000.0, risk_per_trade_rs=1500.0)
     assert m.win_rate == 0.50
     assert m.profit_factor >= 1.30
     assert m.net_expectancy_r >= 0.25

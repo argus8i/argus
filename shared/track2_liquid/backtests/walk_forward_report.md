@@ -1,6 +1,6 @@
 # Purged Rolling Walk-Forward Backtesting & Sensitivity Report
 
-**Date of Execution:** 2026-10-02 11:26:21 IST  
+**Date of Execution:** 2026-10-02 11:56:25 IST  
 **Evaluator:** Antigravity (Quantitative Modeling & Infrastructure Orchestrator)  
 **Governing Authority:** ARGUS 8i Track 2 Liquid Desk (Sprint Day 4 Verification)  
 **Execution Environment:** Python 3.14.7 | Commit Head: `feature/day4-backtest-and-stress-testing`  
@@ -34,7 +34,7 @@ In strict compliance with `AGENTS.md` Rule 1 (Mandatory Paper-Trading Gate) and 
 
 ## 2. Walk-Forward Fold Architecture (Fixed-Strategy Out-of-Sample Diagnostics)
 
-The evaluation executes out-of-sample forward diagnostics over pre-registered fixed-parameter strategies (High-52 Momentum and Expiry Relief) across strictly separated calendar folds with a 10-session purge buffer. Note: As strategies utilize fixed pre-registered rules without in-sample parameter fitting or machine-learning training, this simulation represents fixed-strategy historical walk-forward diagnostics rather than a dynamic parameter-tuning pipeline.
+The evaluation executes out-of-sample forward diagnostics over pre-registered fixed-parameter strategies (High-52 Momentum and Expiry Relief) across strictly separated calendar folds with a 10-session purge buffer. Note: As strategies utilize fixed pre-registered rules without in-sample parameter fitting or machine-learning training, this simulation represents fixed-strategy historical walk-forward diagnostics rather than a dynamic parameter-tuning pipeline. The simulation evaluates candidate signals against discrete 3-slot capacity, Rs 38,000 slot caps, and cash buffer preservation for standalone fixed-strategy diagnostics; it does not invoke the live shared PortfolioRiskGovernor reservation lifecycle or dynamic sector-concentration controls.
 
 1. **Fold 1 (2023 Out-of-Sample Evaluation):**
    - **Pre-Test Indicator Warmup Window:** `2022-01-03` to `2022-12-15` (237 sessions)

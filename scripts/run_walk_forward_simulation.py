@@ -167,6 +167,7 @@ def run_fold_simulation(
             is_eligible_today = bool(u_info_today and u_info_today.get("eligible", False))
 
             exit_event = None
+            is_gap_fill = False
 
             # PRIORITY 1: Persistent pending mandatory exit from previous session (Findings 1 & 2)
             if trade.pending_exit_reason is not None:
@@ -177,6 +178,7 @@ def run_fold_simulation(
                         exit_price=exit_price,
                         raw_exit_price=bar.open,
                     )
+                    is_gap_fill = False
                 else:
                     trade.locked_sessions += 1
                     trade.holding_sessions += 1
@@ -191,6 +193,7 @@ def run_fold_simulation(
                         exit_price=exit_price,
                         raw_exit_price=bar.open,
                     )
+                    is_gap_fill = False
                 else:
                     trade.locked_sessions += 1
                     trade.holding_sessions += 1
@@ -198,10 +201,13 @@ def run_fold_simulation(
             # PRIORITY 3: Standard bar exit evaluation
             else:
                 exit_event = sim.evaluate_bar_exit(trade, bar, policy=policy)
+                if exit_event is not None and exit_event.reason == "GAP_STOP_LOSS":
+                    is_gap_fill = True
                 max_holding = 10 if trade.strategy_id == "HIGH52_MOMENTUM" else 5
                 if exit_event is None and trade.holding_sessions >= max_holding and bar.volume > 0 and not is_locked:
                     exit_price = bar.close * (1.0 - policy.normal_slippage_bps / 10000.0)
                     exit_event = BarExitEvent(reason="TIME_STOP", exit_price=exit_price, raw_exit_price=bar.close)
+                    is_gap_fill = False
 
             # PROCESS EXIT (FULL OR PARTIAL)
             if exit_event is not None:
@@ -232,6 +238,9 @@ def run_fold_simulation(
                     sell_price=exit_event.exit_price,
                     sell_costs=exit_costs,
                     reason=exit_event.reason,
+                    session=session,
+                    raw_price=raw_exit_p,
+                    is_gap=is_gap_fill,
                 )
 
                 if trade.shares <= 0:
@@ -376,6 +385,9 @@ def run_fold_simulation(
                         sell_price=sl_exit_price,
                         sell_costs=exit_costs,
                         reason="STOP_LOSS",
+                        session=session,
+                        raw_price=new_trade.stop_loss,
+                        is_gap=False,
                     )
 
                     if new_trade.shares <= 0:
@@ -602,7 +614,8 @@ def main():
     pooled_metrics.max_drawdown_pct = worst_fold_dd_pct
     pooled_metrics.max_drawdown_r = worst_fold_dd_r
     pooled_metrics.hurdle_passed = (
-        pooled_metrics.win_rate >= 0.45
+        pooled_metrics.hurdle_passed
+        and pooled_metrics.win_rate >= 0.45
         and pooled_metrics.profit_factor >= 1.30
         and pooled_metrics.net_expectancy_r > 0.250
         and pooled_metrics.max_drawdown_pct <= 6.00
@@ -634,28 +647,50 @@ def main():
         writer = csv.writer(f)
         writer.writerow([
             "trade_id", "strategy_id", "symbol", "entry_session", "exit_session",
-            "entry_price", "exit_price", "raw_entry_price", "raw_exit_price", "shares",
-            "initial_risk_rs", "stop_loss", "target", "holding_sessions", "status",
+            "entry_price", "exit_price", "raw_entry_price", "raw_exit_price",
+            "initial_shares", "residual_shares", "total_sold_shares",
+            "initial_risk_rs", "stop_loss", "target", "holding_sessions", "locked_sessions", "status",
             "gross_pnl", "entry_costs", "exit_costs", "net_pnl", "realized_r",
-            "exit_reason", "mtm_value", "unrealized_pnl", "as_of_session"
+            "exit_reason", "pending_exit_reason", "mtm_value", "unrealized_pnl", "as_of_session",
+            "exit_fills_count"
         ])
         for t in all_trades_by_tier[FrictionTier.TIER_2_REALISTIC]:
+            init_sh = t.initial_shares if t.initial_shares > 0 else t.shares
             writer.writerow([
                 t.trade_id, t.strategy_id, t.symbol, t.entry_session, t.exit_session or "",
                 round(t.entry_price, 2), round(t.exit_price, 2) if t.exit_price else "",
                 round(t.raw_entry_price, 2) if t.raw_entry_price else "",
                 round(t.raw_exit_price, 2) if t.raw_exit_price else "",
-                t.shares, round(t.initial_risk_rs, 2), round(t.stop_loss, 2),
-                round(t.target, 2), t.holding_sessions, t.status.value,
+                init_sh, t.shares, t.total_sold_shares,
+                round(t.initial_risk_rs, 2), round(t.stop_loss, 2),
+                round(t.target, 2), t.holding_sessions, t.locked_sessions, t.status.value,
                 round(t.gross_pnl, 2), round(t.entry_costs, 2), round(t.exit_costs, 2),
                 round(t.net_pnl, 2), round(t.realized_r, 3) if t.realized_r is not None else "",
-                t.exit_reason or "",
+                t.exit_reason or "", t.pending_exit_reason or "",
                 round(t.mtm_value, 2) if t.mtm_value else "",
                 round(t.unrealized_pnl, 2) if t.unrealized_pnl else "",
-                t.as_of_session or ""
+                t.as_of_session or "",
+                len(t.exit_fills)
             ])
 
     print(f"Saved trades to {trades_csv_path}")
+
+    # Save Trade Fills CSV (per-fill audit ledger)
+    fills_csv_path = out_dir / "trade_fills.csv"
+    with open(fills_csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "trade_id", "strategy_id", "symbol", "fill_session", "shares",
+            "raw_price", "slipped_price", "costs", "reason", "is_gap"
+        ])
+        for t in all_trades_by_tier[FrictionTier.TIER_2_REALISTIC]:
+            for f_item in t.exit_fills:
+                writer.writerow([
+                    t.trade_id, t.strategy_id, t.symbol, f_item.session, f_item.shares,
+                    round(f_item.raw_price, 2), round(f_item.slipped_price, 2),
+                    round(f_item.costs, 2), f_item.reason, f_item.is_gap
+                ])
+    print(f"Saved trade fills to {fills_csv_path}")
 
     # Save Daily Equity CSV (partitioned cleanly by fold_id)
     equity_csv_path = out_dir / "daily_equity.csv"
@@ -731,7 +766,7 @@ In strict compliance with `AGENTS.md` Rule 1 (Mandatory Paper-Trading Gate) and 
 
 ## 2. Walk-Forward Fold Architecture (Fixed-Strategy Out-of-Sample Diagnostics)
 
-The evaluation executes out-of-sample forward diagnostics over pre-registered fixed-parameter strategies (High-52 Momentum and Expiry Relief) across strictly separated calendar folds with a 10-session purge buffer. Note: As strategies utilize fixed pre-registered rules without in-sample parameter fitting or machine-learning training, this simulation represents fixed-strategy historical walk-forward diagnostics rather than a dynamic parameter-tuning pipeline.
+The evaluation executes out-of-sample forward diagnostics over pre-registered fixed-parameter strategies (High-52 Momentum and Expiry Relief) across strictly separated calendar folds with a 10-session purge buffer. Note: As strategies utilize fixed pre-registered rules without in-sample parameter fitting or machine-learning training, this simulation represents fixed-strategy historical walk-forward diagnostics rather than a dynamic parameter-tuning pipeline. The simulation evaluates candidate signals against discrete 3-slot capacity, Rs 38,000 slot caps, and cash buffer preservation for standalone fixed-strategy diagnostics; it does not invoke the live shared PortfolioRiskGovernor reservation lifecycle or dynamic sector-concentration controls.
 
 1. **Fold 1 (2023 Out-of-Sample Evaluation):**
    - **Pre-Test Indicator Warmup Window:** `2022-01-03` to `2022-12-15` (237 sessions)
@@ -817,7 +852,7 @@ Paired repricing of the identical fill ledger proving monotonic net PnL degradat
 
 ## 1. Executive Summary
 
-This report documents synthetic component stress scenarios evaluated dynamically against Track 2 risk modeling mechanics to assess risk governor stability, circuit lockout behavior, and cash buffer bounding under extreme adversarial conditions. Note: These scenarios represent synthetic component stress probes rather than full historical portfolio replays.
+This report documents synthetic component stress scenarios evaluated dynamically against Track 2 risk modeling mechanics to assess standalone fixed-strategy slot-capping, circuit lockout behavior, and cash buffer bounding under extreme adversarial conditions. Note: These scenarios represent synthetic component stress probes rather than full historical portfolio replays, and do not invoke the live shared PortfolioRiskGovernor reservation lifecycle or dynamic sector-concentration controls.
 
 ### Regime Invariant Results Summary (Dynamically Evaluated from Predicates):
 | Stress Regime Scenario | Tested Mechanism | Max Realized Drawdown | Invariant Cap | Result |
@@ -871,8 +906,8 @@ This report documents synthetic component stress scenarios evaluated dynamically
 ---
 
 ## 5. Verification Commands & Cryptographic Artifacts
-- **Reproduction Command:** `.venv\\Scripts\\python.exe -m pytest tests/test_day1_data_contracts.py tests/test_execution_risk_governor.py tests/test_day3_strategies.py tests/test_day4_backtest.py shared/trust/artifacts/test_codex_day4_9157a86_review.py shared/trust/artifacts/test_codex_day4_ee58cb3_review.py shared/trust/artifacts/test_codex_day4_7c23f6c_review.py -v`
-- **Unit, Strategy & Reviewer Probes:** 129 passed across all Day 1–Day 4 contracts (Exit code: 0)
+- **Reproduction Command:** `.venv\\Scripts\\python.exe -m pytest tests/test_day1_data_contracts.py tests/test_execution_risk_governor.py tests/test_day3_strategies.py tests/test_day4_backtest.py shared/trust/artifacts/test_codex_day4_9157a86_review.py shared/trust/artifacts/test_codex_day4_ee58cb3_review.py shared/trust/artifacts/test_codex_day4_7c23f6c_review.py shared/trust/artifacts/test_codex_day4_90255e7_review.py -v`
+- **Unit, Strategy & Reviewer Probes:** 133 passed across all Day 1–Day 4 contracts (Exit code: 0)
 - **Suite Log & Cryptographic Seal:** `shared/trust/artifacts/DAY4-BACKTEST-STRESS-TESTS.log`
 """
 

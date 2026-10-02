@@ -134,6 +134,17 @@ class PurgedFold:
             )
 
 
+@dataclass(frozen=True)
+class TradeFill:
+    session: str
+    shares: int
+    raw_price: float
+    slipped_price: float
+    costs: float
+    reason: str
+    is_gap: bool = False
+
+
 @dataclass
 class BacktestTrade:
     trade_id: str
@@ -165,6 +176,7 @@ class BacktestTrade:
     pending_exit_reason: Optional[str] = None
     total_exit_proceeds: float = 0.0
     total_sold_shares: int = 0
+    exit_fills: List[TradeFill] = field(default_factory=list)
     as_of_session: Optional[str] = None
 
     def __post_init__(self) -> None:
@@ -189,6 +201,9 @@ class BacktestTrade:
         sell_price: float,
         sell_costs: float,
         reason: str,
+        session: str = "",
+        raw_price: Optional[float] = None,
+        is_gap: bool = False,
     ) -> None:
         """Records a partial (or single) fill without closing the trade completely."""
         self.total_exit_proceeds += sell_price * sell_shares
@@ -196,6 +211,18 @@ class BacktestTrade:
         self.exit_costs += sell_costs
         self.shares -= sell_shares
         self.pending_exit_reason = reason
+        raw_p = raw_price if raw_price is not None else sell_price
+        self.exit_fills.append(
+            TradeFill(
+                session=session,
+                shares=sell_shares,
+                raw_price=raw_p,
+                slipped_price=sell_price,
+                costs=sell_costs,
+                reason=reason,
+                is_gap=is_gap,
+            )
+        )
 
     def close(
         self,
@@ -213,6 +240,21 @@ class BacktestTrade:
         tot_shares = self.initial_shares if self.initial_shares > 0 else self.shares
         if self.total_exit_proceeds <= 0:
             self.total_exit_proceeds = self.exit_price * tot_shares
+            if not self.exit_fills:
+                is_gap = (exit_reason == "GAP_STOP_LOSS")
+                self.exit_fills.append(
+                    TradeFill(
+                        session=exit_session,
+                        shares=tot_shares,
+                        raw_price=self.raw_exit_price,
+                        slipped_price=exit_price,
+                        costs=exit_costs,
+                        reason=exit_reason,
+                        is_gap=is_gap,
+                    )
+                )
+        if self.total_sold_shares == 0:
+            self.total_sold_shares = tot_shares
         self.gross_pnl = self.total_exit_proceeds - (self.entry_price * tot_shares)
         self.net_pnl = self.gross_pnl - (self.entry_costs + self.exit_costs)
         if self.initial_risk_rs > 0:
@@ -422,6 +464,13 @@ class BacktestSimulation:
         # Check circuit lockout
         if bar.volume == 0 or (bar.high == bar.low == bar.open == bar.close and bar.close < trade.entry_price):
             trade.locked_sessions += 1
+            # Persist triggered mandatory stop/trailing-stop intent even when execution is impossible on locked bar
+            if bar.open < trade.stop_loss:
+                trade.pending_exit_reason = "GAP_STOP_LOSS"
+            elif bar.low <= trade.stop_loss:
+                trade.pending_exit_reason = "STOP_LOSS"
+            elif trade.trailing_stop is not None and bar.low <= trade.trailing_stop:
+                trade.pending_exit_reason = "TRAILING_STOP"
             return None
 
         # Check gap-down opening below stop loss
@@ -506,43 +555,68 @@ class BacktestSimulation:
         dp_seen: Set[Tuple[str, str]] = set()
 
         for t in trades:
-            if t.status != TradeStatus.CLOSED or t.exit_session is None:
+            if t.status != TradeStatus.CLOSED:
                 continue
 
             raw_entry = t.raw_entry_price if t.raw_entry_price > 0 else t.entry_price
-            raw_exit = t.raw_exit_price if t.raw_exit_price is not None else (t.exit_price if t.exit_price is not None else 0.0)
-            if raw_exit <= 0:
+            trade_shares = t.initial_shares if t.initial_shares > 0 else t.shares
+            if trade_shares <= 0:
                 continue
 
-            # Determine exit slippage rate (gap vs normal)
-            is_gap_exit = (t.exit_reason == "GAP_STOP_LOSS")
-            exit_slip_bps = policy.gap_slippage_bps if is_gap_exit else policy.normal_slippage_bps
-
             entry_p_slipped = raw_entry * (1.0 + policy.normal_slippage_bps / 10000.0)
-            exit_p_slipped = raw_exit * (1.0 - exit_slip_bps / 10000.0)
+            entry_notional = entry_p_slipped * trade_shares
 
-            trade_shares = t.initial_shares if t.initial_shares > 0 else t.shares
-            gross = (exit_p_slipped - entry_p_slipped) * trade_shares
-
+            buy_cost = 0.0
             if policy.include_statutory_costs:
                 buy_cost = calculate_statutory_costs(entry_p_slipped, trade_shares, "BUY", True)["total_cost"]
 
-                # DP grouping check
-                dp_key = (t.symbol, t.exit_session)
-                apply_dp = False
-                if dp_key not in dp_seen:
-                    dp_seen.add(dp_key)
-                    apply_dp = True
+            total_sell_proceeds = 0.0
+            total_sell_costs = 0.0
 
-                sell_cost_dict = calculate_statutory_costs(exit_p_slipped, trade_shares, "SELL", True)
-                sell_cost = sell_cost_dict["total_cost"]
-                if not apply_dp:
-                    sell_cost = round(sell_cost - sell_cost_dict["dp_charges"], 2)
+            if t.exit_fills:
+                for fill in t.exit_fills:
+                    slip_bps = policy.gap_slippage_bps if fill.is_gap else policy.normal_slippage_bps
+                    fill_p_slipped = fill.raw_price * (1.0 - slip_bps / 10000.0)
+                    fill_proceeds = fill_p_slipped * fill.shares
+                    total_sell_proceeds += fill_proceeds
 
-                net = gross - (buy_cost + sell_cost)
+                    if policy.include_statutory_costs:
+                        dp_key = (t.symbol, fill.session)
+                        apply_dp = False
+                        if dp_key not in dp_seen:
+                            dp_seen.add(dp_key)
+                            apply_dp = True
+
+                        sell_cost_dict = calculate_statutory_costs(fill_p_slipped, fill.shares, "SELL", True)
+                        sc = sell_cost_dict["total_cost"]
+                        if not apply_dp:
+                            sc = round(sc - sell_cost_dict["dp_charges"], 2)
+                        total_sell_costs += sc
             else:
-                net = gross
+                raw_exit = t.raw_exit_price if t.raw_exit_price is not None else (t.exit_price if t.exit_price is not None else 0.0)
+                if raw_exit <= 0:
+                    continue
 
+                is_gap_exit = (t.exit_reason == "GAP_STOP_LOSS")
+                exit_slip_bps = policy.gap_slippage_bps if is_gap_exit else policy.normal_slippage_bps
+                exit_p_slipped = raw_exit * (1.0 - exit_slip_bps / 10000.0)
+                total_sell_proceeds = exit_p_slipped * trade_shares
+
+                if policy.include_statutory_costs:
+                    dp_key = (t.symbol, t.exit_session or "")
+                    apply_dp = False
+                    if dp_key not in dp_seen:
+                        dp_seen.add(dp_key)
+                        apply_dp = True
+
+                    sell_cost_dict = calculate_statutory_costs(exit_p_slipped, trade_shares, "SELL", True)
+                    sell_cost = sell_cost_dict["total_cost"]
+                    if not apply_dp:
+                        sell_cost = round(sell_cost - sell_cost_dict["dp_charges"], 2)
+                    total_sell_costs += sell_cost
+
+            gross = total_sell_proceeds - entry_notional
+            net = gross - (buy_cost + total_sell_costs)
             total_net_pnl += net
 
         return round(total_net_pnl, 2)
@@ -634,8 +708,9 @@ def compute_backtest_metrics(
 
     # 3. Hurdle Verification (Tier 2 baseline criteria)
     # Win rate >= 45%, Profit factor >= 1.30, Net expectancy > 0.25R, Max Drawdown <= 6.0%, Cash buffer >= Rs 136,000
-    min_cash = min((pt.cash for pt in equity_curve), default=corpus_rs) if equity_curve else corpus_rs
-    cash_passed = (min_cash >= CASH_BUFFER_RS)
+    has_cash_obs = bool(equity_curve and any(hasattr(pt, "cash") for pt in equity_curve))
+    min_cash = min((pt.cash for pt in equity_curve if hasattr(pt, "cash")), default=0.0) if has_cash_obs else 0.0
+    cash_passed = has_cash_obs and (min_cash >= CASH_BUFFER_RS)
     hurdle_passed = (
         win_rate >= 0.45
         and profit_factor >= 1.30
